@@ -198,9 +198,10 @@ const SOUNDING_LOCATIONS = {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function goesChannelUrl(ch) {
-    // Use nowCOAST WMS for live satellite — same renderer as animation frames
-    // so the visual appearance stays consistent when looping
-    return nowCoastSatUrl(ch);
+    // IEM tile cache — individual per-channel GOES-East imagery
+    // (nowCOAST only has category-based layers so all visible channels look identical there)
+    const pad = String(ch).padStart(2, '0');
+    return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/goes_east_conus_ch${pad}/{z}/{x}/{y}.png`;
 }
 
 function iemSatAnimUrl(channel, offsetEntry) {
