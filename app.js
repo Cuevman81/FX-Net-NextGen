@@ -771,44 +771,49 @@ function setupMapLayers(map, paneId) {
         paint: { 'line-color': '#ff4444', 'line-width': 3, 'line-dasharray': [2, 1] }
     });
 
-    // ─── Layer 5b: SPC Local Storm Reports (GeoJSON points) ───
+    // ─── Layer 5b: SPC Local Storm Reports (GeoJSON points with icons) ───
+    initLSRIcons(map);
     map.addSource('spc-lsr', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] }
     });
     map.addLayer({
-        id: 'spc-lsr-circles', type: 'circle', source: 'spc-lsr',
-        layout: { visibility: 'none' },
-        paint: {
-            'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3, 7, 6, 12, 10],
-            'circle-color': ['match', ['get', 'lsrType'],
-                'TORNADO', '#ff0000',
-                'HAIL', '#00cc00',
-                'TSTM WND GST', '#3399ff',
-                'TSTM WND DMG', '#3399ff',
-                'FLASH FLOOD', '#00cccc',
-                'FLOOD', '#008888',
-                'SNOW', '#cc88ff',
-                'RAIN', '#0088aa',
-                'MARINE TSTM WIND', '#6666cc',
-                '#ff9900' /* default — other types */
-            ],
-            'circle-opacity': 0.9,
-            'circle-stroke-width': 1.5,
-            'circle-stroke-color': '#000'
-        }
-    });
-    map.addLayer({
-        id: 'spc-lsr-labels', type: 'symbol', source: 'spc-lsr',
+        id: 'spc-lsr-icons', type: 'symbol', source: 'spc-lsr',
         layout: {
             visibility: 'none',
-            'text-field': ['get', 'icon'],
-            'text-size': ['interpolate', ['linear'], ['zoom'], 3, 8, 7, 12, 12, 16],
+            'icon-image': ['match', ['get', 'iconId'],
+                'lsr-tornado', 'lsr-tornado',
+                'lsr-hail', 'lsr-hail',
+                'lsr-wind', 'lsr-wind',
+                'lsr-flood', 'lsr-flood',
+                'lsr-snow', 'lsr-snow',
+                'lsr-rain', 'lsr-rain',
+                'lsr-marine', 'lsr-marine',
+                'lsr-other'
+            ],
+            'icon-size': ['interpolate', ['linear'], ['zoom'], 3, 0.55, 7, 0.85, 12, 1.2],
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true
+        }
+    });
+    // Magnitude label below icon (hail size, wind speed)
+    map.addLayer({
+        id: 'spc-lsr-mag', type: 'symbol', source: 'spc-lsr',
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'magLabel'],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 5, 0, 7, 9, 12, 12],
+            'text-offset': [0, 1.3],
             'text-allow-overlap': true,
             'text-ignore-placement': true,
-            'text-offset': [0, 0]
+            'text-font': ['Open Sans Bold']
         },
-        paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1 }
+        paint: {
+            'text-color': '#ffffff',
+            'text-halo-color': '#000000',
+            'text-halo-width': 1.5
+        },
+        filter: ['has', 'magLabel']
     });
 
     // ─── Layer 6: NWS Alerts (GeoJSON polygons) ───
@@ -1040,6 +1045,101 @@ function initRadarDomeIcon(map) {
     ctx.fill();
 
     map.addImage('radar-dome-icon', ctx.getImageData(0, 0, 40, 40));
+}
+
+function initLSRIcons(map) {
+    if (map.hasImage('lsr-tornado')) return;
+    const size = 28;
+
+    // Helper: draw an icon with background circle + text/shape
+    function makeLSRIcon(bgColor, borderColor, drawFn) {
+        const c = document.createElement('canvas');
+        c.width = size; c.height = size;
+        const ctx = c.getContext('2d');
+        // Background circle
+        ctx.beginPath();
+        ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+        ctx.fillStyle = bgColor;
+        ctx.fill();
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        // Custom drawing
+        drawFn(ctx);
+        return ctx.getImageData(0, 0, size, size);
+    }
+
+    // Tornado — red circle with "T"
+    map.addImage('lsr-tornado', makeLSRIcon('#cc0000', '#ff3333', ctx => {
+        ctx.font = 'bold 16px Inter, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('T', size / 2, size / 2 + 1);
+    }));
+
+    // Hail — green circle with "H"
+    map.addImage('lsr-hail', makeLSRIcon('#007700', '#00cc00', ctx => {
+        ctx.font = 'bold 16px Inter, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('H', size / 2, size / 2 + 1);
+    }));
+
+    // Wind — blue circle with "W"
+    map.addImage('lsr-wind', makeLSRIcon('#1166cc', '#3399ff', ctx => {
+        ctx.font = 'bold 16px Inter, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('W', size / 2, size / 2 + 1);
+    }));
+
+    // Flood — teal circle with "F"
+    map.addImage('lsr-flood', makeLSRIcon('#006666', '#00cccc', ctx => {
+        ctx.font = 'bold 16px Inter, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('F', size / 2, size / 2 + 1);
+    }));
+
+    // Snow — purple circle with "S"
+    map.addImage('lsr-snow', makeLSRIcon('#6633aa', '#cc88ff', ctx => {
+        ctx.font = 'bold 16px Inter, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('S', size / 2, size / 2 + 1);
+    }));
+
+    // Rain — blue-gray circle with "R"
+    map.addImage('lsr-rain', makeLSRIcon('#005577', '#0088aa', ctx => {
+        ctx.font = 'bold 16px Inter, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('R', size / 2, size / 2 + 1);
+    }));
+
+    // Marine — indigo circle with "M"
+    map.addImage('lsr-marine', makeLSRIcon('#444499', '#6666cc', ctx => {
+        ctx.font = 'bold 16px Inter, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('M', size / 2, size / 2 + 1);
+    }));
+
+    // Other/default — orange circle with "X"
+    map.addImage('lsr-other', makeLSRIcon('#cc6600', '#ff9900', ctx => {
+        ctx.font = 'bold 16px Inter, Arial, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('X', size / 2, size / 2 + 1);
+    }));
 }
 
 function initFrontalPipIcons(map) {
@@ -1625,7 +1725,7 @@ function initFrontalPipIcons(map) {
         if (!warningsActive && !watchesActive) return;
 
         // Ensure we didn't click on a METAR or FIRMS or MD icon
-        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'spc-lsr-circles', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nexrad-sites-layer'] });
+        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nexrad-sites-layer'] });
         if (otherFeats.length > 0) return;
 
         const lat = e.lngLat.lat.toFixed(4);
@@ -1694,7 +1794,7 @@ function initFrontalPipIcons(map) {
     });
 
     // SPC LSR click
-    map.on('click', 'spc-lsr-circles', e => {
+    map.on('click', 'spc-lsr-icons', e => {
         if (!e.features || !e.features[0]) return;
         const p = e.features[0].properties;
         const coord = e.features[0].geometry.coordinates;
@@ -1717,8 +1817,8 @@ function initFrontalPipIcons(map) {
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
-    map.on('mouseenter', 'spc-lsr-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
-    map.on('mouseleave', 'spc-lsr-circles', () => { map.getCanvas().style.cursor = ''; });
+    map.on('mouseenter', 'spc-lsr-icons', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'spc-lsr-icons', () => { map.getCanvas().style.cursor = ''; });
 
     map.on('click', 'nexrad-sites-layer', e => {
         if (!e.features || e.features.length === 0) return;
@@ -1880,20 +1980,25 @@ async function fetchLSRs(show) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
-        // LSR type → emoji icon for map labels
-        const iconMap = {
-            'T': '🌪️', 'TORNADO': '🌪️',
-            'H': '🧊', 'HAIL': '🧊',
-            'G': '💨', 'TSTM WND GST': '💨',
-            'D': '🌬️', 'TSTM WND DMG': '🌬️',
-            'F': '🌊', 'FLASH FLOOD': '🌊',
-            'E': '🌊', 'FLOOD': '🌊',
-            'S': '❄️', 'SNOW': '❄️',
-            'R': '🌧️', 'RAIN': '🌧️',
-            'M': '⚓', 'MARINE TSTM WIND': '⚓',
-            'W': '🌪️', 'LANDSPOUT': '🌪️',
-            'N': '💨', 'NON-TSTM WND GST': '💨',
-            'O': '🌬️', 'NON-TSTM WND DMG': '🌬️'
+        // LSR type → map icon ID (matches initLSRIcons image names)
+        const iconIdMap = {
+            'T': 'lsr-tornado', 'TORNADO': 'lsr-tornado', 'LANDSPOUT': 'lsr-tornado',
+            'H': 'lsr-hail', 'HAIL': 'lsr-hail',
+            'G': 'lsr-wind', 'TSTM WND GST': 'lsr-wind',
+            'D': 'lsr-wind', 'TSTM WND DMG': 'lsr-wind',
+            'N': 'lsr-wind', 'NON-TSTM WND GST': 'lsr-wind',
+            'O': 'lsr-wind', 'NON-TSTM WND DMG': 'lsr-wind',
+            'F': 'lsr-flood', 'FLASH FLOOD': 'lsr-flood',
+            'E': 'lsr-flood', 'FLOOD': 'lsr-flood',
+            'S': 'lsr-snow', 'SNOW': 'lsr-snow',
+            'R': 'lsr-rain', 'RAIN': 'lsr-rain',
+            'M': 'lsr-marine', 'MARINE TSTM WIND': 'lsr-marine'
+        };
+        // Emoji for popup display
+        const emojiMap = {
+            'lsr-tornado': '🌪️', 'lsr-hail': '🧊', 'lsr-wind': '💨',
+            'lsr-flood': '🌊', 'lsr-snow': '❄️', 'lsr-rain': '🌧️',
+            'lsr-marine': '⚓', 'lsr-other': '⚡'
         };
 
         const fc = {
@@ -1901,14 +2006,20 @@ async function fetchLSRs(show) {
             features: (data.features || []).filter(f => f.geometry?.type === 'Point').map(f => {
                 const p = f.properties;
                 const typeText = p.typetext || 'UNKNOWN';
+                const iconId = iconIdMap[typeText] || iconIdMap[p.type] || 'lsr-other';
+                // Build magnitude label for display below icon
+                const mag = p.magnitude && p.magnitude !== '' && p.magnitude !== 'UNK' && p.magnitude !== 'None' && p.magnitude !== null;
+                const magLabel = mag ? `${p.magnitude}${p.unit ? ' ' + p.unit : ''}` : null;
                 return {
                     type: 'Feature',
                     geometry: f.geometry,
                     properties: {
                         lsrType: typeText,
                         typeCode: p.type || '',
-                        icon: iconMap[typeText] || iconMap[p.type] || '⚡',
+                        iconId: iconId,
+                        icon: emojiMap[iconId] || '⚡',
                         magnitude: p.magnitude || '',
+                        magLabel: magLabel,
                         unit: p.unit || '',
                         city: p.city || '',
                         county: p.county || '',
@@ -3817,7 +3928,7 @@ function updateSidebarToActivePane() {
         else if (layer === 'nws-watches-only') isActive = isLayerVisible(map, 'nws-watches-only-fill');
         else if (layer === 'nws-wwa') isActive = isLayerVisible(map, 'nws-wwa-wms-layer');
         else if (layer === 'spc-md') isActive = isLayerVisible(map, 'spc-md-fill');
-        else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-circles');
+        else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-icons');
         else if (layer === 'spc-outlook') {
             const day = item.getAttribute('data-day');
             isActive = isLayerVisible(map, `spc-day${day}-fill`);
@@ -3935,8 +4046,8 @@ function initProductSidebar() {
             if (layer === 'spc-lsr') {
                 const isActive = !item.classList.contains('active');
                 if (isActive) await fetchLSRs(true);
-                map.setLayoutProperty('spc-lsr-circles', 'visibility', isActive ? 'visible' : 'none');
-                map.setLayoutProperty('spc-lsr-labels', 'visibility', isActive ? 'visible' : 'none');
+                map.setLayoutProperty('spc-lsr-icons', 'visibility', isActive ? 'visible' : 'none');
+                map.setLayoutProperty('spc-lsr-mag', 'visibility', isActive ? 'visible' : 'none');
                 updateSidebarToActivePane();
                 return;
             }
@@ -4603,7 +4714,7 @@ function clearPane(map, paneId) {
         'satellite-layer', 'radar-layer',
         'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer',
         'spc-outlook-fill', 'spc-outlook-line',
-        'spc-md-fill', 'spc-md-outline', 'spc-lsr-circles', 'spc-lsr-labels',
+        'spc-md-fill', 'spc-md-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
         'nws-watches-only-fill', 'nws-watches-only-outline',
         'nws-wwa-wms-layer', 'nws-watches-wms-layer',
@@ -4786,7 +4897,7 @@ function startAutoRefresh() {
         });
 
         // SPC Local Storm Reports
-        const lsrActive = Object.values(maps).some(m => isLayerVisible(m, 'spc-lsr-circles'));
+        const lsrActive = Object.values(maps).some(m => isLayerVisible(m, 'spc-lsr-icons'));
         if (lsrActive) fetchLSRs(true);
 
         // WPC Isobars
