@@ -1525,12 +1525,16 @@ function initFrontalPipIcons(map) {
         const coord = e.features[0].geometry.coordinates;
         const dt = p.acq_datetime || p.acq_date || '';
         const conf = p.confidence || p.conf || 'N/A';
+        const confLabel = conf >= 80 ? 'High' : conf >= 40 ? 'Nominal' : 'Low';
         const bright = p.bright_ti4 || p.brightness || 'N/A';
         const frp = p.frp || 'N/A';
+        const sensor = p.sensor || 'VIIRS';
+        const satellite = p.satellite || 'Unknown';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;">
-            <div style="font-weight:bold;color:#ff6600;font-size:13px;margin-bottom:4px;">🔥 VIIRS Fire Detection</div>
+            <div style="font-weight:bold;color:#ff6600;font-size:13px;margin-bottom:4px;">🔥 ${sensor} Fire Detection</div>
+            <div style="color:#aaa;margin-bottom:2px;">Satellite: <b>${satellite}</b></div>
             <div style="color:#888;margin-bottom:6px;">${dt ? new Date(dt).toUTCString() : 'Recent'}</div>
-            <div><span style="color:#888;">Confidence:</span> ${conf}</div>
+            <div><span style="color:#888;">Confidence:</span> ${confLabel} (${conf}%)</div>
             <div><span style="color:#888;">Brightness:</span> ${bright}K</div>
             <div><span style="color:#888;">FRP:</span> ${frp} MW</div>
             <div style="color:#555;margin-top:4px;">${coord ? coord[1].toFixed(4) + '°N, ' + Math.abs(coord[0]).toFixed(4) + '°W' : ''}</div>
@@ -2355,34 +2359,69 @@ async function fetchFIRMS(show) {
         updateSidebarToActivePane();
         return;
     }
-    addLiveLog('FIRMS: Fetching VIIRS fire detections...', '#ff6600');
+    addLiveLog('FIRMS: Fetching VIIRS + MODIS fire detections...', '#ff6600');
     try {
-        const res = await fetch('https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Satellite_VIIRS_Thermal_Hotspots_and_Fire_Activity/FeatureServer/0/query?where=esritimeutc+%3E+CURRENT_TIMESTAMP+-+2&outFields=*&f=geojson&outSR=4326&resultRecordCount=10000');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const fc = {
-            type: 'FeatureCollection',
-            features: (data.features || []).filter(f => f.geometry && f.geometry.type === 'Point').map(f => {
+        // Geographic filter — North America (CONUS + Alaska + Canada + Mexico + Caribbean)
+        // Ensures the record limit isn't wasted on distant fires (Africa, S. America, etc.)
+        const viirsGeo = encodeURIComponent('latitude > 10 AND latitude < 72 AND longitude > -180 AND longitude < -50');
+        const modisGeo = encodeURIComponent('LATITUDE > 10 AND LATITUDE < 72 AND LONGITUDE > -180 AND LONGITUDE < -50');
+
+        const [viirsRes, modisRes] = await Promise.allSettled([
+            fetch(`https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Satellite_VIIRS_Thermal_Hotspots_and_Fire_Activity/FeatureServer/0/query?where=esritimeutc+%3E+CURRENT_TIMESTAMP+-+1+AND+${viirsGeo}&outFields=*&f=geojson&outSR=4326&resultRecordCount=10000`).then(r => { if (!r.ok) throw new Error(`VIIRS HTTP ${r.status}`); return r.json(); }),
+            fetch(`https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/MODIS_Thermal_v1/FeatureServer/0/query?where=ACQ_DATE+%3E+CURRENT_TIMESTAMP+-+2+AND+${modisGeo}&outFields=*&f=geojson&outSR=4326&resultRecordCount=5000`).then(r => { if (!r.ok) throw new Error(`MODIS HTTP ${r.status}`); return r.json(); })
+        ]);
+
+        const allFeatures = [];
+        let vCount = 0, mCount = 0;
+
+        // ─── Process VIIRS (Suomi-NPP, NOAA-20, NOAA-21) ───
+        if (viirsRes.status === 'fulfilled' && viirsRes.value) {
+            const feats = (viirsRes.value.features || []).filter(f => f.geometry?.type === 'Point');
+            vCount = feats.length;
+            feats.forEach(f => {
                 const p = f.properties;
-                const dt = p.esritimeutc ? new Date(p.esritimeutc).toISOString() : '';
-                return {
-                    type: 'Feature',
-                    geometry: f.geometry,
+                const satName = p.satellite === 'N' ? 'Suomi-NPP' : p.satellite === 'N20' ? 'NOAA-20' : p.satellite === 'N21' ? 'NOAA-21' : `VIIRS (${p.satellite || '?'})`;
+                allFeatures.push({
+                    type: 'Feature', geometry: f.geometry,
                     properties: {
                         confidence: p.confidence === 'high' ? 90 : p.confidence === 'nominal' ? 50 : 20,
-                        bright_ti4: p.bright_ti4 || p.brightness || '',
-                        frp: p.frp || '',
-                        acq_datetime: dt,
-                        satellite: p.satellite || 'VIIRS'
+                        bright_ti4: p.bright_ti4 || '', frp: p.frp || '',
+                        acq_datetime: p.esritimeutc ? new Date(p.esritimeutc).toISOString() : '',
+                        satellite: satName, sensor: 'VIIRS'
                     }
-                };
-            })
-        };
+                });
+            });
+        } else {
+            addLiveLog(`FIRMS: VIIRS fetch failed — ${viirsRes.reason?.message || 'unknown error'}`, '#ff9900');
+        }
+
+        // ─── Process MODIS (Terra / Aqua) ───
+        if (modisRes.status === 'fulfilled' && modisRes.value) {
+            const feats = (modisRes.value.features || []).filter(f => f.geometry?.type === 'Point');
+            mCount = feats.length;
+            feats.forEach(f => {
+                const p = f.properties;
+                const satName = p.SATELLITE === 'T' ? 'Terra' : p.SATELLITE === 'A' ? 'Aqua' : `MODIS (${p.SATELLITE || '?'})`;
+                allFeatures.push({
+                    type: 'Feature', geometry: f.geometry,
+                    properties: {
+                        confidence: typeof p.CONFIDENCE === 'number' ? p.CONFIDENCE : 50,
+                        bright_ti4: p.BRIGHTNESS || '', frp: p.FRP || '',
+                        acq_datetime: p.ACQ_DATE ? new Date(p.ACQ_DATE).toISOString() : '',
+                        satellite: satName, sensor: 'MODIS'
+                    }
+                });
+            });
+        } else {
+            addLiveLog(`FIRMS: MODIS fetch failed — ${modisRes.reason?.message || 'unknown error'}`, '#ff9900');
+        }
+
+        const fc = { type: 'FeatureCollection', features: allFeatures };
         Object.values(maps).forEach(m => {
             if (m.getSource('firms-fires')) m.getSource('firms-fires').setData(fc);
         });
         updateHealth('firms');
-        addLiveLog(`FIRMS: ${fc.features.length} fire detections loaded`, '#00ff88');
+        addLiveLog(`FIRMS: ${allFeatures.length} fire detections loaded (VIIRS: ${vCount} + MODIS: ${mCount})`, '#00ff88');
     } catch (e) {
         addLiveLog(`FIRMS ERROR: ${e.message}`, '#ff3333');
     }
