@@ -2694,8 +2694,8 @@ function startAnimation() {
     const activeMap = maps[activePaneId];
     if (!activeMap) { stopAnimation(); return; }
 
-    // Check what is actually visible on the active pane
-    const showSat = isLayerVisible(activeMap, 'satellite-layer');
+    // Check what is visible — satellite across ANY pane, radar on active pane
+    const showSat = Object.entries(maps).some(([pid, m]) => isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] !== null);
     const showSiteBref = isLayerVisible(activeMap, 'site-bref-layer');
     const showSiteBvel = isLayerVisible(activeMap, 'site-bvel-layer');
     const showSiteBdhc = isLayerVisible(activeMap, 'site-bdhc-layer');
@@ -2733,7 +2733,9 @@ function startAnimation() {
     const radFrames = [];
 
     // ─── Satellite frames (nowCOAST WMS, 5-min cadence via TIME parameter) ───
-    if (showSat && activeGoesChannel !== null) {
+    // Find any active channel as reference for timing; per-pane URLs built later
+    const refSatChannel = activeGoesChannel || Object.values(paneGoesChannels).find(ch => ch !== null);
+    if (showSat && refSatChannel !== null) {
         let satStep = Math.max(stepMin, 5); // minimum 5-min steps (nowCOAST cadence)
         // Offset "now" by 7 min to avoid requesting future timestamps that lack data
         const satNow = new Date(now.getTime() - 7 * 60000);
@@ -2743,7 +2745,8 @@ function startAnimation() {
             const d = new Date(satNow.getTime() - (count - 1 - i) * satStep * 60000);
             const isoTime = snapToNowCoastTime(d);
             satFrames.push({
-                tileUrl: nowCoastSatUrl(activeGoesChannel, isoTime),
+                isoTime: isoTime, // Stored for per-pane URL building
+                tileUrl: nowCoastSatUrl(refSatChannel, isoTime), // Reference URL (active pane)
                 time: d,
                 label: `SAT ${d.toISOString().substring(11, 16)}Z`
             });
@@ -2816,7 +2819,7 @@ function startAnimation() {
     // ── Pre-create ALL frame layers (multi-layer preload approach) ──
     // Each frame gets its own source+layer pair with visibility:visible, raster-opacity:0
     // MapLibre fetches tiles for opacity-0 layers, enabling instant frame switching
-    Object.values(maps).forEach(map => {
+    Object.entries(maps).forEach(([paneId, map]) => {
         // Hide live layers
         if (satFrames.length > 0 && map.getLayer('satellite-layer')) {
             map.setLayoutProperty('satellite-layer', 'visibility', 'none');
@@ -2828,13 +2831,16 @@ function startAnimation() {
             if (map.getLayer('site-bdhc-layer')) map.setLayoutProperty('site-bdhc-layer', 'visibility', 'none');
         }
 
-        // Create satellite animation layers
-        // Use opacity 0.01 (not 0) to force MapLibre to actually fetch tiles
+        // Create satellite animation layers — each pane uses its OWN GOES channel
+        const paneCh = paneGoesChannels[paneId];
+        const paneSatVisible = paneCh !== null && isLayerVisible(map, 'satellite-layer') || (preAnimVisibility[paneId]?.['satellite-layer'] === 'visible');
         for (let i = 0; i < satFrames.length; i++) {
             const srcId = `anim-sat-src-${i}`;
             const lyrId = `anim-sat-lyr-${i}`;
             if (!map.getSource(srcId)) {
-                map.addSource(srcId, { type: 'raster', tiles: [satFrames[i].tileUrl], tileSize: 256 });
+                // Use this pane's channel for the tile URL (not the global one)
+                const satUrl = (paneSatVisible && paneCh) ? nowCoastSatUrl(paneCh, satFrames[i].isoTime) : satFrames[i].tileUrl;
+                map.addSource(srcId, { type: 'raster', tiles: [satUrl], tileSize: 256 });
                 map.addLayer({ id: lyrId, type: 'raster', source: srcId,
                     layout: { visibility: 'visible' },
                     paint: {
