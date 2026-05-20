@@ -2695,13 +2695,12 @@ function startAnimation() {
     const activeMap = maps[activePaneId];
     if (!activeMap) { stopAnimation(); return; }
 
-    // Check what is visible — satellite across ANY pane, radar on active pane
+    // Check what is visible across ALL panes (not just active)
     const showSat = Object.entries(maps).some(([pid, m]) => isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] !== null);
-    const showSiteBref = isLayerVisible(activeMap, 'site-bref-layer');
-    const showSiteBvel = isLayerVisible(activeMap, 'site-bvel-layer');
-    const showSiteBdhc = isLayerVisible(activeMap, 'site-bdhc-layer');
-    const showSiteRad = showSiteBref || showSiteBvel || showSiteBdhc;
-    const showRad = isLayerVisible(activeMap, 'radar-layer') || showSiteRad;
+    const showRad = Object.values(maps).some(m =>
+        isLayerVisible(m, 'radar-layer') || isLayerVisible(m, 'site-bref-layer') ||
+        isLayerVisible(m, 'site-bvel-layer') || isLayerVisible(m, 'site-bdhc-layer')
+    );
 
     const durationMin = parseInt(document.getElementById('loop-duration').value) || 60;
     const stepMin = parseInt(document.getElementById('loop-step').value) || 5;
@@ -2787,12 +2786,7 @@ function startAnimation() {
                 }
             }
         } else {
-            // Site-Specific NEXRAD Radar Animation
-            let siteProduct = 'sr_bref';
-            if (showSiteBvel) siteProduct = 'sr_bvel';
-            else if (showSiteBdhc) siteProduct = 'bdhc';
-            const siteVal = paneRadarSites[activePaneId] || document.getElementById('radar-site-select')?.value || 'DGX';
-
+            // Site-Specific NEXRAD Radar Animation — per-pane URLs built during layer creation
             let radStep = Math.max(stepMin, 5);
             let count = Math.floor(durationMin / radStep);
             if (count > 24) { radStep = Math.ceil(durationMin / 24 / 5) * 5; count = Math.floor(durationMin / radStep); }
@@ -2800,9 +2794,10 @@ function startAnimation() {
                 const d = new Date(now.getTime() - (count - 1 - i) * radStep * 60000);
                 const isoStr = d.toISOString().replace(/\.\d{3}Z$/, 'Z');
                 radFrames.push({
-                    tileUrl: siteRadarAnimUrl(siteVal, siteProduct, isoStr),
+                    isoStr: isoStr, // Stored for per-pane URL building
+                    tileUrl: null,  // Built per-pane during layer creation
                     time: d,
-                    label: `${siteVal.toUpperCase()} ${siteProduct.toUpperCase().replace('SR_','')} ${isoStr.substring(11, 16)}Z`
+                    label: `RAD ${isoStr.substring(11, 16)}Z`
                 });
             }
         }
@@ -2823,11 +2818,19 @@ function startAnimation() {
         const paneCh = paneGoesChannels[paneId];
         const hadSatVisible = preAnimVisibility[paneId]?.['satellite-layer'] === 'visible' && paneCh !== null;
 
+        // Determine what radar this pane had visible
+        const snap = preAnimVisibility[paneId];
+        const hadNatRad = snap?.['radar-layer'] === 'visible';
+        const hadSiteRad = snap?.['site-bref-layer'] === 'visible' ||
+                           snap?.['site-bvel-layer'] === 'visible' ||
+                           snap?.['site-bdhc-layer'] === 'visible';
+        const hadAnyRad = hadNatRad || hadSiteRad;
+
         // Hide live layers only on panes that had them visible
         if (hadSatVisible && map.getLayer('satellite-layer')) {
             map.setLayoutProperty('satellite-layer', 'visibility', 'none');
         }
-        if (radFrames.length > 0) {
+        if (hadAnyRad) {
             if (map.getLayer('radar-layer')) map.setLayoutProperty('radar-layer', 'visibility', 'none');
             if (map.getLayer('site-bref-layer')) map.setLayoutProperty('site-bref-layer', 'visibility', 'none');
             if (map.getLayer('site-bvel-layer')) map.setLayoutProperty('site-bvel-layer', 'visibility', 'none');
@@ -2840,7 +2843,6 @@ function startAnimation() {
                 const srcId = `anim-sat-src-${i}`;
                 const lyrId = `anim-sat-lyr-${i}`;
                 if (!map.getSource(srcId)) {
-                    // Use THIS PANE's channel for the tile URL
                     const satUrl = nowCoastSatUrl(paneCh, satFrames[i].isoTime);
                     map.addSource(srcId, { type: 'raster', tiles: [satUrl], tileSize: 256 });
                     map.addLayer({ id: lyrId, type: 'raster', source: srcId,
@@ -2855,20 +2857,33 @@ function startAnimation() {
             }
         }
 
-        // Create radar animation layers
-        for (let i = 0; i < radFrames.length; i++) {
-            const srcId = `anim-rad-src-${i}`;
-            const lyrId = `anim-rad-lyr-${i}`;
-            if (!map.getSource(srcId)) {
-                map.addSource(srcId, { type: 'raster', tiles: [radFrames[i].tileUrl], tileSize: 512 });
-                map.addLayer({ id: lyrId, type: 'raster', source: srcId,
-                    layout: { visibility: 'visible' },
-                    paint: {
-                        'raster-opacity': 0.01,
-                        'raster-resampling': 'nearest',
-                        'raster-fade-duration': 0
+        // Create radar animation layers ONLY on panes that had radar visible
+        // Each pane uses its OWN site and product for per-pane animation
+        if (hadAnyRad && radFrames.length > 0) {
+            const paneSite = paneRadarSites[paneId] || 'DGX';
+            const paneProduct = paneRadarProducts[paneId] || 'sr_bref';
+            for (let i = 0; i < radFrames.length; i++) {
+                const srcId = `anim-rad-src-${i}`;
+                const lyrId = `anim-rad-lyr-${i}`;
+                if (!map.getSource(srcId)) {
+                    let radUrl;
+                    if (hadNatRad) {
+                        // National radar — same URL for all panes
+                        radUrl = radFrames[i].tileUrl;
+                    } else {
+                        // Site-specific — use THIS PANE's site + product
+                        radUrl = siteRadarAnimUrl(paneSite, paneProduct, radFrames[i].isoStr);
                     }
-                });
+                    map.addSource(srcId, { type: 'raster', tiles: [radUrl], tileSize: 512 });
+                    map.addLayer({ id: lyrId, type: 'raster', source: srcId,
+                        layout: { visibility: 'visible' },
+                        paint: {
+                            'raster-opacity': 0.01,
+                            'raster-resampling': 'nearest',
+                            'raster-fade-duration': 0
+                        }
+                    });
+                }
             }
         }
     });
@@ -2954,17 +2969,29 @@ function renderCurrentFrame() {
         }
     }
 
-    // Update per-pane labels with each pane's own channel info
-    const satLabel = animSatFrames.length > 0 ? animSatFrames[Math.min(animationFrameIndex, animSatFrames.length - 1)].label : '';
-    const radLabel = animRadFrames.length > 0 ? animRadFrames[Math.min(animationFrameIndex, animRadFrames.length - 1)].label : '';
+    // Update per-pane labels with each pane's own channel/product info
+    const satFrame = animSatFrames.length > 0 ? animSatFrames[Math.min(animationFrameIndex, animSatFrames.length - 1)] : null;
+    const radFrame = animRadFrames.length > 0 ? animRadFrames[Math.min(animationFrameIndex, animRadFrames.length - 1)] : null;
     Object.keys(maps).forEach(paneId => {
         const el = document.getElementById(`radar-ts-${paneId}`);
         if (!el) return;
+        const snap = preAnimVisibility[paneId];
         const paneCh = paneGoesChannels[paneId];
-        const hadSat = preAnimVisibility[paneId]?.['satellite-layer'] === 'visible' && paneCh !== null;
+        const hadSat = snap?.['satellite-layer'] === 'visible' && paneCh !== null;
+        const hadNatRad = snap?.['radar-layer'] === 'visible';
+        const hadSiteRad = snap?.['site-bref-layer'] === 'visible' ||
+                           snap?.['site-bvel-layer'] === 'visible' ||
+                           snap?.['site-bdhc-layer'] === 'visible';
         const parts = [];
-        if (hadSat && satLabel) parts.push(`CH${paneCh} ${satLabel.replace('SAT ', '')}`);
-        if (radLabel) parts.push(radLabel);
+        if (hadSat && satFrame) parts.push(`CH${paneCh} ${satFrame.label.replace('SAT ', '')}`);
+        if (hadSiteRad && radFrame) {
+            const paneSite = (paneRadarSites[paneId] || 'DGX').toUpperCase();
+            const paneProduct = (paneRadarProducts[paneId] || 'sr_bref').toUpperCase().replace('SR_', '');
+            const timeStr = radFrame.label.replace('RAD ', '');
+            parts.push(`${paneSite} ${paneProduct} ${timeStr}`);
+        } else if (hadNatRad && radFrame) {
+            parts.push(radFrame.label);
+        }
         el.textContent = parts.length > 0 ? `LOOP | ${parts.join(' + ')}` : 'LOOP';
     });
     const layerTimeEl = document.getElementById('val-layer-time');
