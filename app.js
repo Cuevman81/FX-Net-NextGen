@@ -4117,6 +4117,7 @@ function initRadarSiteSelector() {
                 addLiveLog(`RADAR [Pane ${activePaneId}]: Site changed to ${site}`, '#00e5ff');
             }
             updateSidebarToActivePane();
+            refreshTimestampLabel();
             updateHealth('radar');
         });
     }
