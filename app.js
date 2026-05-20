@@ -771,6 +771,46 @@ function setupMapLayers(map, paneId) {
         paint: { 'line-color': '#ff4444', 'line-width': 3, 'line-dasharray': [2, 1] }
     });
 
+    // ─── Layer 5b: SPC Local Storm Reports (GeoJSON points) ───
+    map.addSource('spc-lsr', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+    });
+    map.addLayer({
+        id: 'spc-lsr-circles', type: 'circle', source: 'spc-lsr',
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3, 7, 6, 12, 10],
+            'circle-color': ['match', ['get', 'lsrType'],
+                'TORNADO', '#ff0000',
+                'HAIL', '#00cc00',
+                'TSTM WND GST', '#3399ff',
+                'TSTM WND DMG', '#3399ff',
+                'FLASH FLOOD', '#00cccc',
+                'FLOOD', '#008888',
+                'SNOW', '#cc88ff',
+                'RAIN', '#0088aa',
+                'MARINE TSTM WIND', '#6666cc',
+                '#ff9900' /* default — other types */
+            ],
+            'circle-opacity': 0.9,
+            'circle-stroke-width': 1.5,
+            'circle-stroke-color': '#000'
+        }
+    });
+    map.addLayer({
+        id: 'spc-lsr-labels', type: 'symbol', source: 'spc-lsr',
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'icon'],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 3, 8, 7, 12, 12, 16],
+            'text-allow-overlap': true,
+            'text-ignore-placement': true,
+            'text-offset': [0, 0]
+        },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1 }
+    });
+
     // ─── Layer 6: NWS Alerts (GeoJSON polygons) ───
     map.addSource('nws-warnings', {
         type: 'geojson',
@@ -1585,7 +1625,7 @@ function initFrontalPipIcons(map) {
         if (!warningsActive && !watchesActive) return;
 
         // Ensure we didn't click on a METAR or FIRMS or MD icon
-        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nexrad-sites-layer'] });
+        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'spc-lsr-circles', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nexrad-sites-layer'] });
         if (otherFeats.length > 0) return;
 
         const lat = e.lngLat.lat.toFixed(4);
@@ -1653,6 +1693,32 @@ function initFrontalPipIcons(map) {
         new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
 
+    // SPC LSR click
+    map.on('click', 'spc-lsr-circles', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties;
+        const coord = e.features[0].geometry.coordinates;
+        const timeStr = p.valid ? new Date(p.valid).toUTCString() : 'Recent';
+        const mag = p.magnitude && p.unit ? `<div><span style="color:#888;">Magnitude:</span> ${p.magnitude} ${p.unit}</div>` : (p.magnitude ? `<div><span style="color:#888;">Magnitude:</span> ${p.magnitude}</div>` : '');
+        const typeColors = {
+            'TORNADO': '#ff0000', 'HAIL': '#00cc00', 'TSTM WND GST': '#3399ff',
+            'TSTM WND DMG': '#3399ff', 'FLASH FLOOD': '#00cccc', 'FLOOD': '#008888',
+            'SNOW': '#cc88ff', 'RAIN': '#0088aa', 'MARINE TSTM WIND': '#6666cc'
+        };
+        const color = typeColors[p.lsrType] || '#ff9900';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
+            <div style="font-weight:bold;color:${color};font-size:13px;margin-bottom:2px;">${p.icon || '⚡'} ${p.lsrType}</div>
+            <div style="color:#aaa;margin-bottom:2px;">${p.city}, ${p.county} Co., ${p.state}</div>
+            <div style="color:#888;margin-bottom:6px;">${timeStr} — WFO: ${p.wfo}</div>
+            ${mag}
+            <div style="color:#888;margin-bottom:4px;"><span style="color:#888;">Source:</span> ${p.source}</div>
+            ${p.remark ? `<div style="color:#ccc;font-style:italic;margin-top:4px;border-top:1px solid #333;padding-top:4px;">${p.remark}</div>` : ''}
+            <div style="color:#555;margin-top:4px;">${coord ? coord[1].toFixed(4) + '°N, ' + Math.abs(coord[0]).toFixed(4) + '°W' : ''}</div>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'spc-lsr-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'spc-lsr-circles', () => { map.getCanvas().style.cursor = ''; });
 
     map.on('click', 'nexrad-sites-layer', e => {
         if (!e.features || e.features.length === 0) return;
@@ -1794,6 +1860,88 @@ async function fetchMesoscaleDiscussions(show) {
         }
     } catch (e) {
         addLiveLog(`SPC MD ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+async function fetchLSRs(show) {
+    if (!show) {
+        updateSidebarToActivePane();
+        return;
+    }
+
+    addLiveLog('SPC: Fetching Local Storm Reports...', '#ff9900');
+    try {
+        // IEM LSR GeoJSON — last 24 hours, all WFOs
+        const now = new Date();
+        const start = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const fmt = d => d.toISOString().replace(/[-:T]/g, '').substring(0, 12);
+        const url = `https://mesonet.agron.iastate.edu/geojson/lsr.geojson?sts=${fmt(start)}&ets=${fmt(now)}&wfos=`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        // LSR type → emoji icon for map labels
+        const iconMap = {
+            'T': '🌪️', 'TORNADO': '🌪️',
+            'H': '🧊', 'HAIL': '🧊',
+            'G': '💨', 'TSTM WND GST': '💨',
+            'D': '🌬️', 'TSTM WND DMG': '🌬️',
+            'F': '🌊', 'FLASH FLOOD': '🌊',
+            'E': '🌊', 'FLOOD': '🌊',
+            'S': '❄️', 'SNOW': '❄️',
+            'R': '🌧️', 'RAIN': '🌧️',
+            'M': '⚓', 'MARINE TSTM WIND': '⚓',
+            'W': '🌪️', 'LANDSPOUT': '🌪️',
+            'N': '💨', 'NON-TSTM WND GST': '💨',
+            'O': '🌬️', 'NON-TSTM WND DMG': '🌬️'
+        };
+
+        const fc = {
+            type: 'FeatureCollection',
+            features: (data.features || []).filter(f => f.geometry?.type === 'Point').map(f => {
+                const p = f.properties;
+                const typeText = p.typetext || 'UNKNOWN';
+                return {
+                    type: 'Feature',
+                    geometry: f.geometry,
+                    properties: {
+                        lsrType: typeText,
+                        typeCode: p.type || '',
+                        icon: iconMap[typeText] || iconMap[p.type] || '⚡',
+                        magnitude: p.magnitude || '',
+                        unit: p.unit || '',
+                        city: p.city || '',
+                        county: p.county || '',
+                        state: p.st || p.state || '',
+                        remark: p.remark || '',
+                        source: p.source || '',
+                        wfo: p.wfo || '',
+                        valid: p.valid || ''
+                    }
+                };
+            })
+        };
+
+        Object.values(maps).forEach(m => {
+            if (m.getSource('spc-lsr')) m.getSource('spc-lsr').setData(fc);
+        });
+        updateSidebarToActivePane();
+
+        // Count by type for log
+        const typeCounts = {};
+        fc.features.forEach(f => {
+            const t = f.properties.lsrType;
+            typeCounts[t] = (typeCounts[t] || 0) + 1;
+        });
+        const summary = Object.entries(typeCounts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 4)
+            .map(([t, c]) => `${c} ${t}`)
+            .join(', ');
+
+        addLiveLog(`SPC: ${fc.features.length} Local Storm Reports loaded (${summary})`, '#ff9900');
+    } catch (e) {
+        addLiveLog(`SPC LSR ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -3669,6 +3817,7 @@ function updateSidebarToActivePane() {
         else if (layer === 'nws-watches-only') isActive = isLayerVisible(map, 'nws-watches-only-fill');
         else if (layer === 'nws-wwa') isActive = isLayerVisible(map, 'nws-wwa-wms-layer');
         else if (layer === 'spc-md') isActive = isLayerVisible(map, 'spc-md-fill');
+        else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-circles');
         else if (layer === 'spc-outlook') {
             const day = item.getAttribute('data-day');
             isActive = isLayerVisible(map, `spc-day${day}-fill`);
@@ -3778,6 +3927,16 @@ function initProductSidebar() {
                 if (isActive) await fetchMesoscaleDiscussions(true);
                 map.setLayoutProperty('spc-md-fill', 'visibility', isActive ? 'visible' : 'none');
                 map.setLayoutProperty('spc-md-outline', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── SPC Local Storm Reports ───
+            if (layer === 'spc-lsr') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchLSRs(true);
+                map.setLayoutProperty('spc-lsr-circles', 'visibility', isActive ? 'visible' : 'none');
+                map.setLayoutProperty('spc-lsr-labels', 'visibility', isActive ? 'visible' : 'none');
                 updateSidebarToActivePane();
                 return;
             }
@@ -4444,7 +4603,7 @@ function clearPane(map, paneId) {
         'satellite-layer', 'radar-layer',
         'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer',
         'spc-outlook-fill', 'spc-outlook-line',
-        'spc-md-fill', 'spc-md-outline',
+        'spc-md-fill', 'spc-md-outline', 'spc-lsr-circles', 'spc-lsr-labels',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
         'nws-watches-only-fill', 'nws-watches-only-outline',
         'nws-wwa-wms-layer', 'nws-watches-wms-layer',
@@ -4625,6 +4784,10 @@ function startAutoRefresh() {
             const outlookActive = Object.values(maps).some(m => isLayerVisible(m, `spc-day${day}-fill`));
             if (outlookActive) fetchSPCOutlook(day, true);
         });
+
+        // SPC Local Storm Reports
+        const lsrActive = Object.values(maps).some(m => isLayerVisible(m, 'spc-lsr-circles'));
+        if (lsrActive) fetchLSRs(true);
 
         // WPC Isobars
         const isobarsActive = Object.values(maps).some(m => isLayerVisible(m, 'wpc-isobars-line'));
