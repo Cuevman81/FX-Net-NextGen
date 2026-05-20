@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FX-Net NextGen | Tactical Meteorological Workstation</title>
+    <link rel="icon" href="data:,">
+    <script src="diagnostics.js?v=44"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Roboto+Mono&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="style.css?v=100">
+</head>
+<body>
+    <div id="cors-warning" style="display:none; position:fixed; top:70px; left:50%; transform:translateX(-50%); background:#ff4444; color:white; padding:10px 20px; border-radius:4px; font-size:12px; z-index:9999; font-weight:bold;">WARNING: Run from http://localhost for full functionality</div>
+
+
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>FX-NET NEXTGEN</h1>
+                <div class="sidebar-sub-header">
+                    <span>Developed by <span style="color:var(--accent-cyan)">Rodney Cuevas, Meteorologist</span></span>
+                    <div id="watchdog-status" class="status-indicator"><span class="dot pulse"></span> WATCHDOG</div>
+                </div>
+            </div>
+
+            <div class="product-browser">
+                <!-- NWS WARNINGS -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="bell"></i> NWS WARNINGS</div>
+                    <div class="product-item" data-layer="nws-warnings-only"><span>Warnings & Advisories</span> <span class="badge red">LIVE</span></div>
+                    <div class="product-item" data-layer="nws-watches-only"><span>Active Watches</span> <span class="badge orange">LIVE</span></div>
+                    <div id="warning-ticker" class="warning-ticker-container">
+                        <div id="watchdog-filter-bar" style="display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid #1e2a35;">
+                            <select id="watchdog-filter-state" style="flex:1;background:#0a1018;color:#aaa;border:1px solid #1e2a35;border-radius:3px;font-size:10px;padding:2px;">
+                                <option value="all">All States</option>
+                            </select>
+                            <select id="watchdog-filter-wfo" style="flex:1;background:#0a1018;color:#aaa;border:1px solid #1e2a35;border-radius:3px;font-size:10px;padding:2px;">
+                                <option value="all">All WFOs</option>
+                            </select>
+                        </div>
+                        <div id="latest-warnings-list" class="warning-list">
+                            <div class="warning-placeholder">Monitoring national feeds...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RADAR (NEXRAD) -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="radio"></i> RADAR (NEXRAD)</div>
+                    <div class="product-item" data-layer="radar-ref"><span>Reflectivity</span> <span class="badge blue" id="radar-mode-badge">National</span></div>
+                    <div class="product-item" data-layer="radar-vel"><span>Velocity</span> <span class="badge orange">SITE</span></div>
+                    <div class="product-item" data-layer="radar-hc"><span>Hydrometeor Class</span> <span class="badge orange">SITE</span></div>
+                </div>
+
+                <!-- SATELLITE (GOES-EAST) -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="satellite"></i> Satellite (GOES-East)</div>
+                    <div class="sub-category">Visible / Near-IR</div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="1"><span>Ch 1 — Blue VIS (0.47 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="2"><span>Ch 2 — Red VIS (0.64 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="3"><span>Ch 3 — Veggie NIR (0.86 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="4"><span>Ch 4 — Cirrus (1.37 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="5"><span>Ch 5 — Snow/Ice (1.6 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="6"><span>Ch 6 — Cloud Particle (2.2 µm)</span></div>
+                    <div class="sub-category">Water Vapor</div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="8"><span>Ch 8 — Upper WV (6.2 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="9"><span>Ch 9 — Mid WV (6.9 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="10"><span>Ch 10 — Low WV (7.3 µm)</span></div>
+                    <div class="sub-category">Infrared</div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="7"><span>Ch 7 — Shortwave IR (3.9 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="11"><span>Ch 11 — Cloud-Top (8.4 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="12"><span>Ch 12 — Ozone (9.6 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="13"><span>Ch 13 — Clean IR (10.3 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="14"><span>Ch 14 — IR Window (11.2 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="15"><span>Ch 15 — Dirty IR (12.3 µm)</span></div>
+                    <div class="product-item" data-layer="goes-ch" data-channel="16"><span>Ch 16 — CO₂ (13.3 µm)</span></div>
+                </div>
+
+                <!-- SPC PRODUCTS -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="shield-alert"></i> SPC PRODUCTS</div>
+                    <div class="product-item" data-layer="spc-outlook" data-day="1"><span>Day 1 Convective Outlook</span></div>
+                    <div class="product-item" data-layer="spc-outlook" data-day="2"><span>Day 2 Convective Outlook</span></div>
+                    <div class="product-item" data-layer="spc-outlook" data-day="3"><span>Day 3 Convective Outlook</span></div>
+                    <div class="product-item" data-layer="spc-md"><span>Mesoscale Discussions</span> <span class="badge red">LIVE</span></div>
+                    <div class="product-item" id="btn-soundings"><span>Skew-T Soundings</span></div>
+                </div>
+
+                <!-- SURFACE ANALYSIS -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="thermometer"></i> SURFACE ANALYSIS</div>
+                    <div class="product-item" data-layer="metars"><span>METAR Plotted Obs</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" data-layer="wpc-isobars"><span>Surface Isobars</span> <span class="badge blue">WPC</span></div>
+                    <div class="product-item" data-layer="wpc-fronts"><span>Fronts & Pressure Centers</span> <span class="badge blue">WPC</span></div>
+                    <div class="sub-category">QPF (Quantitative Precip Forecast)</div>
+                    <div class="product-item" data-layer="wpc-qpf" data-qpf="1"><span>24hr Day 1</span></div>
+                    <div class="product-item" data-layer="wpc-qpf" data-qpf="2"><span>24hr Day 2</span></div>
+                    <div class="product-item" data-layer="wpc-qpf" data-qpf="3"><span>24hr Day 3</span></div>
+                    <div class="product-item" data-layer="wpc-qpf" data-qpf="9"><span>72hr Day 1-3</span></div>
+                    <div class="product-item" data-layer="wpc-qpf" data-qpf="10"><span>120hr Day 1-5</span></div>
+                </div>
+
+                <!-- NHC TROPICAL -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="cloud-lightning"></i> NHC TROPICAL</div>
+                    <div class="product-item" data-layer="nhc-storms"><span>Active Storms & Cones</span> <span class="badge red">LIVE</span></div>
+                    <div class="product-item" data-layer="nhc-outlook"><span>Tropical Outlook Areas</span> <span class="badge orange">NHC</span></div>
+                    <div class="sub-category">Tropical Discussions</div>
+                    <div class="product-item" data-layer="nhc-two-atl"><span>Atlantic TWO</span></div>
+                    <div class="product-item" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
+                </div>
+
+                <!-- CPC CLIMATE OUTLOOKS -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="sun"></i> CPC CLIMATE OUTLOOKS</div>
+                    <div class="sub-category">Temperature</div>
+                    <div class="product-item" data-layer="cpc-temp" data-period="6-10"><span>6-10 Day Temp</span></div>
+                    <div class="product-item" data-layer="cpc-temp" data-period="8-14"><span>8-14 Day Temp</span></div>
+                    <div class="product-item" data-layer="cpc-temp" data-period="monthly"><span>Monthly Temp</span></div>
+                    <div class="product-item" data-layer="cpc-temp" data-period="seasonal"><span>Seasonal Temp</span></div>
+                    <div class="sub-category">Precipitation</div>
+                    <div class="product-item" data-layer="cpc-precip" data-period="6-10"><span>6-10 Day Precip</span></div>
+                    <div class="product-item" data-layer="cpc-precip" data-period="8-14"><span>8-14 Day Precip</span></div>
+                    <div class="product-item" data-layer="cpc-precip" data-period="monthly"><span>Monthly Precip</span></div>
+                    <div class="product-item" data-layer="cpc-precip" data-period="seasonal"><span>Seasonal Precip</span></div>
+                </div>
+
+                <!-- DROUGHT -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="droplets"></i> DROUGHT</div>
+                    <div class="product-item" data-layer="drought-monitor"><span>US Drought Monitor</span> <span class="badge orange">USDM</span></div>
+                    <div class="product-item" data-layer="cpc-drought-outlook"><span>CPC Drought Outlook</span> <span class="badge blue">CPC</span></div>
+                </div>
+
+                <!-- FIRE & SMOKE -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="flame"></i> FIRE & SMOKE</div>
+                    <div class="product-item" data-layer="firms-fires"><span>Active Fires (VIIRS/MODIS)</span> <span class="badge orange">NASA</span></div>
+                    <div class="product-item" data-layer="hms-smoke"><span>HMS Smoke Plumes</span> <span class="badge orange">NOAA</span></div>
+                </div>
+
+                <!-- AIR QUALITY -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="wind"></i> AIR QUALITY</div>
+                    <div class="product-item" data-layer="airnow-aqi"><span>AQI Monitors</span> <span class="badge green">LIVE</span></div>
+                </div>
+
+
+
+
+
+                <!-- OVERLAYS -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="map"></i> OVERLAYS</div>
+                    <div class="product-item" data-layer="overlay-cities"><span>Cities & Labels</span></div>
+                    <div class="product-item" data-layer="overlay-roads"><span>Interstates & Roads</span></div>
+                </div>
+
+                <!-- NWS TEXT PRODUCTS -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="file-text"></i> NWS PRODUCTS</div>
+                    <div class="product-item" id="btn-text-products"><span>Text Browser</span></div>
+                </div>
+            </div>
+
+            <div class="diagnostic-log-container" id="log-container">
+                <div class="log-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                    <span>DIAGNOSTIC LOG</span>
+                    <i data-lucide="chevron-down"></i>
+                </div>
+                <div id="live-log-entries" class="log-entries"></div>
+            </div>
+        </aside>
+
+        <main class="main-view">
+            <div class="hud-top">
+                <div class="hud-item"><span class="hud-label">LAT:</span><span id="val-lat" class="hud-value">--.----</span></div>
+                <div class="hud-item"><span id="val-lon" class="hud-value">--.----</span></div>
+                <div class="hud-item"><span class="hud-label">TIME (Z):</span><span id="val-time" class="hud-value">--:--:--</span></div>
+                <div id="hud-sampler-readout" class="hud-item" style="display:none; background:rgba(0, 229, 255, 0.1); padding:2px 10px; border:1px solid #00ffff; border-radius:3px; font-weight:bold; margin-left:15px;">
+                    <span class="hud-label" style="color:#00ffff;">DATA SAMPLER:</span><span id="val-sampler" class="hud-value" style="color:#ffff00; font-size:11px;">Move mouse over radar...</span>
+                </div>
+                <div class="hud-item" style="margin-left:auto;">
+                    <span class="hud-label">SITE:</span>
+                    <select id="radar-site-select">
+                        <option value="nexrad-n0q-900913">National Mosaic</option>
+                        <optgroup label="Southern Region">
+                            <option value="AMA">AMA - Amarillo TX</option>
+                            <option value="AMX">AMX - Miami FL</option>
+                            <option value="BMX">BMX - Birmingham AL</option>
+                            <option value="BRO">BRO - Brownsville TX</option>
+                            <option value="BYX">BYX - Key West FL</option>
+                            <option value="CRP">CRP - Corpus Christi TX</option>
+                            <option value="DFX">DFX - Del Rio TX</option>
+                            <option value="DGX">DGX - Jackson MS</option>
+                            <option value="DYX">DYX - Abilene TX</option>
+                            <option value="EOX">EOX - Fort Novosel AL</option>
+                            <option value="EPZ">EPZ - El Paso TX</option>
+                            <option value="EVX">EVX - NW Florida FL</option>
+                            <option value="EWX">EWX - Austin/San Antonio TX</option>
+                            <option value="FDR">FDR - Frederick/Altus OK</option>
+                            <option value="FFC">FFC - Atlanta GA</option>
+                            <option value="FWS">FWS - Dallas/Fort Worth TX</option>
+                            <option value="GRK">GRK - Central TX</option>
+                            <option value="GWX">GWX - Columbus AFB MS</option>
+                            <option value="HGX">HGX - Houston/Galveston TX</option>
+                            <option value="HTX">HTX - Huntsville AL</option>
+                            <option value="INX">INX - Tulsa OK</option>
+                            <option value="JAX">JAX - Jacksonville FL</option>
+                            <option value="JGZ">JGZ - Warner Robins GA</option>
+                            <option value="LBB">LBB - Lubbock TX</option>
+                            <option value="LCH">LCH - Lake Charles LA</option>
+                            <option value="HDC">HDC - Hammond/New Orleans LA</option>
+                            <option value="LZK">LZK - Little Rock AR</option>
+                            <option value="MAF">MAF - Midland/Odessa TX</option>
+                            <option value="MLB">MLB - Melbourne FL</option>
+                            <option value="MOB">MOB - Mobile AL</option>
+                            <option value="MRX">MRX - Knoxville/Morristown TN</option>
+                            <option value="MXX">MXX - Montgomery AL</option>
+                            <option value="NQA">NQA - Memphis TN</option>
+                            <option value="OHX">OHX - Nashville TN</option>
+                            <option value="POE">POE - Fort Polk LA</option>
+                            <option value="SHV">SHV - Shreveport LA</option>
+                            <option value="SJT">SJT - San Angelo TX</option>
+                            <option value="SRX">SRX - Fort Smith AR</option>
+                            <option value="TBW">TBW - Tampa FL</option>
+                            <option value="TLH">TLH - Tallahassee FL</option>
+                            <option value="TLX">TLX - Oklahoma City OK</option>
+                            <option value="VAX">VAX - Valdosta GA</option>
+                            <option value="VNX">VNX - Vance AFB OK</option>
+                        </optgroup>
+                        <optgroup label="Central Region">
+                            <option value="ABR">ABR - Aberdeen SD</option>
+                            <option value="APX">APX - Gaylord MI</option>
+                            <option value="ARX">ARX - La Crosse WI</option>
+                            <option value="BIS">BIS - Bismarck ND</option>
+                            <option value="CYS">CYS - Cheyenne WY</option>
+                            <option value="DDC">DDC - Dodge City KS</option>
+                            <option value="DLH">DLH - Duluth MN</option>
+                            <option value="DMX">DMX - Des Moines IA</option>
+                            <option value="DTX">DTX - Detroit/Pontiac MI</option>
+                            <option value="DVN">DVN - Davenport IA</option>
+                            <option value="EAX">EAX - Kansas City MO</option>
+                            <option value="FSD">FSD - Sioux Falls SD</option>
+                            <option value="FTG">FTG - Denver/Boulder CO</option>
+                            <option value="GJX">GJX - Grand Junction CO</option>
+                            <option value="GLD">GLD - Goodland KS</option>
+                            <option value="GRB">GRB - Green Bay WI</option>
+                            <option value="GRR">GRR - Grand Rapids MI</option>
+                            <option value="HPX">HPX - Fort Campbell KY</option>
+                            <option value="ICT">ICT - Wichita KS</option>
+                            <option value="ILX">ILX - Lincoln IL</option>
+                            <option value="IND">IND - Indianapolis IN</option>
+                            <option value="IWX">IWX - Northern Indiana IN</option>
+                            <option value="JKL">JKL - Jackson KY</option>
+                            <option value="LNX">LNX - North Platte NE</option>
+                            <option value="LOT">LOT - Chicago IL</option>
+                            <option value="LSX">LSX - St. Louis MO</option>
+                            <option value="LVX">LVX - Louisville KY</option>
+                            <option value="MBX">MBX - Minot AFB ND</option>
+                            <option value="MKX">MKX - Milwaukee WI</option>
+                            <option value="MPX">MPX - Minneapolis MN</option>
+                            <option value="MQT">MQT - Marquette MI</option>
+                            <option value="MVX">MVX - Grand Forks MN</option>
+                            <option value="OAX">OAX - Omaha NE</option>
+                            <option value="PAH">PAH - Paducah KY</option>
+                            <option value="PUX">PUX - Pueblo CO</option>
+                            <option value="RIW">RIW - Riverton WY</option>
+                            <option value="SGF">SGF - Springfield MO</option>
+                            <option value="TWX">TWX - Topeka KS</option>
+                            <option value="UDX">UDX - Rapid City SD</option>
+                            <option value="UEX">UEX - Hastings NE</option>
+                            <option value="VWX">VWX - Evansville IN</option>
+                        </optgroup>
+                        <optgroup label="Eastern Region">
+                            <option value="AKQ">AKQ - Norfolk/Wakefield VA</option>
+                            <option value="ALY">ALY - Albany NY</option>
+                            <option value="BGM">BGM - Binghamton NY</option>
+                            <option value="BOX">BOX - Boston MA</option>
+                            <option value="BUF">BUF - Buffalo NY</option>
+                            <option value="CAE">CAE - Columbia SC</option>
+                            <option value="CBW">CBW - Caribou ME</option>
+                            <option value="CCX">CCX - State College PA</option>
+                            <option value="CLE">CLE - Cleveland OH</option>
+                            <option value="CLX">CLX - Charleston SC</option>
+                            <option value="CXX">CXX - Burlington VT</option>
+                            <option value="DIX">DIX - Philadelphia/Ft Dix NJ</option>
+                            <option value="FCX">FCX - Roanoke/Blacksburg VA</option>
+                            <option value="GSP">GSP - Greenville/Spartanburg SC</option>
+                            <option value="GYX">GYX - Portland ME</option>
+                            <option value="ILN">ILN - Cincinnati/Wilmington OH</option>
+                            <option value="LTX">LTX - Wilmington NC</option>
+                            <option value="LWX">LWX - Washington DC/Sterling VA</option>
+                            <option value="MHX">MHX - Morehead City NC</option>
+                            <option value="OKX">OKX - New York NYC</option>
+                            <option value="PBZ">PBZ - Pittsburgh PA</option>
+                            <option value="RAH">RAH - Raleigh/Durham NC</option>
+                            <option value="RLX">RLX - Charleston WV</option>
+                            <option value="TYX">TYX - Fort Drum NY</option>
+                        </optgroup>
+                        <optgroup label="Western Region">
+                            <option value="ABX">ABX - Albuquerque NM</option>
+                            <option value="ATX">ATX - Seattle WA</option>
+                            <option value="BBX">BBX - Marysville CA</option>
+                            <option value="BHX">BHX - Eureka CA</option>
+                            <option value="BLX">BLX - Billings MT</option>
+                            <option value="CBX">CBX - Boise ID</option>
+                            <option value="DAX">DAX - Sacramento CA</option>
+                            <option value="EMX">EMX - Tucson AZ</option>
+                            <option value="ESX">ESX - Las Vegas NV</option>
+                            <option value="EYX">EYX - Edwards AFB CA</option>
+                            <option value="FDX">FDX - Cannon AFB NM</option>
+                            <option value="FSX">FSX - Flagstaff AZ</option>
+                            <option value="GGW">GGW - Glasgow MT</option>
+                            <option value="HDX">HDX - Holloman AFB NM</option>
+                            <option value="HNX">HNX - Hanford CA</option>
+                            <option value="ICX">ICX - Cedar City UT</option>
+                            <option value="IWA">IWA - Phoenix AZ</option>
+                            <option value="LGX">LGX - Grays Harbor WA</option>
+                            <option value="LRX">LRX - Elko NV</option>
+                            <option value="MAX">MAX - Medford OR</option>
+                            <option value="MSX">MSX - Missoula MT</option>
+                            <option value="MTX">MTX - Salt Lake City UT</option>
+                            <option value="MUX">MUX - San Francisco CA</option>
+                            <option value="NKX">NKX - San Diego CA</option>
+                            <option value="OTX">OTX - Spokane WA</option>
+                            <option value="PDT">PDT - Pendleton OR</option>
+                            <option value="RGX">RGX - Reno NV</option>
+                            <option value="RTX">RTX - Portland OR</option>
+                            <option value="SFX">SFX - Pocatello/Idaho Falls ID</option>
+                            <option value="SOX">SOX - Orange County CA</option>
+                            <option value="TFX">TFX - Great Falls MT</option>
+                            <option value="VTX">VTX - Los Angeles CA</option>
+                            <option value="YUX">YUX - Yuma AZ</option>
+                        </optgroup>
+                        <optgroup label="Alaska / Hawaii / PR">
+                            <option value="ABC">ABC - Bethel AK</option>
+                            <option value="ACG">ACG - Sitka AK</option>
+                            <option value="AEC">AEC - Nome AK</option>
+                            <option value="AHG">AHG - Anchorage AK</option>
+                            <option value="AIH">AIH - Middleton Island AK</option>
+                            <option value="AKC">AKC - King Salmon AK</option>
+                            <option value="APD">APD - Fairbanks AK</option>
+                            <option value="GUA">GUA - Guam</option>
+                            <option value="HKI">HKI - Kauai HI</option>
+                            <option value="HKM">HKM - Kohala HI</option>
+                            <option value="HMO">HMO - Molokai HI</option>
+                            <option value="HWA">HWA - South Hawaii HI</option>
+                            <option value="JUA">JUA - San Juan PR</option>
+                        </optgroup>
+                    </select>
+                </div>
+            </div>
+
+            <div class="pane-grid layout-1" id="pane-grid">
+                <div class="pane active-pane" data-pane="1">
+                    <div class="pane-label">PANE 1</div>
+                    <div class="radar-timestamp" id="radar-ts-1">LIVE</div>
+                    <div id="map-1" class="map-container"></div>
+                </div>
+                <div class="pane" data-pane="2">
+                    <div class="pane-label">PANE 2</div>
+                    <div class="radar-timestamp" id="radar-ts-2">LIVE</div>
+                    <div id="map-2" class="map-container"></div>
+                </div>
+                <div class="pane" data-pane="3">
+                    <div class="pane-label">PANE 3</div>
+                    <div class="radar-timestamp" id="radar-ts-3">LIVE</div>
+                    <div id="map-3" class="map-container"></div>
+                </div>
+                <div class="pane" data-pane="4">
+                    <div class="pane-label">PANE 4</div>
+                    <div class="radar-timestamp" id="radar-ts-4">LIVE</div>
+                    <div id="map-4" class="map-container"></div>
+                </div>
+                <div class="pane" data-pane="5">
+                    <div class="pane-label">PANE 5</div>
+                    <div class="radar-timestamp" id="radar-ts-5">LIVE</div>
+                    <div id="map-5" class="map-container"></div>
+                </div>
+                <div class="pane" data-pane="6">
+                    <div class="pane-label">PANE 6</div>
+                    <div class="radar-timestamp" id="radar-ts-6">LIVE</div>
+                    <div id="map-6" class="map-container"></div>
+                </div>
+                <div class="pane" data-pane="7">
+                    <div class="pane-label">PANE 7</div>
+                    <div class="radar-timestamp" id="radar-ts-7">LIVE</div>
+                    <div id="map-7" class="map-container"></div>
+                </div>
+                <div class="pane" data-pane="8">
+                    <div class="pane-label">PANE 8</div>
+                    <div class="radar-timestamp" id="radar-ts-8">LIVE</div>
+                    <div id="map-8" class="map-container"></div>
+                </div>
+            </div>
+
+            <div class="hud-bottom">
+                <div class="control-group">
+                    <button class="btn-view active" data-layout="1" title="1 Pane"><i data-lucide="square"></i></button>
+                    <button class="btn-view" data-layout="2" title="2 Panes"><i data-lucide="columns-2"></i></button>
+                    <button class="btn-view" data-layout="4" title="4 Panes"><i data-lucide="layout-grid"></i></button>
+                    <button class="btn-view" data-layout="8" title="8 Panes"><i data-lucide="grid-3x3"></i></button>
+                </div>
+                <div class="control-group">
+                    <button class="btn-icon" id="play-btn" title="Play / Pause Loop"><i data-lucide="play"></i></button>
+                    <button class="btn-icon" id="stop-btn" title="Stop & View Latest Live Frame" style="display:none;"><i data-lucide="square"></i></button>
+                    <button class="btn-icon" id="step-prev-btn" title="Step Back (1 Frame)" style="display:none;"><i data-lucide="chevron-left"></i></button>
+                    <button class="btn-icon" id="step-next-btn" title="Step Forward (1 Frame)" style="display:none;"><i data-lucide="chevron-right"></i></button>
+                    <div style="display:flex; flex-direction:column; gap:2px; margin-left:10px;">
+                        <span style="font-size:8px; color:var(--text-dim);">DURATION</span>
+                        <select id="loop-duration" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                            <option value="60">1 Hour</option>
+                            <option value="180" selected>3 Hours</option>
+                            <option value="360">6 Hours</option>
+                            <option value="720">12 Hours</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                        <span style="font-size:8px; color:var(--text-dim);">STEP</span>
+                        <select id="loop-step" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                            <option value="5" selected>5 Min</option>
+                            <option value="10">10 Min</option>
+                            <option value="30">30 Min</option>
+                            <option value="60">1 Hour</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                        <span style="font-size:8px; color:var(--text-dim);">SPEED</span>
+                        <select id="loop-speed" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                            <option value="150">Fast</option>
+                            <option value="400" selected>Med</option>
+                            <option value="1000">Slow</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <div class="timeline"><div class="timeline-progress"></div></div>
+                    <span class="hud-label" style="margin-left:12px;">FRAME:</span>
+                    <span id="val-layer-time" class="hud-value" style="color:var(--accent-cyan); font-weight:bold;">LIVE</span>
+                </div>
+                <div class="control-group">
+                    <button class="btn-icon" id="btn-health" title="Data Health"><i data-lucide="activity"></i></button>
+                    <button class="btn-icon" id="btn-debug" title="Toggle Log"><i data-lucide="bug"></i></button>
+                </div>
+            </div>
+
+            <div id="data-health-monitor" class="health-monitor-overlay" style="display:none;">
+                <div class="health-header"><i data-lucide="activity"></i> DATA HEALTH</div>
+                <div id="health-rows-container"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Context Menu -->
+    <div id="pane-context-menu" class="context-menu" style="display:none;">
+        <div class="menu-header">PANE CONTROLS</div>
+        <div class="menu-item" data-action="toggle-radar-domes"><i data-lucide="crosshair"></i> Toggle Tactical Radar Domes</div>
+        <div class="menu-item" data-action="toggle-sat"><i data-lucide="satellite"></i> Toggle Satellite</div>
+        <div class="menu-item" data-action="toggle-metar"><i data-lucide="thermometer"></i> Toggle METARs</div>
+        <div class="menu-sep"></div>
+        <div class="menu-item" data-action="toggle-counties"><i data-lucide="map"></i> Counties</div>
+        <div class="menu-item" data-action="toggle-cities"><i data-lucide="type"></i> Cities</div>
+        <div class="menu-item" data-action="toggle-roads"><i data-lucide="navigation"></i> Roads</div>
+        <div class="menu-sep"></div>
+        <div class="menu-item" data-action="toggle-sampler"><i data-lucide="crosshair"></i> Toggle Data Sampler</div>
+        <div class="menu-item" data-action="sync-all"><i data-lucide="refresh-cw"></i> Sync All Panes</div>
+        <div class="menu-item" data-action="clear-pane" style="color:#ff6666;"><i data-lucide="trash-2"></i> Clear Pane</div>
+    </div>
+
+    <!-- Sounding Modal -->
+    <div id="sounding-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-panel" style="width:900px; height:700px;">
+            <div class="modal-header">
+                <span><i data-lucide="wind"></i> SKEW-T / LOG-P SOUNDING</span>
+                <div style="display:flex; gap:8px;">
+                    <button id="popout-sounding-btn" class="btn-icon" title="Pop Out"><i data-lucide="external-link"></i></button>
+                    <button id="close-sounding-modal" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+                </div>
+            </div>
+            <div class="modal-toolbar" style="gap:10px; padding:10px; background:#f5f5f5; border-bottom:1px solid #ddd;">
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                    <span style="font-size:8px; color:#666;">STATION</span>
+                    <select id="sounding-station-select" style="padding:4px; font-size:11px; background:#fff; color:#333; border:1px solid #ccc;">
+                        <optgroup label="Southern Region">
+                            <option value="JAN">JAN - Jackson MS</option>
+                            <option value="BMX">BMX - Birmingham AL</option>
+                            <option value="SHV">SHV - Shreveport LA</option>
+                            <option value="LCH">LCH - Lake Charles LA</option>
+                            <option value="LIX">LIX - Slidell/New Orleans LA</option>
+                            <option value="SIL">SIL - Slidell LA (Archive)</option>
+                            <option value="LZK">LZK - Little Rock AR</option>
+                            <option value="FFC">FFC - Peachtree City GA</option>
+                            <option value="JAX">JAX - Jacksonville FL</option>
+                            <option value="TBW">TBW - Ruskin/Tampa FL</option>
+                            <option value="MFL">MFL - Miami FL</option>
+                            <option value="TAE">TAE - Tallahassee FL</option>
+                            <option value="EYW">EYW - Key West FL</option>
+                            <option value="CRP">CRP - Corpus Christi TX</option>
+                            <option value="BRO">BRO - Brownsville TX</option>
+                            <option value="AMA">AMA - Amarillo TX</option>
+                            <option value="MAF">MAF - Midland TX</option>
+                            <option value="EPZ">EPZ - El Paso TX</option>
+                        </optgroup>
+                        <optgroup label="Central Region">
+                            <option value="OUN">OUN - Norman OK</option>
+                            <option value="FWD">FWD - Fort Worth TX</option>
+                            <option value="SGF">SGF - Springfield MO</option>
+                            <option value="DVN">DVN - Davenport IA</option>
+                            <option value="OAX">OAX - Omaha NE</option>
+                            <option value="TOP">TOP - Topeka KS</option>
+                            <option value="ICT">ICT - Wichita KS</option>
+                            <option value="ILX">ILX - Lincoln IL</option>
+                            <option value="DMX">DMX - Des Moines IA</option>
+                            <option value="MPX">MPX - Chanhassen MN</option>
+                            <option value="GRB">GRB - Green Bay WI</option>
+                            <option value="DTX">DTX - White Lake MI</option>
+                            <option value="ILN">ILN - Wilmington OH</option>
+                            <option value="PAH">PAH - Paducah KY</option>
+                            <option value="BNA">BNA - Nashville TN</option>
+                            <option value="BIS">BIS - Bismarck ND</option>
+                            <option value="GGW">GGW - Glasgow MT</option>
+                        </optgroup>
+                        <optgroup label="Eastern Region">
+                            <option value="OKX">OKX - Upton/NYC NY</option>
+                            <option value="LWX">LWX - Sterling VA (DC)</option>
+                            <option value="PHI">PHI - Mt Holly NJ</option>
+                            <option value="BOX">BOX - Chatham MA</option>
+                            <option value="ALY">ALY - Albany NY</option>
+                            <option value="BUF">BUF - Buffalo NY</option>
+                            <option value="PIT">PIT - Pittsburgh PA</option>
+                            <option value="CTP">CTP - State College PA</option>
+                            <option value="RNK">RNK - Blacksburg VA</option>
+                            <option value="GSP">GSP - Greer SC</option>
+                            <option value="CHS">CHS - Charleston SC</option>
+                            <option value="MHX">MHX - Morehead City NC</option>
+                            <option value="ILM">ILM - Wilmington NC</option>
+                            <option value="WAL">WAL - Wallops Island VA</option>
+                        </optgroup>
+                        <optgroup label="Western Region">
+                            <option value="DNR">DNR - Denver CO</option>
+                            <option value="ABQ">ABQ - Albuquerque NM</option>
+                            <option value="TFX">TFX - Great Falls MT</option>
+                            <option value="BOI">BOI - Boise ID</option>
+                            <option value="LKN">LKN - Elko NV</option>
+                            <option value="VEF">VEF - Las Vegas NV</option>
+                            <option value="TWC">TWC - Tucson AZ</option>
+                            <option value="PSR">PSR - Phoenix AZ</option>
+                            <option value="FGZ">FGZ - Flagstaff AZ</option>
+                            <option value="NKX">NKX - San Diego CA</option>
+                            <option value="VBG">VBG - Vandenberg CA</option>
+                            <option value="OAK">OAK - Oakland CA</option>
+                            <option value="MFR">MFR - Medford OR</option>
+                            <option value="SLE">SLE - Salem OR</option>
+                            <option value="UIL">UIL - Quillayute WA</option>
+                            <option value="OTX">OTX - Spokane WA</option>
+                            <option value="RIW">RIW - Riverton WY</option>
+                        </optgroup>
+                        <optgroup label="Alaska / Pacific / PR">
+                            <option value="ANC">ANC - Anchorage AK</option>
+                            <option value="FAI">FAI - Fairbanks AK</option>
+                            <option value="BET">BET - Bethel AK</option>
+                            <option value="KTN">KTN - Ketchikan AK</option>
+                            <option value="LIH">LIH - Lihue HI</option>
+                            <option value="PHTO">PHTO - Hilo HI</option>
+                            <option value="GUM">GUM - Guam</option>
+                            <option value="SJU">SJU - San Juan PR</option>
+                        </optgroup>
+                    </select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                    <span style="font-size:8px; color:#666;">DATE (UTC)</span>
+                    <input type="date" id="sounding-date-input" style="padding:3px; font-size:11px;">
+                </div>
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                    <span style="font-size:8px; color:#666;">Z-TIME</span>
+                    <select id="sounding-time-select" style="padding:4px; font-size:11px;">
+                        <option value="latest">LATEST</option>
+                        <option value="00">00Z (Primary)</option>
+                        <option value="06">06Z (Special)</option>
+                        <option value="12">12Z (Primary)</option>
+                        <option value="18">18Z (Special)</option>
+                        <option value="21">21Z (Special)</option>
+                    </select>
+                </div>
+                <button id="fetch-sounding-btn" class="btn-primary" style="height:32px; align-self:flex-end;">FETCH SKEW-T</button>
+                <button id="invert-sounding-btn" class="btn-icon" title="Invert Colors" style="align-self:flex-end;"><i data-lucide="contrast"></i></button>
+            </div>
+            <div class="modal-content" style="background:#fff;">
+                <img id="sounding-image" style="max-width:100%; max-height:100%; display:none;">
+                <div id="sounding-placeholder" style="color:#333; font-size:14px;">Select a station and click FETCH SKEW-T</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Text Product Floating Panel -->
+    <div id="text-panel" class="floating-panel" style="display:none;">
+        <div class="floating-panel-header" id="text-panel-drag">
+            <span><i data-lucide="file-text"></i> NWS TEXT PRODUCTS</span>
+            <button id="close-text-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+        </div>
+        <div class="modal-toolbar" style="flex-wrap:wrap; gap:10px; padding:10px; background:#111; border-bottom:1px solid var(--border);">
+            <div style="display:flex; flex-direction:column; gap:2px;">
+                <span style="font-size:8px; color:var(--text-dim);">LOCATION (WFO)</span>
+                <select id="text-wfo-select" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:4px;">
+                    <optgroup label="National Centers">
+                        <option value="NHC">NHC - National Hurricane Center (Miami, FL)</option>
+                        <option value="SPC">SPC - Storm Prediction Center (Norman, OK)</option>
+                        <option value="CPC">CPC - Climate Prediction Center (College Park, MD)</option>
+                        <option value="WPC">WPC - Weather Prediction Center (College Park, MD)</option>
+                        <option value="OPC">OPC - Ocean Prediction Center (College Park, MD)</option>
+                        <option value="AWC">AWC - Aviation Weather Center (Kansas City, MO)</option>
+                    </optgroup>
+                    <optgroup label="Southern Region">
+                        <option value="ABQ">ABQ - Albuquerque, NM</option>
+                        <option value="AMA">AMA - Amarillo, TX</option>
+                        <option value="BMX">BMX - Birmingham, AL</option>
+                        <option value="BRO">BRO - Brownsville, TX</option>
+                        <option value="CRP">CRP - Corpus Christi, TX</option>
+                        <option value="EPZ">EPZ - El Paso, TX</option>
+                        <option value="EWX">EWX - Austin/San Antonio, TX</option>
+                        <option value="FWS">FWS - Dallas/Fort Worth, TX</option>
+                        <option value="HGX">HGX - Houston/Galveston, TX</option>
+                        <option value="HUN">HUN - Huntsville, AL</option>
+                        <option value="JAN" selected>JAN - Jackson, MS</option>
+                        <option value="JAX">JAX - Jacksonville, FL</option>
+                        <option value="KEY">KEY - Key West, FL</option>
+                        <option value="LBB">LBB - Lubbock, TX</option>
+                        <option value="LCH">LCH - Lake Charles, LA</option>
+                        <option value="HDC">HDC - Hammond/New Orleans, LA</option>
+                        <option value="LZK">LZK - Little Rock, AR</option>
+                        <option value="MAF">MAF - Midland/Odessa, TX</option>
+                        <option value="MEG">MEG - Memphis, TN</option>
+                        <option value="MFL">MFL - Miami, FL</option>
+                        <option value="MLB">MLB - Melbourne, FL</option>
+                        <option value="MOB">MOB - Mobile, AL</option>
+                        <option value="MRX">MRX - Knoxville/Tri-Cities, TN</option>
+                        <option value="OHX">OHX - Nashville, TN</option>
+                        <option value="OUN">OUN - Norman/Oklahoma City, OK</option>
+                        <option value="SHV">SHV - Shreveport, LA</option>
+                        <option value="SJT">SJT - San Angelo, TX</option>
+                        <option value="SJU">SJU - San Juan, PR</option>
+                        <option value="TAE">TAE - Tallahassee, FL</option>
+                        <option value="TBW">TBW - Tampa Bay, FL</option>
+                        <option value="TSA">TSA - Tulsa, OK</option>
+                    </optgroup>
+                    <optgroup label="Central Region">
+                        <option value="ABR">ABR - Aberdeen, SD</option>
+                        <option value="APX">APX - Gaylord, MI</option>
+                        <option value="ARX">ARX - La Crosse, WI</option>
+                        <option value="BIS">BIS - Bismarck, ND</option>
+                        <option value="BOU">BOU - Denver/Boulder, CO</option>
+                        <option value="CYS">CYS - Cheyenne, WY</option>
+                        <option value="DDC">DDC - Dodge City, KS</option>
+                        <option value="DLH">DLH - Duluth, MN</option>
+                        <option value="DMX">DMX - Des Moines, IA</option>
+                        <option value="DTX">DTX - Detroit/Pontiac, MI</option>
+                        <option value="DVN">DVN - Quad Cities, IA/IL</option>
+                        <option value="EAX">EAX - Kansas City/Pleasant Hill, MO</option>
+                        <option value="FGF">FGF - Grand Forks, ND</option>
+                        <option value="FSD">FSD - Sioux Falls, SD</option>
+                        <option value="GID">GID - Hastings, NE</option>
+                        <option value="GJT">GJT - Grand Junction, CO</option>
+                        <option value="GLD">GLD - Goodland, KS</option>
+                        <option value="GRB">GRB - Green Bay, WI</option>
+                        <option value="GRR">GRR - Grand Rapids, MI</option>
+                        <option value="ICT">ICT - Wichita, KS</option>
+                        <option value="ILX">ILX - Lincoln, IL</option>
+                        <option value="IND">IND - Indianapolis, IN</option>
+                        <option value="LBF">LBF - North Platte, NE</option>
+                        <option value="LMK">LMK - Louisville, KY</option>
+                        <option value="LOT">LOT - Chicago, IL</option>
+                        <option value="MPX">MPX - Minneapolis/St. Paul, MN</option>
+                        <option value="MQT">MQT - Marquette, MI</option>
+                        <option value="OAX">OAX - Omaha/Valley, NE</option>
+                        <option value="PAH">PAH - Paducah, KY</option>
+                        <option value="PUB">PUB - Pueblo, CO</option>
+                        <option value="RIW">RIW - Riverton, WY</option>
+                        <option value="SGF">SGF - Springfield, MO</option>
+                        <option value="TWX">TWX - Topeka, KS</option>
+                        <option value="UNR">UNR - Rapid City, SD</option>
+                    </optgroup>
+                    <optgroup label="Eastern Region">
+                        <option value="AKQ">AKQ - Wakefield, VA</option>
+                        <option value="ALY">ALY - Albany, NY</option>
+                        <option value="BGM">BGM - Binghamton, NY</option>
+                        <option value="BOX">BOX - Boston/Norton, MA</option>
+                        <option value="BTV">BTV - Burlington, VT</option>
+                        <option value="BUF">BUF - Buffalo, NY</option>
+                        <option value="CAE">CAE - Columbia, SC</option>
+                        <option value="CAR">CAR - Caribou, ME</option>
+                        <option value="CHS">CHS - Charleston, SC</option>
+                        <option value="CLE">CLE - Cleveland, OH</option>
+                        <option value="CTP">CTP - State College, PA</option>
+                        <option value="GYX">GYX - Gray/Portland, ME</option>
+                        <option value="ILM">ILM - Wilmington, NC</option>
+                        <option value="ILN">ILN - Wilmington/Cincinnati, OH</option>
+                        <option value="LWX">LWX - Baltimore/Washington, DC</option>
+                        <option value="MHX">MHX - Newport/Morehead City, NC</option>
+                        <option value="OKX">OKX - New York City/Upton, NY</option>
+                        <option value="PBZ">PBZ - Pittsburgh, PA</option>
+                        <option value="PHI">PHI - Philadelphia/Mt. Holly, NJ</option>
+                        <option value="RAH">RAH - Raleigh/Durham, NC</option>
+                        <option value="RNK">RNK - Blacksburg/Roanoke, VA</option>
+                    </optgroup>
+                    <optgroup label="Western Region">
+                        <option value="BOI">BOI - Boise, ID</option>
+                        <option value="EKA">EKA - Eureka, CA</option>
+                        <option value="FGZ">FGZ - Flagstaff, AZ</option>
+                        <option value="GGW">GGW - Glasgow, MT</option>
+                        <option value="HNX">HNX - Hanford/Fresno, CA</option>
+                        <option value="LKN">LKN - Elko, NV</option>
+                        <option value="MFR">MFR - Medford, OR</option>
+                        <option value="MSO">MSO - Missoula, MT</option>
+                        <option value="MTR">MTR - San Francisco/Monterey, CA</option>
+                        <option value="OTX">OTX - Spokane, WA</option>
+                        <option value="PDT">PDT - Pendleton, OR</option>
+                        <option value="PIH">PIH - Pocatello/Idaho Falls, ID</option>
+                        <option value="PQR">PQR - Portland, OR</option>
+                        <option value="PSR">PSR - Phoenix, AZ</option>
+                        <option value="REV">REV - Reno, NV</option>
+                        <option value="SEW">SEW - Seattle/Tacoma, WA</option>
+                        <option value="SGX">SGX - San Diego, CA</option>
+                        <option value="SLC">SLC - Salt Lake City, UT</option>
+                        <option value="STO">STO - Sacramento, CA</option>
+                        <option value="TFX">TFX - Great Falls, MT</option>
+                        <option value="TWC">TWC - Tucson, AZ</option>
+                        <option value="VEF">VEF - Las Vegas, NV</option>
+                    </optgroup>
+                    <optgroup label="Alaska & Pacific">
+                        <option value="AFC">AFC - Anchorage, AK</option>
+                        <option value="AFG">AFG - Fairbanks, AK</option>
+                        <option value="AJK">AJK - Juneau, AK</option>
+                        <option value="GUM">GUM - Guam</option>
+                        <option value="HFO">HFO - Honolulu, HI</option>
+                    </optgroup>
+                </select>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:2px;">
+                <span style="font-size:8px; color:var(--text-dim);">PRODUCT TYPE</span>
+                <select id="text-product-select" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:4px;">
+                    <optgroup label="Forecasts & Discussions">
+                        <option value="AFD">Area Forecast Discussion (AFD)</option>
+                        <option value="ZFP">Zone Forecast Product (ZFP)</option>
+                        <option value="PFM">Point Forecast Matrices (PFM)</option>
+                        <option value="AFM">Area Forecast Matrices (AFM)</option>
+                        <option value="SFT">State Forecast Product (SFT)</option>
+                        <option value="SRF">Surf Zone Forecast (SRF)</option>
+                        <option value="CWF">Coastal Waters Forecast (CWF)</option>
+                        <option value="OFF">Offshore Waters Forecast (OFF)</option>
+                        <option value="NSH">Nearshore Marine Forecast (NSH)</option>
+                        <option value="GLF">Great Lakes Marine Forecast (GLF)</option>
+                    </optgroup>
+                    <optgroup label="Watches, Warnings & Advisories">
+                        <option value="HWO">Hazardous Weather Outlook (HWO)</option>
+                        <option value="NOW">Short Term Forecast (NOW)</option>
+                        <option value="SPS">Special Weather Statement (SPS)</option>
+                        <option value="WSW">Winter Weather Message (WSW)</option>
+                        <option value="NPW">Non-Precipitation Weather Message (NPW)</option>
+                        <option value="FFA">Flash Flood Watch / Advisory (FFA)</option>
+                        <option value="FFW">Flash Flood Warning (FFW)</option>
+                        <option value="FLS">Flood Statement (FLS)</option>
+                        <option value="FLW">Flood Warning (FLW)</option>
+                        <option value="CFW">Coastal Hazard Message (CFW)</option>
+                        <option value="MWW">Marine Weather Message (MWW)</option>
+                    </optgroup>
+                    <optgroup label="Severe Storms & Local Reports">
+                        <option value="LSR">Local Storm Report (LSR)</option>
+                        <option value="PNS">Public Information Statement (PNS)</option>
+                        <option value="RER">Record Event Report (RER)</option>
+                        <option value="TOR">Tornado Warning (TOR)</option>
+                        <option value="SVR">Severe Thunderstorm Warning (SVR)</option>
+                        <option value="SMW">Special Marine Warning (SMW)</option>
+                    </optgroup>
+                    <optgroup label="Climate & Hydrology">
+                        <option value="CLI">Daily Climate Report (CLI)</option>
+                        <option value="CLM">Monthly Climate Report (CLM)</option>
+                        <option value="RTP">Regional Max/Min Temp & Precip (RTP)</option>
+                        <option value="ESF">Hydrologic Outlook / Summary (ESF)</option>
+                        <option value="RVA">River Summary / Forecast (RVA)</option>
+                        <option value="RVD">Daily River Forecast (RVD)</option>
+                    </optgroup>
+                    <optgroup label="Fire Weather">
+                        <option value="FWF">Fire Weather Forecast (FWF)</option>
+                        <option value="FWS">Fire Weather Summary (FWS)</option>
+                        <option value="RFD">Rangeland Fire Danger (RFD)</option>
+                    </optgroup>
+                    <optgroup label="Aviation">
+                        <option value="TAF">Terminal Aerodrome Forecast (TAF)</option>
+                        <option value="SIG">SIGMET (SIG)</option>
+                        <option value="CWA">Center Weather Advisory (CWA)</option>
+                    </optgroup>
+                </select>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:2px;">
+                <span style="font-size:8px; color:var(--text-dim);">VERSION / HISTORY</span>
+                <select id="text-version-select" style="min-width:180px; background:#000; color:#fff; border:1px solid var(--border); font-size:10px; padding:4px;">
+                    <option value="">-- Select Product First --</option>
+                </select>
+            </div>
+            <button id="fetch-text-btn" class="btn-primary" style="align-self:flex-end; height:30px; padding:0 20px; font-weight:900;">FETCH PRODUCT</button>
+        </div>
+        <div class="floating-panel-body">
+            <pre id="text-product-content" style="margin:0; color:#00ff88; font-size:12px; white-space:pre-wrap; padding:12px;">Select a product and hit FETCH.</pre>
+        </div>
+    </div>
+
+    <script src="app.js?v=106"></script>
+    <script>
+        lucide.createIcons();
+        if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
+    </script>
+</body>
+</html>

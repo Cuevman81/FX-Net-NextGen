@@ -1,0 +1,171 @@
+import http.server
+import socketserver
+import os
+import urllib.request
+import urllib.error
+import json
+import ssl
+
+PORT = 8888
+LOG_FILE = "fxnet_diagnostic_log.txt"
+
+def safe_urlopen(req, timeout=15):
+    try:
+        context = ssl._create_unverified_context()
+        return urllib.request.urlopen(req, timeout=timeout, context=context)
+    except AttributeError:
+        return urllib.request.urlopen(req, timeout=timeout)
+
+class CustomHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        path = self.path.split('?')[0]
+
+        if path == '/api/metar':
+            try:
+                # Proxy the AWC request using explicit IDs to avoid bounding box limit failures
+                icao_list = "KATL,KORD,KDFW,KDEN,KJFK,KLAX,KSEA,KSFO,KMIA,KPHX,KMSP,KDTW,KBOS,KPHL,KCLT,KSLC,KMCO,KIAD,KEWR,KMDW,KTPA,KPDX,KHOU,KDAL,KSJC,KSTL,KBWI,KMSY,KMEM,KCLE,KIND,KAUS,KSAT,KRDU,KCVG,KSDF,KPIT,KMKE,KBUF,KOMA,KOKC,KRIC,KHNL,PANC,KABQ,KCHS,KCMH,KRSW,KBDL,KBOI,KBUR,KPVD,KPBI,KORF,KMYR,KSRQ,KILM,KTLH,KJAX,KPNS,KVPS,KMOB,KBHM,KBNA,KHSV,KLIT,KJAN,KGPT,KLFT,KXNA,KBTR,KSHV,KSFB,KEYW,KMLB,KPGD,KAPF,KPIE,KGNV,KCRG,KECP,KVLD,KDAB,KSAV,KDHN,KCSG,KABY,KAGS,KVQQ,KSSI,KCAE,KFLO,KOAJ,KPHF,KCHO,KROA,KLYH,KCRW,KBLF,KHTS,KPKB,KCKB,KBKW,KEKN,KMGW,KHLG,KLWB,KSHD,KOKV,KFRR,KCJR,KHWY,KMTN,KDCA,KILG,KDOV,KTTN,KACY,KBLM,KMIV,KWRI,KVAY,KCDW,KSMQ,KTEB,KMMU,KFWN,KLDJ,KDYL,KPTW,KUKT,KLOM,KMQS,KPNE,KCKZ,KABE,KRDG,KBCB,KPSK,KVJI,KTNB,KGEV,KGKT,KDKK,KMEV,KSYP,KSKF,KEDC,KHYI,KGTU,KBAZ,KRBD,KSSF,KCVB,KERV,KPEZ,KSZT,KCOE,KPBF,KPEQ,KDSM,KCID,KDBQ,KSUX,KMLI,KPIA,KSPI,KCMI,KBMG,KLAF,KFWA,KSBN,KGRR,KLAN,KFNT,KMBS,KTVC,KPLN,KAPN,KMQT,KIMT,KGRB,KATW,KCWA,KEAU,KLSE,KRST,KDLH,KBRD,KSTC,KFAR,KGFK,KBIS,KMOT,KDIK,KJMS,KABR,KPIR,KRAP,KFSD,KSUA,KVTN,KLBF,KGRI,KMCK,KGLD,KHYS,KSLN,KGBD,KDDC,KGCK,KHUT,KICT,KTOP,KMHK,KLNK,KCNU,KJLN,KSGF,KCGI,KPAH,KEVV,KOWB,KLEX,KCRW,KHTS,KPKB,KCKB,KEKN,KGEG,KPUW,KALW,KPSC,KYKM,KEAT,KMWH,KOLM,KHQM,KUIL,KAST,KTMK,KSLE,KEUG,KOTH,KACV,KCEC,KRDD,KCIC,KSMF,KSCK,KMOD,KMER,KFAT,KVIS,KBFL,KPMD,KWJF,KNID,KTRM,KIPL,KNYL,KPRC,KFLG,KINW,KSAW,KPGA,KGCN,KSGE,KCGZ,KDUG,KTUS,KFHU,KSAD,KOLS,KALS,KDRO,KTEX,KMTJ,KGJT,KRIL,KEGE,KASE,KSBS,KHDN,KCAG,KCPR,KGCC,KSHR,KCOD"
+                req = urllib.request.Request(f"https://aviationweather.gov/api/data/metar?format=geojson&ids={icao_list}")
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'{{"type":"FeatureCollection","features":[],"error":"{str(e)}"}}'.encode())
+        elif path == '/api/wpc-isobars':
+            try:
+                req = urllib.request.Request('https://ftp-wpc.ncep.noaa.gov/sfcanl_isobars/isobars_latest.txt')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/plain')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'ERROR: {str(e)}'.encode())
+
+        elif path == '/api/wpc-coded-fronts':
+            try:
+                req = urllib.request.Request('https://www.wpc.ncep.noaa.gov/discussions/codsus')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/plain')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'ERROR: {str(e)}'.encode())
+
+        elif path == '/api/nhc-two-atl':
+            try:
+                req = urllib.request.Request('https://www.nhc.noaa.gov/text/MIATWOAT.shtml')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'ERROR: {str(e)}'.encode())
+
+        elif path == '/api/nhc-two-epac':
+            try:
+                req = urllib.request.Request('https://www.nhc.noaa.gov/text/MIATWOEP.shtml')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'ERROR: {str(e)}'.encode())
+
+        elif path == '/api/drought-monitor':
+            try:
+                import datetime
+                today = datetime.date.today()
+                days_since_tues = (today.weekday() - 1) % 7
+                last_tuesday = today - datetime.timedelta(days=days_since_tues)
+                date_str = last_tuesday.strftime('%Y%m%d')
+                url = f'https://droughtmonitor.unl.edu/data/json/usdm_{date_str}.json'
+                
+                req = urllib.request.Request(url)
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                try:
+                    with safe_urlopen(req, timeout=15) as response:
+                        data = response.read()
+                except urllib.error.HTTPError as he:
+                    if he.code == 404:
+                        # Fallback to the previous week's Tuesday if this week's Tuesday has not been published yet
+                        prev_tuesday = last_tuesday - datetime.timedelta(days=7)
+                        date_str = prev_tuesday.strftime('%Y%m%d')
+                        url = f'https://droughtmonitor.unl.edu/data/json/usdm_{date_str}.json'
+                        req = urllib.request.Request(url)
+                        req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                        with safe_urlopen(req, timeout=15) as response:
+                            data = response.read()
+                    else:
+                        raise he
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
+
+        else:
+            # Fallback to serving regular static files
+            super().do_GET()
+
+    def do_POST(self):
+        if self.path == '/log':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            
+            # Append log entry to the file
+            with open(LOG_FILE, 'a') as f:
+                f.write(post_data.decode('utf-8') + '\n')
+                
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'Log saved')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+# Clear the old log file on server start
+if os.path.exists(LOG_FILE):
+    open(LOG_FILE, 'w').close()
+
+# Allow address reuse so server restarts quickly
+socketserver.TCPServer.allow_reuse_address = True
+
+with socketserver.TCPServer(("", PORT), CustomHandler) as httpd:
+    print(f"Serving at http://localhost:{PORT}")
+    print(f"Ready to receive logs directly to {LOG_FILE}")
+    print("Proxying AWC METARs on /api/metar to bypass CORS")
+    httpd.serve_forever()
