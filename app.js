@@ -198,8 +198,9 @@ const SOUNDING_LOCATIONS = {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function goesChannelUrl(ch) {
-    const pad = String(ch).padStart(2, '0');
-    return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/goes_east_conus_ch${pad}/{z}/{x}/{y}.png`;
+    // Use nowCOAST WMS for live satellite — same renderer as animation frames
+    // so the visual appearance stays consistent when looping
+    return nowCoastSatUrl(ch);
 }
 
 function iemSatAnimUrl(channel, offsetEntry) {
@@ -2817,11 +2818,13 @@ function startAnimation() {
     }
 
     // ── Pre-create ALL frame layers (multi-layer preload approach) ──
-    // Each frame gets its own source+layer pair with visibility:visible, raster-opacity:0
-    // MapLibre fetches tiles for opacity-0 layers, enabling instant frame switching
+    // Each frame gets its own source+layer pair per-pane with the pane's own GOES channel
     Object.entries(maps).forEach(([paneId, map]) => {
-        // Hide live layers
-        if (satFrames.length > 0 && map.getLayer('satellite-layer')) {
+        const paneCh = paneGoesChannels[paneId];
+        const hadSatVisible = preAnimVisibility[paneId]?.['satellite-layer'] === 'visible' && paneCh !== null;
+
+        // Hide live layers only on panes that had them visible
+        if (hadSatVisible && map.getLayer('satellite-layer')) {
             map.setLayoutProperty('satellite-layer', 'visibility', 'none');
         }
         if (radFrames.length > 0) {
@@ -2831,24 +2834,24 @@ function startAnimation() {
             if (map.getLayer('site-bdhc-layer')) map.setLayoutProperty('site-bdhc-layer', 'visibility', 'none');
         }
 
-        // Create satellite animation layers — each pane uses its OWN GOES channel
-        const paneCh = paneGoesChannels[paneId];
-        const paneSatVisible = paneCh !== null && isLayerVisible(map, 'satellite-layer') || (preAnimVisibility[paneId]?.['satellite-layer'] === 'visible');
-        for (let i = 0; i < satFrames.length; i++) {
-            const srcId = `anim-sat-src-${i}`;
-            const lyrId = `anim-sat-lyr-${i}`;
-            if (!map.getSource(srcId)) {
-                // Use this pane's channel for the tile URL (not the global one)
-                const satUrl = (paneSatVisible && paneCh) ? nowCoastSatUrl(paneCh, satFrames[i].isoTime) : satFrames[i].tileUrl;
-                map.addSource(srcId, { type: 'raster', tiles: [satUrl], tileSize: 256 });
-                map.addLayer({ id: lyrId, type: 'raster', source: srcId,
-                    layout: { visibility: 'visible' },
-                    paint: {
-                        'raster-opacity': 0.01,
-                        'raster-resampling': 'nearest',
-                        'raster-fade-duration': 0
-                    }
-                }, 'radar-layer');
+        // Create satellite animation layers ONLY on panes that had satellite visible
+        if (hadSatVisible && satFrames.length > 0) {
+            for (let i = 0; i < satFrames.length; i++) {
+                const srcId = `anim-sat-src-${i}`;
+                const lyrId = `anim-sat-lyr-${i}`;
+                if (!map.getSource(srcId)) {
+                    // Use THIS PANE's channel for the tile URL
+                    const satUrl = nowCoastSatUrl(paneCh, satFrames[i].isoTime);
+                    map.addSource(srcId, { type: 'raster', tiles: [satUrl], tileSize: 256 });
+                    map.addLayer({ id: lyrId, type: 'raster', source: srcId,
+                        layout: { visibility: 'visible' },
+                        paint: {
+                            'raster-opacity': 0.01,
+                            'raster-resampling': 'nearest',
+                            'raster-fade-duration': 0
+                        }
+                    }, 'radar-layer');
+                }
             }
         }
 
@@ -2951,12 +2954,19 @@ function renderCurrentFrame() {
         }
     }
 
-    // Update labels and progress
-    const labels = [];
-    if (animSatFrames.length > 0) labels.push(animSatFrames[Math.min(animationFrameIndex, animSatFrames.length - 1)].label);
-    if (animRadFrames.length > 0) labels.push(animRadFrames[Math.min(animationFrameIndex, animRadFrames.length - 1)].label);
-
-    updatePaneTimestamps(`LOOP | ${labels.join(' + ')}`);
+    // Update per-pane labels with each pane's own channel info
+    const satLabel = animSatFrames.length > 0 ? animSatFrames[Math.min(animationFrameIndex, animSatFrames.length - 1)].label : '';
+    const radLabel = animRadFrames.length > 0 ? animRadFrames[Math.min(animationFrameIndex, animRadFrames.length - 1)].label : '';
+    Object.keys(maps).forEach(paneId => {
+        const el = document.getElementById(`radar-ts-${paneId}`);
+        if (!el) return;
+        const paneCh = paneGoesChannels[paneId];
+        const hadSat = preAnimVisibility[paneId]?.['satellite-layer'] === 'visible' && paneCh !== null;
+        const parts = [];
+        if (hadSat && satLabel) parts.push(`CH${paneCh} ${satLabel.replace('SAT ', '')}`);
+        if (radLabel) parts.push(radLabel);
+        el.textContent = parts.length > 0 ? `LOOP | ${parts.join(' + ')}` : 'LOOP';
+    });
     const layerTimeEl = document.getElementById('val-layer-time');
     if (layerTimeEl) {
         layerTimeEl.textContent = `FRAME ${animationFrameIndex + 1}/${totalFrames}${isPaused ? ' [PAUSED]' : ''}`;
