@@ -772,7 +772,7 @@ function setupMapLayers(map, paneId) {
     });
 
     // ─── Layer 5b: SPC Local Storm Reports (GeoJSON points with icons) ───
-    initLSRIcons(map);
+    try { initLSRIcons(map); } catch (e) { console.error('LSR icon init failed:', e); }
     map.addSource('spc-lsr', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] }
@@ -781,16 +781,7 @@ function setupMapLayers(map, paneId) {
         id: 'spc-lsr-icons', type: 'symbol', source: 'spc-lsr',
         layout: {
             visibility: 'none',
-            'icon-image': ['match', ['get', 'iconId'],
-                'lsr-tornado', 'lsr-tornado',
-                'lsr-hail', 'lsr-hail',
-                'lsr-wind', 'lsr-wind',
-                'lsr-flood', 'lsr-flood',
-                'lsr-snow', 'lsr-snow',
-                'lsr-rain', 'lsr-rain',
-                'lsr-marine', 'lsr-marine',
-                'lsr-other'
-            ],
+            'icon-image': ['get', 'iconId'],
             'icon-size': ['interpolate', ['linear'], ['zoom'], 3, 0.55, 7, 0.85, 12, 1.2],
             'icon-allow-overlap': true,
             'icon-ignore-placement': true
@@ -806,14 +797,14 @@ function setupMapLayers(map, paneId) {
             'text-offset': [0, 1.3],
             'text-allow-overlap': true,
             'text-ignore-placement': true,
-            'text-font': ['Open Sans Bold']
+            'text-font': ['Noto Sans Bold']
         },
         paint: {
             'text-color': '#ffffff',
             'text-halo-color': '#000000',
             'text-halo-width': 1.5
         },
-        filter: ['has', 'magLabel']
+        filter: ['!=', ['get', 'magLabel'], '']
     });
 
     // ─── Layer 6: NWS Alerts (GeoJSON polygons) ───
@@ -2009,7 +2000,7 @@ async function fetchLSRs(show) {
                 const iconId = iconIdMap[typeText] || iconIdMap[p.type] || 'lsr-other';
                 // Build magnitude label for display below icon
                 const mag = p.magnitude && p.magnitude !== '' && p.magnitude !== 'UNK' && p.magnitude !== 'None' && p.magnitude !== null;
-                const magLabel = mag ? `${p.magnitude}${p.unit ? ' ' + p.unit : ''}` : null;
+                const magLabel = mag ? `${p.magnitude}${p.unit ? ' ' + p.unit : ''}` : '';
                 return {
                     type: 'Feature',
                     geometry: f.geometry,
