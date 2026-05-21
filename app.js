@@ -474,7 +474,9 @@ function initMap(paneId) {
                         const prod = paneRadarProducts[paneId] || 'sr_bref';
                         const readout = decodeRadarPixel(data[0], data[1], data[2], prod);
                         const valSamplerEl = document.getElementById('val-sampler');
-                        if (valSamplerEl) valSamplerEl.innerText = `${paneRadarSites[paneId] || 'DGX'} ${prod.toUpperCase()}: ${readout}`;
+                        const prodLabels = { 'sr_bref': 'BREF', 'sr_bvel': 'BVEL', 'bdhc': 'BDHC', 'bdsa': 'STP', 'boha': 'OHA' };
+                        const prodLabel = prodLabels[prod] || prod.toUpperCase();
+                        if (valSamplerEl) valSamplerEl.innerText = `${paneRadarSites[paneId] || 'DGX'} ${prodLabel}: ${readout}`;
                     }
                 } catch (_) {}
             }
@@ -4683,6 +4685,32 @@ const NWS_VELOCITY_SCALE = [
     { kts: 75,  label: '+75+ kts (Extreme Outbound)', r: 255, g: 0, b: 255 }
 ];
 
+// NWS Digital Precipitation Accumulation scale (OHA / DSA)
+// Colors sampled from NCEP GeoServer WMS legend for kdgx_boha / kdgx_bdsa
+const NWS_PRECIP_SCALE = [
+    { inches: 15.0, label: '15.00+ in (Catastrophic)',       r: 248, g: 237, b: 237 },
+    { inches: 12.0, label: '12.00 in (Extreme)',             r: 213, g: 126, b: 126 },
+    { inches: 10.0, label: '10.00 in (Extreme)',             r: 185, g:   0, b:   0 },
+    { inches:  8.0, label: '8.00 in (Life-Threatening)',     r: 206, g:   0, b:   0 },
+    { inches:  7.0, label: '7.00 in (Major Flooding)',       r: 254, g:   0, b:   0 },
+    { inches:  6.0, label: '6.00 in (Significant Flooding)', r: 255, g:  45, b:   0 },
+    { inches:  5.0, label: '5.00 in (Heavy)',                r: 255, g:  93, b:   0 },
+    { inches:  4.0, label: '4.00 in (Heavy)',                r: 255, g: 140, b:   0 },
+    { inches:  3.5, label: '3.50 in (Moderate-Heavy)',       r: 255, g: 177, b:   0 },
+    { inches:  3.0, label: '3.00 in (Moderate)',             r: 255, g: 214, b:   2 },
+    { inches:  2.5, label: '2.50 in (Moderate)',             r: 255, g: 249, b:   2 },
+    { inches:  2.0, label: '2.00 in (Moderate)',             r:   5, g:   0, b: 254 },
+    { inches:  1.75,label: '1.75 in (Light-Moderate)',       r:  94, g:  25, b: 188 },
+    { inches:  1.50,label: '1.50 in (Light-Moderate)',       r: 176, g:  40, b: 149 },
+    { inches:  1.25,label: '1.25 in (Light-Moderate)',       r: 222, g:  16, b: 213 },
+    { inches:  1.0, label: '1.00 in (Light)',                r: 244, g:   4, b: 243 },
+    { inches:  0.75,label: '0.75 in (Light)',                r:  33, g: 144, b:  32 },
+    { inches:  0.50,label: '0.50 in (Light)',                r:   3, g: 252, b:   3 },
+    { inches:  0.25,label: '0.25 in (Very Light)',           r:   3, g: 213, b:  92 },
+    { inches:  0.10,label: '0.10 in (Trace)',                r:   5, g: 247, b: 250 },
+    { inches:  0.01,label: '< 0.10 in (Trace)',              r: 139, g: 139, b: 139 }
+];
+
 function findClosestColorMatch(r, g, b, scale) {
     let minDist = Infinity;
     let bestMatch = scale[0];
@@ -4697,7 +4725,14 @@ function findClosestColorMatch(r, g, b, scale) {
 }
 
 function decodeRadarPixel(r, g, b, product) {
-    if (r < 12 && g < 12 && b < 12) return 'No Echo / < 5 dBZ';
+    if (r < 12 && g < 12 && b < 12) return 'No Data';
+
+    // Precipitation accumulation products (inches)
+    if (product === 'bdsa' || product === 'boha') {
+        const match = findClosestColorMatch(r, g, b, NWS_PRECIP_SCALE);
+        const productName = product === 'boha' ? '1hr' : 'Storm Total';
+        return `${match.label} (${productName})`;
+    }
 
     if (product === 'sr_bvel') {
         const maxVal = Math.max(r, g, b);
