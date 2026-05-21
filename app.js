@@ -52,7 +52,7 @@ let isSyncingMaps = false;
 // ═══ DATA HEALTH SYSTEM ═══
 const healthTrackers = {};
 const HEALTH_THRESHOLDS = {
-    radar:    { label: 'NEXRAD Radar',    thresholdMs: 5 * 60 * 1000 },
+    radar:    { label: 'NEXRAD Radar',    thresholdMs: 6 * 60 * 1000 },
     sat:      { label: 'GOES Satellite',  thresholdMs: 10 * 60 * 1000 },
     metar:    { label: 'METAR Obs',       thresholdMs: 30 * 60 * 1000 },
     warnings: { label: 'NWS Warnings',    thresholdMs: 15 * 60 * 1000 },
@@ -4899,14 +4899,32 @@ function startAutoRefresh() {
     setInterval(() => {
         if (isPlaying) return;
         
-        // Radar refresh
+        // Radar refresh — national mosaic
         if (activeRadarNational) {
             const url = cacheBust(nationalRadarUrl());
             Object.values(maps).forEach(m => {
                 if (m.getSource('radar')) m.getSource('radar').setTiles([url]);
             });
             updateHealth('radar');
-            addLiveLog('AUTO: Radar tiles refreshed', '#444');
+            addLiveLog('AUTO: National radar tiles refreshed', '#444');
+        }
+
+        // Radar refresh — site-specific products
+        const siteRadarLayers = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'];
+        const anySiteRadar = Object.values(maps).some(m => siteRadarLayers.some(l => isLayerVisible(m, l)));
+        if (anySiteRadar) {
+            Object.entries(maps).forEach(([pid, m]) => {
+                const site = paneRadarSites[pid] || 'DGX';
+                if (site.includes('nexrad')) return;
+                const prod = paneRadarProducts[pid] || 'sr_bref';
+                const prodSourceMap = { 'sr_bref': 'site-bref', 'sr_bvel': 'site-bvel', 'bdhc': 'site-bdhc', 'bdsa': 'site-bdsa', 'boha': 'site-boha' };
+                const srcName = prodSourceMap[prod];
+                if (srcName && m.getSource(srcName)) {
+                    m.getSource(srcName).setTiles([siteRadarUrl(site, prod)]);
+                }
+            });
+            updateHealth('radar');
+            addLiveLog('AUTO: Site radar tiles refreshed', '#444');
         }
         
         // METARs refresh
