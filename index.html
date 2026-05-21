@@ -18,6 +18,11 @@
       import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
       injectSpeedInsights();
     </script>
+    <!-- Vercel Web Analytics -->
+    <script>
+      window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
     <div id="cors-warning" style="display:none; position:fixed; top:70px; left:50%; transform:translateX(-50%); background:#ff4444; color:white; padding:10px 20px; border-radius:4px; font-size:12px; z-index:9999; font-weight:bold;">WARNING: Run from http://localhost for full functionality</div>
@@ -816,8 +821,12 @@
         </div>
     </div>
 
-    <script src="app.js?v=115"></script>
-    <script defer src="/_vercel/insights/script.js"></script>
+    <script src="app.js?v=116"></script>
+    <!-- Vercel Speed Insights -->
+    <script type="module">
+        import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
+        injectSpeedInsights();
+    </script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
