@@ -696,6 +696,20 @@ function setupMapLayers(map, paneId) {
     });
     map.addLayer({ id: 'site-bdhc-layer', type: 'raster', source: 'site-bdhc', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.9, 'raster-resampling': 'linear', 'raster-fade-duration': 150 } });
 
+    map.addSource('site-bdsa', {
+        type: 'raster',
+        tiles: [siteRadarUrl(defaultSite, 'bdsa')],
+        tileSize: 512
+    });
+    map.addLayer({ id: 'site-bdsa-layer', type: 'raster', source: 'site-bdsa', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.9, 'raster-resampling': 'linear', 'raster-fade-duration': 150 } });
+
+    map.addSource('site-boha', {
+        type: 'raster',
+        tiles: [siteRadarUrl(defaultSite, 'boha')],
+        tileSize: 512
+    });
+    map.addLayer({ id: 'site-boha-layer', type: 'raster', source: 'site-boha', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.9, 'raster-resampling': 'linear', 'raster-fade-duration': 150 } });
+
     // ─── Layer 4c: Interactive Tactical Radar Domes (Right-Click Selector) ───
     initRadarDomeIcon(map);
     map.addSource('nexrad-sites', {
@@ -2989,7 +3003,8 @@ function startAnimation() {
     const showSat = Object.entries(maps).some(([pid, m]) => isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] !== null);
     const showRad = Object.values(maps).some(m =>
         isLayerVisible(m, 'radar-layer') || isLayerVisible(m, 'site-bref-layer') ||
-        isLayerVisible(m, 'site-bvel-layer') || isLayerVisible(m, 'site-bdhc-layer')
+        isLayerVisible(m, 'site-bvel-layer') || isLayerVisible(m, 'site-bdhc-layer') ||
+        isLayerVisible(m, 'site-bdsa-layer') || isLayerVisible(m, 'site-boha-layer')
     );
 
     const durationMin = parseInt(document.getElementById('loop-duration').value) || 60;
@@ -3005,8 +3020,8 @@ function startAnimation() {
     // ── Capture Visibility Snapshot (for restoration later) ──
     preAnimVisibility = {};
     const layersToSnapshot = [
-        'satellite-layer', 'radar-layer', 
-        'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer'
+        'satellite-layer', 'radar-layer',
+        'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'
     ];
     Object.entries(maps).forEach(([id, map]) => {
         preAnimVisibility[id] = {};
@@ -3113,7 +3128,9 @@ function startAnimation() {
         const hadNatRad = snap?.['radar-layer'] === 'visible';
         const hadSiteRad = snap?.['site-bref-layer'] === 'visible' ||
                            snap?.['site-bvel-layer'] === 'visible' ||
-                           snap?.['site-bdhc-layer'] === 'visible';
+                           snap?.['site-bdhc-layer'] === 'visible' ||
+                           snap?.['site-bdsa-layer'] === 'visible' ||
+                           snap?.['site-boha-layer'] === 'visible';
         const hadAnyRad = hadNatRad || hadSiteRad;
 
         // Hide live layers only on panes that had them visible
@@ -3121,10 +3138,9 @@ function startAnimation() {
             map.setLayoutProperty('satellite-layer', 'visibility', 'none');
         }
         if (hadAnyRad) {
-            if (map.getLayer('radar-layer')) map.setLayoutProperty('radar-layer', 'visibility', 'none');
-            if (map.getLayer('site-bref-layer')) map.setLayoutProperty('site-bref-layer', 'visibility', 'none');
-            if (map.getLayer('site-bvel-layer')) map.setLayoutProperty('site-bvel-layer', 'visibility', 'none');
-            if (map.getLayer('site-bdhc-layer')) map.setLayoutProperty('site-bdhc-layer', 'visibility', 'none');
+            ['radar-layer', 'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
+                if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+            });
         }
 
         // Create satellite animation layers ONLY on panes that had satellite visible
@@ -3271,7 +3287,9 @@ function renderCurrentFrame() {
         const hadNatRad = snap?.['radar-layer'] === 'visible';
         const hadSiteRad = snap?.['site-bref-layer'] === 'visible' ||
                            snap?.['site-bvel-layer'] === 'visible' ||
-                           snap?.['site-bdhc-layer'] === 'visible';
+                           snap?.['site-bdhc-layer'] === 'visible' ||
+                           snap?.['site-bdsa-layer'] === 'visible' ||
+                           snap?.['site-boha-layer'] === 'visible';
         const parts = [];
         if (hadSat && satFrame) parts.push(`CH${paneCh} ${satFrame.label.replace('SAT ', '')}`);
         if (hadSiteRad && radFrame) {
@@ -3378,6 +3396,10 @@ function stopAnimation() {
     const progressBar = document.querySelector('.timeline-progress');
     if (progressBar) progressBar.style.width = '0%';
 
+    // Reset frame counter to LIVE
+    const layerTimeEl = document.getElementById('val-layer-time');
+    if (layerTimeEl) layerTimeEl.textContent = 'LIVE';
+
     // Restore live layers
     restoreLiveLayers();
     refreshTimestampLabel();
@@ -3423,6 +3445,10 @@ function updatePaneTimestamps(forceLabel = null) {
             label = `${site} BVEL | VCP 212 | Tilt 1 (0.5°)`;
         } else if (isLayerVisible(map, 'site-bdhc-layer')) {
             label = `${site} BDHC | VCP 212 | Tilt 1 (0.5°)`;
+        } else if (isLayerVisible(map, 'site-bdsa-layer')) {
+            label = `${site} STP (Storm Total Precip)`;
+        } else if (isLayerVisible(map, 'site-boha-layer')) {
+            label = `${site} OHA (One-Hour Accum)`;
         } else if (isLayerVisible(map, 'radar-layer')) {
             label = 'NATL RADAR MOSAIC';
         } else if (isLayerVisible(map, 'satellite-layer')) {
@@ -3450,6 +3476,8 @@ function getActiveProductLabel(paneId) {
     
     if (isLayerVisible(map, 'site-bvel-layer')) parts.push('Site BVEL');
     if (isLayerVisible(map, 'site-bdhc-layer')) parts.push('Site BDHC');
+    if (isLayerVisible(map, 'site-bdsa-layer')) parts.push('Site STP');
+    if (isLayerVisible(map, 'site-boha-layer')) parts.push('Site OHA');
 
     // Check METARs
     if (isLayerVisible(map, 'metars-temp') && latestMetarTime) {
@@ -3909,6 +3937,8 @@ function updateSidebarToActivePane() {
         else if (layer === 'radar-ref') isActive = isLayerVisible(map, 'radar-layer') || isLayerVisible(map, 'site-bref-layer');
         else if (layer === 'radar-vel') isActive = isLayerVisible(map, 'site-bvel-layer');
         else if (layer === 'radar-hc') isActive = isLayerVisible(map, 'site-bdhc-layer');
+        else if (layer === 'radar-stp') isActive = isLayerVisible(map, 'site-bdsa-layer');
+        else if (layer === 'radar-oha') isActive = isLayerVisible(map, 'site-boha-layer');
         else if (layer === 'goes-ch') {
             const ch = parseInt(item.getAttribute('data-channel'));
             isActive = isLayerVisible(map, 'satellite-layer') && paneGoesChannels[activePaneId] === ch;
@@ -3969,7 +3999,7 @@ function updateSidebarToActivePane() {
     const prod = paneRadarProducts[activePaneId] || 'sr_bref';
     const prodSelect = document.getElementById('radar-product-select');
     if (prodSelect) {
-        const prodMapInv = { 'sr_bref': 'N0Q', 'sr_bvel': 'N0V', 'bdhc': 'NET' };
+        const prodMapInv = { 'sr_bref': 'N0Q', 'sr_bvel': 'N0V', 'bdhc': 'NET', 'bdsa': 'DSA', 'boha': 'OHA' };
         const selProd = prodMapInv[prod] || 'N0Q';
         if (prodSelect.value !== selProd) prodSelect.value = selProd;
     }
@@ -4070,19 +4100,23 @@ function initProductSidebar() {
                 const isNational = siteVal.includes('nexrad');
 
                 if (isNational) {
-                    activeRadarNational = isActive; // UPDATE GLOBAL FLAG FOR LOOPING
+                    activeRadarNational = isActive;
                     map.setLayoutProperty('radar-layer', 'visibility', isActive ? 'visible' : 'none');
-                    map.setLayoutProperty('site-bref-layer', 'visibility', 'none');
+                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+                    });
                 } else {
-                    activeRadarNational = false; // Disable national if site selected
+                    activeRadarNational = false;
                     paneRadarProducts[activePaneId] = 'sr_bref';
                     map.setLayoutProperty('radar-layer', 'visibility', 'none');
                     if (isActive && map.getSource('site-bref')) map.getSource('site-bref').setTiles([siteRadarUrl(siteVal, 'sr_bref')]);
+                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+                    });
                     map.setLayoutProperty('site-bref-layer', 'visibility', isActive ? 'visible' : 'none');
-                    if (isActive && map.getLayer('site-bvel-layer')) map.setLayoutProperty('site-bvel-layer', 'visibility', 'none');
-                    if (isActive && map.getLayer('site-bdhc-layer')) map.setLayoutProperty('site-bdhc-layer', 'visibility', 'none');
                 }
                 updateSidebarToActivePane();
+                updateHealth('radar');
                 refreshTimestampLabel();
                 return;
             }
@@ -4093,11 +4127,13 @@ function initProductSidebar() {
                 if (!siteVal.includes('nexrad')) {
                     paneRadarProducts[activePaneId] = 'sr_bvel';
                     if (map.getSource('site-bvel')) map.getSource('site-bvel').setTiles([siteRadarUrl(siteVal, 'sr_bvel')]);
+                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+                    });
                     map.setLayoutProperty('site-bvel-layer', 'visibility', isActive ? 'visible' : 'none');
-                    if (isActive && map.getLayer('site-bref-layer')) map.setLayoutProperty('site-bref-layer', 'visibility', 'none');
-                    if (isActive && map.getLayer('site-bdhc-layer')) map.setLayoutProperty('site-bdhc-layer', 'visibility', 'none');
                 }
                 updateSidebarToActivePane();
+                updateHealth('radar');
                 refreshTimestampLabel();
                 return;
             }
@@ -4108,11 +4144,47 @@ function initProductSidebar() {
                 if (!siteVal.includes('nexrad')) {
                     paneRadarProducts[activePaneId] = 'bdhc';
                     if (map.getSource('site-bdhc')) map.getSource('site-bdhc').setTiles([siteRadarUrl(siteVal, 'bdhc')]);
+                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+                    });
                     map.setLayoutProperty('site-bdhc-layer', 'visibility', isActive ? 'visible' : 'none');
-                    if (isActive && map.getLayer('site-bref-layer')) map.setLayoutProperty('site-bref-layer', 'visibility', 'none');
-                    if (isActive && map.getLayer('site-bvel-layer')) map.setLayoutProperty('site-bvel-layer', 'visibility', 'none');
                 }
                 updateSidebarToActivePane();
+                updateHealth('radar');
+                refreshTimestampLabel();
+                return;
+            }
+
+            if (layer === 'radar-stp') {
+                const isActive = !item.classList.contains('active');
+                const siteVal = paneRadarSites[activePaneId] || 'DGX';
+                if (!siteVal.includes('nexrad')) {
+                    paneRadarProducts[activePaneId] = 'bdsa';
+                    if (map.getSource('site-bdsa')) map.getSource('site-bdsa').setTiles([siteRadarUrl(siteVal, 'bdsa')]);
+                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+                    });
+                    map.setLayoutProperty('site-bdsa-layer', 'visibility', isActive ? 'visible' : 'none');
+                }
+                updateSidebarToActivePane();
+                updateHealth('radar');
+                refreshTimestampLabel();
+                return;
+            }
+
+            if (layer === 'radar-oha') {
+                const isActive = !item.classList.contains('active');
+                const siteVal = paneRadarSites[activePaneId] || 'DGX';
+                if (!siteVal.includes('nexrad')) {
+                    paneRadarProducts[activePaneId] = 'boha';
+                    if (map.getSource('site-boha')) map.getSource('site-boha').setTiles([siteRadarUrl(siteVal, 'boha')]);
+                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+                    });
+                    map.setLayoutProperty('site-boha-layer', 'visibility', isActive ? 'visible' : 'none');
+                }
+                updateSidebarToActivePane();
+                updateHealth('radar');
                 refreshTimestampLabel();
                 return;
             }
@@ -4386,6 +4458,8 @@ function initRadarSiteSelector() {
                         if (m.getSource('site-bref')) m.getSource('site-bref').setTiles([siteRadarUrl(site, 'sr_bref')]);
                         if (m.getSource('site-bvel')) m.getSource('site-bvel').setTiles([siteRadarUrl(site, 'sr_bvel')]);
                         if (m.getSource('site-bdhc')) m.getSource('site-bdhc').setTiles([siteRadarUrl(site, 'bdhc')]);
+                        if (m.getSource('site-bdsa')) m.getSource('site-bdsa').setTiles([siteRadarUrl(site, 'bdsa')]);
+                        if (m.getSource('site-boha')) m.getSource('site-boha').setTiles([siteRadarUrl(site, 'boha')]);
                     }
                 }
             });
@@ -4394,9 +4468,9 @@ function initRadarSiteSelector() {
                 if (badge) { badge.textContent = 'National'; badge.className = 'badge blue'; }
                 if (refBtn?.classList.contains('active')) {
                     activeRadarNational = true;
-                    if (map.getLayer('site-bref-layer')) map.setLayoutProperty('site-bref-layer', 'visibility', 'none');
-                    if (map.getLayer('site-bvel-layer')) map.setLayoutProperty('site-bvel-layer', 'visibility', 'none');
-                    if (map.getLayer('site-bdhc-layer')) map.setLayoutProperty('site-bdhc-layer', 'visibility', 'none');
+                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+                    });
                     if (map.getLayer('radar-layer')) map.setLayoutProperty('radar-layer', 'visibility', 'visible');
                 }
                 addLiveLog(`RADAR [Pane ${activePaneId}]: National mosaic selected`, '#00e5ff');
@@ -4407,12 +4481,14 @@ function initRadarSiteSelector() {
                     activeRadarNational = false;
                     const prod = paneRadarProducts[activePaneId] || 'sr_bref';
                     if (map.getLayer('radar-layer')) map.setLayoutProperty('radar-layer', 'visibility', 'none');
-                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer'].forEach(l => {
+                    ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
                         if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
                     });
                     if (prod === 'sr_bref' && map.getLayer('site-bref-layer')) map.setLayoutProperty('site-bref-layer', 'visibility', 'visible');
                     else if (prod === 'sr_bvel' && map.getLayer('site-bvel-layer')) map.setLayoutProperty('site-bvel-layer', 'visibility', 'visible');
                     else if (prod === 'bdhc' && map.getLayer('site-bdhc-layer')) map.setLayoutProperty('site-bdhc-layer', 'visibility', 'visible');
+                    else if (prod === 'bdsa' && map.getLayer('site-bdsa-layer')) map.setLayoutProperty('site-bdsa-layer', 'visibility', 'visible');
+                    else if (prod === 'boha' && map.getLayer('site-boha-layer')) map.setLayoutProperty('site-boha-layer', 'visibility', 'visible');
                 }
                 addLiveLog(`RADAR [Pane ${activePaneId}]: Site changed to ${site}`, '#00e5ff');
             }
@@ -4435,30 +4511,29 @@ function initRadarSiteSelector() {
                 'N0Q': 'sr_bref',
                 'N0V': 'sr_bvel',
                 'N0Z': 'sr_bref',
-                'NET': 'bdhc'
+                'NET': 'bdhc',
+                'DSA': 'bdsa',
+                'OHA': 'boha'
             };
 
             const ncepProduct = productMap[product] || 'sr_bref';
             paneRadarProducts[activePaneId] = ncepProduct;
 
             // Toggle the appropriate site-radar layer based on product selection on active map only
-            ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer'].forEach(l => {
+            ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
                 if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
             });
 
-            if (ncepProduct === 'sr_bref') {
-                activeSiteRadar = { bref: true, bvel: false, bdhc: false };
-                if (map.getSource('site-bref')) map.getSource('site-bref').setTiles([siteRadarUrl(site, 'sr_bref')]);
-                if (map.getLayer('site-bref-layer')) map.setLayoutProperty('site-bref-layer', 'visibility', 'visible');
-            } else if (ncepProduct === 'sr_bvel') {
-                activeSiteRadar = { bref: false, bvel: true, bdhc: false };
-                if (map.getSource('site-bvel')) map.getSource('site-bvel').setTiles([siteRadarUrl(site, 'sr_bvel')]);
-                if (map.getLayer('site-bvel-layer')) map.setLayoutProperty('site-bvel-layer', 'visibility', 'visible');
-            } else if (ncepProduct === 'bdhc') {
-                activeSiteRadar = { bref: false, bvel: false, bdhc: true };
-                if (map.getSource('site-bdhc')) map.getSource('site-bdhc').setTiles([siteRadarUrl(site, 'bdhc')]);
-                if (map.getLayer('site-bdhc-layer')) map.setLayoutProperty('site-bdhc-layer', 'visibility', 'visible');
-            }
+            const prodSourceMap = {
+                'sr_bref': ['site-bref', 'site-bref-layer'],
+                'sr_bvel': ['site-bvel', 'site-bvel-layer'],
+                'bdhc': ['site-bdhc', 'site-bdhc-layer'],
+                'bdsa': ['site-bdsa', 'site-bdsa-layer'],
+                'boha': ['site-boha', 'site-boha-layer']
+            };
+            const mapping = prodSourceMap[ncepProduct] || prodSourceMap['sr_bref'];
+            if (map.getSource(mapping[0])) map.getSource(mapping[0]).setTiles([siteRadarUrl(site, ncepProduct)]);
+            if (map.getLayer(mapping[1])) map.setLayoutProperty(mapping[1], 'visibility', 'visible');
             updateSidebarToActivePane();
             updateHealth('radar');
             addLiveLog(`RADAR [Pane ${activePaneId}]: Product changed to ${product}`, '#00e5ff');
@@ -4703,7 +4778,7 @@ function syncAllPanes(sourcePaneId) {
 function clearPane(map, paneId) {
     const allToggleLayers = [
         'satellite-layer', 'radar-layer',
-        'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer',
+        'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer',
         'spc-outlook-fill', 'spc-outlook-line',
         'spc-md-fill', 'spc-md-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
