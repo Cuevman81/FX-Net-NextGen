@@ -2273,8 +2273,8 @@ async function fetchMETARs() {
 // SECTION 7: SPC PRODUCTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function fetchSPCOutlook(day, show) {
-    if (!show) {
+async function fetchSPCOutlook(day, show, prefetch) {
+    if (!show && !prefetch) {
         updateSidebarToActivePane();
         return;
     }
@@ -2288,7 +2288,7 @@ async function fetchSPCOutlook(day, show) {
         Object.values(maps).forEach(m => {
             if (m.getSource(`spc-day${day}`)) m.getSource(`spc-day${day}`).setData(data);
         });
-        updateSidebarToActivePane();
+        if (!prefetch) updateSidebarToActivePane();
         updateHealth('spcOutlook');
         addLiveLog(`SPC: Day ${day} Outlook loaded (${data.features?.length || 0} areas)`, '#ffff00');
     } catch (e) {
@@ -2296,8 +2296,8 @@ async function fetchSPCOutlook(day, show) {
     }
 }
 
-async function fetchMesoscaleDiscussions(show) {
-    if (!show) {
+async function fetchMesoscaleDiscussions(show, prefetch) {
+    if (!show && !prefetch) {
         updateSidebarToActivePane();
         return;
     }
@@ -2316,8 +2316,8 @@ async function fetchMesoscaleDiscussions(show) {
         Object.values(maps).forEach(m => {
             if (m.getSource('spc-md')) m.getSource('spc-md').setData(filteredData);
         });
-        updateSidebarToActivePane();
-        
+        if (!prefetch) updateSidebarToActivePane();
+
         updateHealth('spcMd');
         if (realFeatures.length > 0) {
             addLiveLog(`SPC: ${realFeatures.length} Mesoscale Discussion(s) active`, '#ff3333');
@@ -3058,8 +3058,8 @@ let riverGaugeCache = null;
 let riverGaugeCacheTime = 0;
 const RIVER_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
-async function fetchRiverGauges(show) {
-    if (!show) { updateSidebarToActivePane(); return; }
+async function fetchRiverGauges(show, prefetch) {
+    if (!show && !prefetch) { updateSidebarToActivePane(); return; }
     addLiveLog('RIVERS: Fetching national river gauge data...', '#00aaff');
 
     try {
@@ -6620,6 +6620,20 @@ function init() {
 
             addLiveLog('MAP: Clean base map loaded by default', '#888');
             refreshTimestampLabel();
+
+            // ─── Pre-fetch commonly used data in background ───
+            // Fetches data and pushes to map sources without toggling visibility.
+            // Products load instantly when user clicks them in the sidebar.
+            addLiveLog('PREFETCH: Loading commonly used datasets in background...', '#888');
+            Promise.allSettled([
+                fetchRiverGauges(false, true),     // ~200KB via Vercel proxy (CDN cached 15 min)
+                fetchMETARs(),                      // ~1-2MB direct from IEM (no Vercel cost)
+                fetchSPCOutlook(1, false, true),    // ~50KB direct from SPC (Day 1 — most viewed)
+                fetchMesoscaleDiscussions(false, true) // ~20KB direct from NOAA
+            ]).then(results => {
+                const ok = results.filter(r => r.status === 'fulfilled').length;
+                addLiveLog(`PREFETCH: ${ok}/4 datasets cached and ready`, '#00ff88');
+            });
         }
     }, 200);
 
