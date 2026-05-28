@@ -67,9 +67,16 @@ const HEALTH_THRESHOLDS = {
     wpcQpf:     { label: 'WPC QPF',       thresholdMs: 8 * 60 * 60 * 1000 },
     nhcStorms:  { label: 'NHC Storms',    thresholdMs: 60 * 60 * 1000 },
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
+    spcOutlook: { label: 'SPC Outlooks',   thresholdMs: 60 * 60 * 1000 },
+    spcMd:      { label: 'SPC MDs',       thresholdMs: 30 * 60 * 1000 },
+    spcLsr:     { label: 'SPC LSRs',      thresholdMs: 30 * 60 * 1000 },
     cpcTemp:    { label: 'CPC Temp',      thresholdMs: 24 * 60 * 60 * 1000 },
     cpcPrecip:  { label: 'CPC Precip',    thresholdMs: 24 * 60 * 60 * 1000 },
-    drought:    { label: 'Drought Monitor', thresholdMs: 7 * 24 * 60 * 60 * 1000 }
+    drought:    { label: 'Drought Monitor', thresholdMs: 7 * 24 * 60 * 60 * 1000 },
+    riverGauges:  { label: 'River Gauges',   thresholdMs: 30 * 60 * 1000 },
+    mrmsEchotops: { label: 'MRMS Echo Tops', thresholdMs: 30 * 60 * 1000 },
+    mrmsQpe:      { label: 'MRMS QPE',       thresholdMs: 30 * 60 * 1000 },
+    solar:        { label: 'Solar/Terminator', thresholdMs: 10 * 60 * 1000 }
 };
 
 // ═══ US STATE CODES (all 50 for METAR fetch) ═══
@@ -2195,6 +2202,7 @@ async function fetchSPCOutlook(day, show) {
             if (m.getSource(`spc-day${day}`)) m.getSource(`spc-day${day}`).setData(data);
         });
         updateSidebarToActivePane();
+        updateHealth('spcOutlook');
         addLiveLog(`SPC: Day ${day} Outlook loaded (${data.features?.length || 0} areas)`, '#ffff00');
     } catch (e) {
         addLiveLog(`SPC ERROR: ${e.message}`, '#ff3333');
@@ -2223,6 +2231,7 @@ async function fetchMesoscaleDiscussions(show) {
         });
         updateSidebarToActivePane();
         
+        updateHealth('spcMd');
         if (realFeatures.length > 0) {
             addLiveLog(`SPC: ${realFeatures.length} Mesoscale Discussion(s) active`, '#ff3333');
         } else {
@@ -2320,6 +2329,7 @@ async function fetchLSRs(show) {
             .map(([t, c]) => `${c} ${t}`)
             .join(', ');
 
+        updateHealth('spcLsr');
         addLiveLog(`SPC: ${fc.features.length} Local Storm Reports loaded (${summary})`, '#ff9900');
     } catch (e) {
         addLiveLog(`SPC LSR ERROR: ${e.message}`, '#ff3333');
@@ -3031,6 +3041,7 @@ async function fetchRiverGauges(show) {
         const minorCount = gauges.filter(g => g.oc === 'minor').length;
         const actionCount = gauges.filter(g => g.oc === 'action').length;
 
+        updateHealth('riverGauges');
         addLiveLog(`RIVERS: ${features.length} gauges loaded — ${flooding.length} flooding (${majorCount} major, ${modCount} mod, ${minorCount} minor, ${actionCount} action)`, '#00ff88');
     } catch (e) {
         addLiveLog(`RIVERS ERROR: ${e.message}`, '#ff3333');
@@ -4814,6 +4825,7 @@ function initProductSidebar() {
             if (layer === 'mrms-echotops') {
                 const isActive = !item.classList.contains('active');
                 map.setLayoutProperty('mrms-echotops-layer', 'visibility', isActive ? 'visible' : 'none');
+                if (isActive) updateHealth('mrmsEchotops');
                 updateRadarLegend();
                 updateSidebarToActivePane();
                 return;
@@ -4836,6 +4848,7 @@ function initProductSidebar() {
                         if (m.getSource('mrms-qpe')) m.getSource('mrms-qpe').setTiles([wmsUrl]);
                     });
                     map.setLayoutProperty('mrms-qpe-layer', 'visibility', 'visible');
+                    updateHealth('mrmsQpe');
                 }
                 updateRadarLegend();
                 updateSidebarToActivePane();
@@ -5849,6 +5862,7 @@ function startAutoRefresh() {
             Object.values(maps).forEach(m => {
                 if (m.getSource('mrms-echotops')) m.getSource('mrms-echotops').setTiles([etUrl]);
             });
+            updateHealth('mrmsEchotops');
         }
 
         // MRMS QPE tile refresh
@@ -5859,6 +5873,7 @@ function startAutoRefresh() {
             Object.values(maps).forEach(m => {
                 if (m.getSource('mrms-qpe')) m.getSource('mrms-qpe').setTiles([qpeUrl]);
             });
+            updateHealth('mrmsQpe');
         }
 
         // WPC QPF tile refresh
@@ -6106,6 +6121,7 @@ function updateTerminator() {
             m.getSource('solar-terminator').setData(gj);
         }
     });
+    updateHealth('solar');
 }
 
 // ─── Solar Panel Click Handler ───
