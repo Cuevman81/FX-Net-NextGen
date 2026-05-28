@@ -1652,6 +1652,33 @@ function initFrontalPipIcons(map) {
         }
     });
 
+    // ─── Layer 9b: Solar Day/Night Terminator ───
+    map.addSource('solar-terminator', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+    });
+    // Civil twilight band (lighter shading)
+    map.addLayer({
+        id: 'solar-twilight-fill', type: 'fill', source: 'solar-terminator',
+        filter: ['==', ['get', 'zone'], 'civil-twilight'],
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': '#000022', 'fill-opacity': 0.2 }
+    });
+    // Night polygon (darker shading)
+    map.addLayer({
+        id: 'solar-night-fill', type: 'fill', source: 'solar-terminator',
+        filter: ['==', ['get', 'zone'], 'night'],
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': '#000011', 'fill-opacity': 0.45 }
+    });
+    // Terminator edge line
+    map.addLayer({
+        id: 'solar-terminator-line', type: 'line', source: 'solar-terminator',
+        filter: ['==', ['get', 'zone'], 'night'],
+        layout: { visibility: 'none' },
+        paint: { 'line-color': '#ffaa00', 'line-width': 1.5, 'line-opacity': 0.7 }
+    });
+
     // ─── Layer 10: City Labels (ESRI Reference) ───
     map.addSource('esri-labels', {
         type: 'raster',
@@ -4175,6 +4202,7 @@ function updateSidebarToActivePane() {
         else if (layer === 'overlay-counties') isActive = isLayerVisible(map, 'counties-layer');
         else if (layer === 'overlay-roads') isActive = isLayerVisible(map, 'esri-roads-layer');
         else if (layer === 'overlay-cities') isActive = isLayerVisible(map, 'esri-labels-layer');
+        else if (layer === 'solar-terminator') isActive = isLayerVisible(map, 'solar-night-fill');
         else if (layer === 'wpc-isobars') isActive = isLayerVisible(map, 'wpc-isobars-line');
         else if (layer === 'wpc-fronts') isActive = isLayerVisible(map, 'wpc-fronts-solid');
         else if (layer === 'wpc-qpf') {
@@ -4453,6 +4481,17 @@ function initProductSidebar() {
                 const isActive = !item.classList.contains('active');
                 if (isActive) fetchFIRMS(true);
                 map.setLayoutProperty('firms-fires-layer', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Solar Terminator ───
+            if (layer === 'solar-terminator') {
+                const isActive = !item.classList.contains('active');
+                ['solar-night-fill', 'solar-twilight-fill', 'solar-terminator-line'].forEach(l => {
+                    if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
+                });
+                if (isActive) updateTerminator();
                 updateSidebarToActivePane();
                 return;
             }
@@ -5307,6 +5346,7 @@ function clearPane(map, paneId) {
         'wpc-hl-letter', 'wpc-hl-pressure',
         'wpc-qpf-layer',
         'mrms-echotops-layer', 'mrms-qpe-layer',
+        'solar-night-fill', 'solar-twilight-fill', 'solar-terminator-line',
         'nhc-cone-fill', 'nhc-cone-outline', 'nhc-track-line', 'nhc-track-pts', 'nhc-track-labels',
         'nhc-warn-fill', 'nhc-warn-outline', 'nhc-outlook-fill', 'nhc-outlook-outline',
         'cpc-temp-layer', 'cpc-precip-layer',
@@ -5448,6 +5488,10 @@ function startAutoRefresh() {
         // METARs refresh
         const metarsActive = Object.values(maps).some(m => isLayerVisible(m, 'metars-temp') || isLayerVisible(m, 'metars-barb'));
         if (metarsActive) fetchMETARs();
+
+        // Solar terminator refresh
+        const terminatorActive = Object.values(maps).some(m => isLayerVisible(m, 'solar-night-fill'));
+        if (terminatorActive) updateTerminator();
     }, 5 * 60 * 1000);
 
     // 3. Standard Frequency (10 minutes)
@@ -5551,7 +5595,311 @@ function startAutoRefresh() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 21: UTILITY HELPERS
+// SECTION 21: NOAA SOLAR CALCULATOR & DAY/NIGHT TERMINATOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── NOAA Solar Position Equations ───
+// Reference: NOAA Earth System Research Laboratories
+// https://gml.noaa.gov/grad/solcalc/solareqns.PDF
+
+function solarJulianDay(date) {
+    const y = date.getUTCFullYear();
+    const m = date.getUTCMonth() + 1;
+    const d = date.getUTCDate() + (date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600) / 24;
+    let A = Math.floor((14 - m) / 12);
+    let Y = y + 4800 - A;
+    let M = m + 12 * A - 3;
+    return d + Math.floor((153 * M + 2) / 5) + 365 * Y + Math.floor(Y / 4) - Math.floor(Y / 100) + Math.floor(Y / 400) - 32045.5;
+}
+
+function solarPosition(date) {
+    const JD = solarJulianDay(date);
+    const T = (JD - 2451545.0) / 36525.0; // Julian centuries from J2000.0
+    const L0 = (280.46646 + T * (36000.76983 + 0.0003032 * T)) % 360; // Geometric mean longitude
+    const M = (357.52911 + T * (35999.05029 - 0.0001537 * T)) % 360;  // Mean anomaly
+    const e = 0.016708634 - T * (0.000042037 + 0.0000001267 * T);      // Eccentricity
+    const Mrad = M * Math.PI / 180;
+    const C = (1.914602 - T * (0.004817 + 0.000014 * T)) * Math.sin(Mrad)
+            + (0.019993 - 0.000101 * T) * Math.sin(2 * Mrad)
+            + 0.000289 * Math.sin(3 * Mrad); // Equation of center
+    const sunLon = (L0 + C) % 360; // Sun true longitude
+    const omega = 125.04 - 1934.136 * T;
+    const lambda = sunLon - 0.00569 - 0.00478 * Math.sin(omega * Math.PI / 180); // Apparent longitude
+
+    // Obliquity of ecliptic
+    const eps0 = 23 + (26 + (21.448 - T * (46.815 + T * (0.00059 - T * 0.001813))) / 60) / 60;
+    const eps = eps0 + 0.00256 * Math.cos(omega * Math.PI / 180);
+    const epsRad = eps * Math.PI / 180;
+    const lambdaRad = lambda * Math.PI / 180;
+
+    // Declination
+    const sinDec = Math.sin(epsRad) * Math.sin(lambdaRad);
+    const declination = Math.asin(sinDec) * 180 / Math.PI;
+
+    // Equation of Time (minutes)
+    const y2 = Math.tan(epsRad / 2) ** 2;
+    const L0rad = L0 * Math.PI / 180;
+    const eqTime = 4 * (180 / Math.PI) * (
+        y2 * Math.sin(2 * L0rad)
+        - 2 * e * Math.sin(Mrad)
+        + 4 * e * y2 * Math.sin(Mrad) * Math.cos(2 * L0rad)
+        - 0.5 * y2 * y2 * Math.sin(4 * L0rad)
+        - 1.25 * e * e * Math.sin(2 * Mrad)
+    );
+
+    return { declination, eqTime };
+}
+
+function solarHourAngle(lat, dec, elevation) {
+    // elevation: degrees below horizon (0 = geometric, 0.833 = standard refraction,
+    // 6 = civil twilight, 12 = nautical, 18 = astronomical)
+    const latRad = lat * Math.PI / 180;
+    const decRad = dec * Math.PI / 180;
+    const cosHA = (Math.cos((90 + elevation) * Math.PI / 180) - Math.sin(latRad) * Math.sin(decRad))
+                / (Math.cos(latRad) * Math.cos(decRad));
+    if (cosHA > 1) return null;  // Sun never rises
+    if (cosHA < -1) return null; // Sun never sets (midnight sun)
+    return Math.acos(cosHA) * 180 / Math.PI;
+}
+
+function computeSolarTable(lat, lon, date) {
+    const { declination, eqTime } = solarPosition(date);
+
+    function timeForElevation(elev) {
+        const ha = solarHourAngle(lat, declination, elev);
+        if (ha === null) return null;
+        const solarNoonMin = 720 - 4 * lon - eqTime; // in UTC minutes
+        const riseMin = solarNoonMin - ha * 4;
+        const setMin = solarNoonMin + ha * 4;
+        return { rise: riseMin, set: setMin };
+    }
+
+    const solarNoonMin = 720 - 4 * lon - eqTime;
+    const standard = timeForElevation(0.833); // Standard sunrise/sunset (includes refraction)
+    const civil = timeForElevation(6);
+    const nautical = timeForElevation(12);
+    const astronomical = timeForElevation(18);
+
+    function fmtMin(totalMin) {
+        if (totalMin == null) return '--:--';
+        let m = ((totalMin % 1440) + 1440) % 1440;
+        const h = Math.floor(m / 60);
+        const min = Math.round(m % 60);
+        return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+    }
+
+    function fmtLocal(totalMinUTC) {
+        if (totalMinUTC == null) return '--:--';
+        // Convert UTC minutes to local Date to get proper timezone offset
+        const d = new Date(date);
+        d.setUTCHours(0, 0, 0, 0);
+        d.setUTCMinutes(d.getUTCMinutes() + totalMinUTC);
+        const lh = d.getHours();
+        const lm = d.getMinutes();
+        const ampm = lh >= 12 ? 'PM' : 'AM';
+        const h12 = lh === 0 ? 12 : (lh > 12 ? lh - 12 : lh);
+        return `${h12}:${String(lm).padStart(2, '0')} ${ampm}`;
+    }
+
+    const dayLen = standard ? (standard.set - standard.rise) : null;
+    const dayLenStr = dayLen != null ? `${Math.floor(dayLen / 60)}h ${Math.round(dayLen % 60)}m` : 'N/A';
+
+    return {
+        solarNoon:    { utc: fmtMin(solarNoonMin), local: fmtLocal(solarNoonMin) },
+        sunrise:      { utc: fmtMin(standard?.rise), local: fmtLocal(standard?.rise) },
+        sunset:       { utc: fmtMin(standard?.set),  local: fmtLocal(standard?.set) },
+        civilDawn:    { utc: fmtMin(civil?.rise),    local: fmtLocal(civil?.rise) },
+        civilDusk:    { utc: fmtMin(civil?.set),     local: fmtLocal(civil?.set) },
+        nauticalDawn: { utc: fmtMin(nautical?.rise), local: fmtLocal(nautical?.rise) },
+        nauticalDusk: { utc: fmtMin(nautical?.set),  local: fmtLocal(nautical?.set) },
+        astroDawn:    { utc: fmtMin(astronomical?.rise), local: fmtLocal(astronomical?.rise) },
+        astroDusk:    { utc: fmtMin(astronomical?.set),  local: fmtLocal(astronomical?.set) },
+        dayLength:    dayLenStr,
+        declination:  declination.toFixed(2) + '°'
+    };
+}
+
+// ─── Day/Night Terminator Polygon Generator ───
+
+function buildTerminatorGeoJSON(now) {
+    const { declination, eqTime } = solarPosition(now || new Date());
+    const utcMin = (now || new Date()).getUTCHours() * 60 + (now || new Date()).getUTCMinutes();
+    const solarNoonLon = -(utcMin - 720 + eqTime) / 4; // Longitude where it's solar noon
+
+    const decRad = declination * Math.PI / 180;
+    const features = [];
+
+    // Build terminator line as lat/lon pairs from pole to pole
+    // For each longitude, find the latitude where sun is at horizon
+    // We'll build the night polygon as one big polygon
+
+    // Civil twilight terminator (sun 6° below horizon)
+    function terminatorCoords(elevation) {
+        const coords = [];
+        for (let lon = -180; lon <= 180; lon += 1) {
+            const lonRad = (lon - solarNoonLon) * Math.PI / 180;
+            // At this longitude, find lat where solar elevation = -elevation
+            // sin(elev) = sin(lat)*sin(dec) + cos(lat)*cos(dec)*cos(hourAngle)
+            // hourAngle = (lon - subSolarLon) converted to angle
+            const cosHA = Math.cos(lonRad);
+            const elevRad = -elevation * Math.PI / 180;
+            // sin(elevRad) = sin(lat)*sin(dec) + cos(lat)*cos(dec)*cosHA
+            // Let x = sin(lat), y = cos(lat) — solve for lat
+            const a = Math.sin(decRad);
+            const b = Math.cos(decRad) * cosHA;
+            // sin(elev) = a*sin(lat) + b*cos(lat)
+            // R*sin(lat + phi) = sin(elev), where R = sqrt(a²+b²), tan(phi) = b/a
+            const R = Math.sqrt(a * a + b * b);
+            const sinVal = Math.sin(elevRad) / R;
+            if (Math.abs(sinVal) > 1) {
+                // No solution at this longitude — polar day or night
+                coords.push([lon, sinVal > 0 ? -90 : 90]);
+                continue;
+            }
+            const phi = Math.atan2(b, a);
+            const lat = (Math.asin(sinVal) - phi) * 180 / Math.PI;
+            coords.push([lon, Math.max(-85, Math.min(85, lat))]);
+        }
+        return coords;
+    }
+
+    // Night polygon: area where sun is below horizon (standard rise/set = 0.833°)
+    const nightLine = terminatorCoords(0.833);
+
+    // Determine which side is night: check if sub-solar point is north or south
+    // Sub-solar latitude = declination
+    // Night is on the opposite side of the terminator from the sub-solar point
+
+    // Build polygon: terminator line + close along bottom or top
+    const nightPoly = [...nightLine];
+    // Check: is the sub-solar point above or below the terminator at lon=solarNoonLon?
+    // At solar noon longitude, the terminator lat ≈ ±(90-|dec|)
+    // Night is the side AWAY from the sub-solar point
+    // If declination > 0 (northern summer), night is on the south side
+    // We need to close the polygon on the south (bottom) side
+    if (declination >= 0) {
+        // Night is south of the terminator line
+        nightPoly.push([180, -85]);
+        nightPoly.push([-180, -85]);
+    } else {
+        // Night is north of the terminator line
+        nightPoly.push([180, 85]);
+        nightPoly.push([-180, 85]);
+    }
+    nightPoly.push(nightPoly[0]); // Close ring
+
+    features.push({
+        type: 'Feature',
+        properties: { zone: 'night' },
+        geometry: { type: 'Polygon', coordinates: [nightPoly] }
+    });
+
+    // Civil twilight band
+    const civilLine = terminatorCoords(6);
+    const twilightPoly = [];
+    // Twilight band is between the night terminator and civil terminator
+    if (declination >= 0) {
+        // Night is south, so civil twilight extends further south
+        twilightPoly.push(...civilLine);
+        twilightPoly.push([180, -85]);
+        twilightPoly.push([-180, -85]);
+    } else {
+        twilightPoly.push(...civilLine);
+        twilightPoly.push([180, 85]);
+        twilightPoly.push([-180, 85]);
+    }
+    twilightPoly.push(twilightPoly[0]);
+
+    features.push({
+        type: 'Feature',
+        properties: { zone: 'civil-twilight' },
+        geometry: { type: 'Polygon', coordinates: [twilightPoly] }
+    });
+
+    return { type: 'FeatureCollection', features };
+}
+
+function updateTerminator() {
+    const gj = buildTerminatorGeoJSON(new Date());
+    Object.values(maps).forEach(m => {
+        if (m.getSource('solar-terminator')) {
+            m.getSource('solar-terminator').setData(gj);
+        }
+    });
+}
+
+// ─── Solar Panel Click Handler ───
+
+function initSolarClickHandler() {
+    Object.entries(maps).forEach(([paneId, map]) => {
+        map.on('click', e => {
+            // Only trigger when solar terminator is visible
+            if (!isLayerVisible(map, 'solar-night-fill')) return;
+
+            const lat = e.lngLat.lat;
+            const lon = e.lngLat.lng;
+            const now = new Date();
+            const table = computeSolarTable(lat, lon, now);
+
+            const dateStr = now.toISOString().split('T')[0];
+            const locStr = `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? 'E' : 'W'}`;
+
+            const html = `
+                <div style="color:#88ccff; font-size:8.5px; margin-bottom:5px;">${locStr} — ${dateStr}</div>
+                <table style="border-collapse:collapse; width:100%;">
+                    <tr style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">
+                        <td style="padding:1px 6px 3px 0;"></td>
+                        <td style="padding:1px 6px 3px 0;">UTC</td>
+                        <td style="padding:1px 0 3px 0;">Local</td>
+                    </tr>
+                    <tr><td style="color:#ffaa00; padding:1px 6px 1px 0;">Astro Dawn</td><td style="padding:1px 6px 1px 0;">${table.astroDawn.utc}Z</td><td>${table.astroDawn.local}</td></tr>
+                    <tr><td style="color:#ff8844; padding:1px 6px 1px 0;">Nautical Dawn</td><td style="padding:1px 6px 1px 0;">${table.nauticalDawn.utc}Z</td><td>${table.nauticalDawn.local}</td></tr>
+                    <tr><td style="color:#ff6666; padding:1px 6px 1px 0;">Civil Dawn</td><td style="padding:1px 6px 1px 0;">${table.civilDawn.utc}Z</td><td>${table.civilDawn.local}</td></tr>
+                    <tr style="background:rgba(255,200,0,0.08);"><td style="color:#ffdd00; padding:2px 6px; font-weight:bold;">Sunrise</td><td style="padding:2px 6px;">${table.sunrise.utc}Z</td><td style="padding:2px 0;">${table.sunrise.local}</td></tr>
+                    <tr><td style="color:#ffffff; padding:1px 6px 1px 0;">Solar Noon</td><td style="padding:1px 6px 1px 0;">${table.solarNoon.utc}Z</td><td>${table.solarNoon.local}</td></tr>
+                    <tr style="background:rgba(255,100,0,0.08);"><td style="color:#ff8800; padding:2px 6px; font-weight:bold;">Sunset</td><td style="padding:2px 6px;">${table.sunset.utc}Z</td><td style="padding:2px 0;">${table.sunset.local}</td></tr>
+                    <tr><td style="color:#ff6666; padding:1px 6px 1px 0;">Civil Dusk</td><td style="padding:1px 6px 1px 0;">${table.civilDusk.utc}Z</td><td>${table.civilDusk.local}</td></tr>
+                    <tr><td style="color:#ff8844; padding:1px 6px 1px 0;">Nautical Dusk</td><td style="padding:1px 6px 1px 0;">${table.nauticalDusk.utc}Z</td><td>${table.nauticalDusk.local}</td></tr>
+                    <tr><td style="color:#ffaa00; padding:1px 6px 1px 0;">Astro Dusk</td><td style="padding:1px 6px 1px 0;">${table.astroDusk.utc}Z</td><td>${table.astroDusk.local}</td></tr>
+                    <tr><td colspan="3" style="border-top:1px solid rgba(0,229,255,0.15); padding-top:4px; margin-top:3px;"></td></tr>
+                    <tr><td style="color:#00ff88; padding:1px 6px 1px 0;">Day Length</td><td colspan="2">${table.dayLength}</td></tr>
+                    <tr><td style="color:#aaaaaa; padding:1px 6px 1px 0;">Declination</td><td colspan="2">${table.declination}</td></tr>
+                </table>`;
+
+            const panel = document.getElementById('solar-info-panel');
+            const body = document.getElementById('solar-info-body');
+            if (panel && body) {
+                body.innerHTML = html;
+                // Position near click but keep on screen
+                const px = e.originalEvent.pageX + 15;
+                const py = e.originalEvent.pageY - 80;
+                panel.style.left = Math.min(px, window.innerWidth - 300) + 'px';
+                panel.style.top = Math.max(10, Math.min(py, window.innerHeight - 350)) + 'px';
+                panel.style.display = 'block';
+            }
+        });
+    });
+
+    // Close button
+    const closeBtn = document.getElementById('solar-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            const panel = document.getElementById('solar-info-panel');
+            if (panel) panel.style.display = 'none';
+        });
+    }
+    // Close on Escape key
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            const panel = document.getElementById('solar-info-panel');
+            if (panel) panel.style.display = 'none';
+        }
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 21b: UTILITY HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function setLayerVisibilityAll(layerIds, visibility) {
@@ -5661,6 +6009,7 @@ function init() {
     initSyncButton();
     initSoundingModal();
     initTextModal();
+    initSolarClickHandler();
 
     // Start warning watchdog (check every 15 seconds for rapid convective updates)
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');
