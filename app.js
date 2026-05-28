@@ -474,12 +474,27 @@ function initMap(paneId) {
                         const data = new Uint8Array(4);
                         gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, data);
 
-                        const prod = paneRadarProducts[paneId] || 'sr_bref';
-                        const readout = decodeRadarPixel(data[0], data[1], data[2], prod);
                         const valSamplerEl = document.getElementById('val-sampler');
-                        const prodLabels = { 'sr_bref': 'BREF', 'sr_bvel': 'BVEL', 'bdhc': 'BDHC', 'bdsa': 'STP', 'boha': 'OHA' };
-                        const prodLabel = prodLabels[prod] || prod.toUpperCase();
-                        if (valSamplerEl) valSamplerEl.innerText = `${paneRadarSites[paneId] || 'DGX'} ${prodLabel}: ${readout}`;
+
+                        // Detect which product layer is active — MRMS takes priority (renders on top)
+                        const mrmsEtVis = isLayerVisible(map, 'mrms-echotops-layer');
+                        const mrmsQpeVis = isLayerVisible(map, 'mrms-qpe-layer');
+
+                        if (mrmsEtVis) {
+                            const readout = decodeMrmsPixel(data[0], data[1], data[2], 'echotops');
+                            if (valSamplerEl) valSamplerEl.innerText = `MRMS ECHO TOPS: ${readout}`;
+                        } else if (mrmsQpeVis && activeMrmsQpe) {
+                            const readout = decodeMrmsPixel(data[0], data[1], data[2], 'qpe');
+                            const periodLabels = { '1h': '1-HR', '24h': '24-HR', '48h': '48-HR', '72h': '72-HR' };
+                            const pLabel = periodLabels[activeMrmsQpe] || 'QPE';
+                            if (valSamplerEl) valSamplerEl.innerText = `MRMS ${pLabel} QPE: ${readout}`;
+                        } else {
+                            const prod = paneRadarProducts[paneId] || 'sr_bref';
+                            const readout = decodeRadarPixel(data[0], data[1], data[2], prod);
+                            const prodLabels = { 'sr_bref': 'BREF', 'sr_bvel': 'BVEL', 'bdhc': 'BDHC', 'bdsa': 'STP', 'boha': 'OHA' };
+                            const prodLabel = prodLabels[prod] || prod.toUpperCase();
+                            if (valSamplerEl) valSamplerEl.innerText = `${paneRadarSites[paneId] || 'DGX'} ${prodLabel}: ${readout}`;
+                        }
                     }
                 } catch (_) {}
             }
@@ -4855,7 +4870,7 @@ function initContextMenu() {
                     break;
                 case 'toggle-sampler':
                     isDataSamplerActive = !isDataSamplerActive;
-                    addLiveLog(`RADAR SAMPLER: ${isDataSamplerActive ? 'ACTIVATED' : 'DEACTIVATED'}`, isDataSamplerActive ? '#00ffff' : '#ff8888');
+                    addLiveLog(`DATA SAMPLER: ${isDataSamplerActive ? 'ACTIVATED' : 'DEACTIVATED'}`, isDataSamplerActive ? '#00ffff' : '#ff8888');
                     const samplerBadge = document.getElementById('hud-sampler-readout');
                     if (samplerBadge) samplerBadge.style.display = isDataSamplerActive ? 'flex' : 'none';
                     break;
@@ -5010,6 +5025,14 @@ function findClosestColorMatch(r, g, b, scale) {
 function decodeRadarPixel(r, g, b, product) {
     if (r < 12 && g < 12 && b < 12) return 'No Data';
 
+    // Reverse compositing blend to recover original tile color.
+    // Radar layers use raster-opacity 0.9 over ~rgb(20,20,25) basemap.
+    const opacity = 0.9;
+    const bgR = 20, bgG = 20, bgB = 25;
+    r = Math.round(Math.min(255, Math.max(0, (r - bgR * (1 - opacity)) / opacity)));
+    g = Math.round(Math.min(255, Math.max(0, (g - bgG * (1 - opacity)) / opacity)));
+    b = Math.round(Math.min(255, Math.max(0, (b - bgB * (1 - opacity)) / opacity)));
+
     // Precipitation accumulation products (inches)
     if (product === 'bdsa' || product === 'boha') {
         const match = findClosestColorMatch(r, g, b, NWS_PRECIP_SCALE);
@@ -5046,7 +5069,7 @@ function decodeRadarPixel(r, g, b, product) {
         return 'Hydrometeor Return';
     } else {
         let candidates = NWS_REFLECTIVITY_SCALE;
-        
+
         if (r > g + 40 && b > g + 40) {
             // Unmistakably Purple / Magenta core (65 - 75 dBZ)
             candidates = NWS_REFLECTIVITY_SCALE.filter(item => item.dbz >= 65);
@@ -5067,6 +5090,36 @@ function decodeRadarPixel(r, g, b, product) {
         const match = findClosestColorMatch(r, g, b, candidates);
         return match.label;
     }
+}
+
+function decodeMrmsPixel(r, g, b, product) {
+    // Skip transparent / black / very dark pixels (no data)
+    if (r < 12 && g < 12 && b < 12) return 'No Data';
+    const maxC = Math.max(r, g, b);
+    if (maxC < 20) return 'No Data';
+
+    // Reverse the compositing blend to recover original tile color.
+    // Displayed = tileColor * opacity + basemap * (1 - opacity)
+    // tileColor = (displayed - basemap * (1 - opacity)) / opacity
+    // Basemap is approximately rgb(20, 20, 25) and raster-opacity is 0.85.
+    const opacity = 0.85;
+    const bgR = 20, bgG = 20, bgB = 25;
+    const origR = Math.round(Math.min(255, Math.max(0, (r - bgR * (1 - opacity)) / opacity)));
+    const origG = Math.round(Math.min(255, Math.max(0, (g - bgG * (1 - opacity)) / opacity)));
+    const origB = Math.round(Math.min(255, Math.max(0, (b - bgB * (1 - opacity)) / opacity)));
+
+    if (product === 'echotops') {
+        const match = findClosestColorMatch(origR, origG, origB, MRMS_ECHOTOPS_SCALE);
+        return `${match.kft} kft`;
+    }
+
+    if (product === 'qpe') {
+        const match = findClosestColorMatch(origR, origG, origB, MRMS_QPE_SCALE);
+        if (match.inches < 0.1) return `< 0.10 in`;
+        return `${match.inches.toFixed(2)} in`;
+    }
+
+    return 'Unknown';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
