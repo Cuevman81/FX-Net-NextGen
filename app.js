@@ -39,6 +39,7 @@ let warningsSeen = new Set();
 let warningsFirstLoad = true;
 let warningsLoaded = false;
 let warningsGeoJSON = { type: 'FeatureCollection', features: [] };
+const zoneGeometryCache = {};  // Global cache for NWS zone polygons (persists across polling cycles)
 let watchesLoaded = false;
 let watchesGeoJSON = { type: 'FeatureCollection', features: [] };
 let greatLakesLoaded = false;
@@ -837,11 +838,12 @@ function setupMapLayers(map, paneId) {
     map.addLayer({
         id: 'nws-warnings-only-fill', type: 'fill', source: 'nws-warnings',
         layout: { visibility: 'none' },
-        filter: ['any', 
-            ['in', 'Warning', ['get', 'event']], 
+        filter: ['any',
+            ['in', 'Warning', ['get', 'event']],
             ['in', 'Emergency', ['get', 'event']],
             ['in', 'Statement', ['get', 'event']],
-            ['in', 'Advisory', ['get', 'event']]
+            ['in', 'Advisory', ['get', 'event']],
+            ['in', 'Alert', ['get', 'event']]
         ],
         paint: {
             'fill-color': ['case',
@@ -857,6 +859,11 @@ function setupMapLayers(map, paneId) {
                 ['in', 'Blizzard', ['get', 'event']], '#ff4500',
                 ['in', 'Wind Chill', ['get', 'event']], '#afeeee',
                 ['in', 'Cold', ['get', 'event']], '#0000ff',
+                ['in', 'Air Quality', ['get', 'event']], '#808000',
+                ['in', 'Red Flag', ['get', 'event']], '#ff1493',
+                ['in', 'Heat', ['get', 'event']], '#ff6347',
+                ['in', 'Wind', ['get', 'event']], '#d2b48c',
+                ['in', 'Fog', ['get', 'event']], '#708090',
                 ['in', 'Statement', ['get', 'event']], '#00ffff',
                 '#ff0000'
             ],
@@ -864,6 +871,7 @@ function setupMapLayers(map, paneId) {
                 ['in', 'Tornado', ['get', 'event']], 0.65,
                 ['in', 'Severe Thunderstorm', ['get', 'event']], 0.5,
                 ['in', 'Flash Flood', ['get', 'event']], 0.5,
+                ['in', 'Air Quality', ['get', 'event']], 0.35,
                 ['in', 'Statement', ['get', 'event']], 0.25,
                 0.35
             ]
@@ -872,11 +880,12 @@ function setupMapLayers(map, paneId) {
     map.addLayer({
         id: 'nws-warnings-only-outline', type: 'line', source: 'nws-warnings',
         layout: { visibility: 'none' },
-        filter: ['any', 
-            ['in', 'Warning', ['get', 'event']], 
+        filter: ['any',
+            ['in', 'Warning', ['get', 'event']],
             ['in', 'Emergency', ['get', 'event']],
             ['in', 'Statement', ['get', 'event']],
-            ['in', 'Advisory', ['get', 'event']]
+            ['in', 'Advisory', ['get', 'event']],
+            ['in', 'Alert', ['get', 'event']]
         ],
         paint: {
             'line-color': ['case',
@@ -2738,6 +2747,64 @@ async function checkNewWarnings() {
         if (Array.isArray(data.features)) {
             data.features.sort((a, b) => getAlertPriority(a.properties?.event) - getAlertPriority(b.properties?.event));
         }
+
+        // Resolve zone geometries for alerts that have null geometry (e.g. Air Quality Alerts)
+        // Uses global zoneGeometryCache to build up coverage across polling cycles
+        const nullGeomFeatures = data.features.filter(f => !f.geometry && f.properties?.affectedZones?.length > 0);
+        if (nullGeomFeatures.length > 0) {
+            // Priority alert types — resolve these zones first (skip marine-only alerts)
+            const priorityTypes = ['Air Quality Alert', 'Red Flag Warning', 'Heat Advisory', 'Excessive Heat Warning',
+                'Severe Thunderstorm Watch', 'Tornado Watch', 'Flood Watch', 'Wind Advisory', 'High Wind Warning',
+                'Fire Weather Watch', 'Dense Fog Advisory', 'Special Weather Statement'];
+
+            // Collect uncached zone URLs, prioritized by alert type
+            const priorityZones = new Set();
+            const otherZones = new Set();
+            nullGeomFeatures.forEach(f => {
+                const evt = f.properties?.event || '';
+                const isPriority = priorityTypes.some(p => evt.includes(p));
+                f.properties.affectedZones.forEach(z => {
+                    if (zoneGeometryCache[z]) return; // Already cached
+                    if (isPriority) priorityZones.add(z);
+                    else otherZones.add(z);
+                });
+            });
+
+            // Fetch uncached zones: priority first, then others, up to 50 per cycle
+            const toFetch = [...priorityZones, ...otherZones].slice(0, 50);
+            if (toFetch.length > 0) {
+                await Promise.allSettled(
+                    toFetch.map(async url => {
+                        try {
+                            const res = await fetch(url, { headers: { 'Accept': 'application/geo+json' } });
+                            if (!res.ok) return;
+                            const zoneData = await res.json();
+                            if (zoneData.geometry) zoneGeometryCache[url] = zoneData.geometry;
+                        } catch (_) {}
+                    })
+                );
+            }
+
+            // Apply ALL cached geometries (from this + previous cycles) to null-geom features
+            nullGeomFeatures.forEach(f => {
+                const polys = [];
+                (f.properties.affectedZones || []).forEach(z => {
+                    const geom = zoneGeometryCache[z];
+                    if (!geom) return;
+                    if (geom.type === 'Polygon') polys.push(geom.coordinates);
+                    else if (geom.type === 'MultiPolygon') polys.push(...geom.coordinates);
+                });
+                if (polys.length > 0) {
+                    f.geometry = { type: 'MultiPolygon', coordinates: polys };
+                }
+            });
+
+            const resolved = nullGeomFeatures.filter(f => f.geometry).length;
+            if (resolved > 0) addLiveLog(`WATCHDOG: Resolved ${resolved}/${nullGeomFeatures.length} zone-based alerts (${Object.keys(zoneGeometryCache).length} zones cached)`, '#808000');
+        }
+
+        // Filter out features with null geometry (MapLibre can't render them)
+        data.features = data.features.filter(f => f.geometry);
 
         warningsLoaded = true;
         warningsGeoJSON = data;
