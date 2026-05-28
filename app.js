@@ -1652,7 +1652,76 @@ function initFrontalPipIcons(map) {
         }
     });
 
-    // ─── Layer 9b: Solar Day/Night Terminator ───
+    // ─── Layer 9b: NWS River Gauges ───
+    map.addSource('river-gauges', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+    });
+    // Outer glow ring for flooding gauges
+    map.addLayer({
+        id: 'river-gauges-glow', type: 'circle', source: 'river-gauges',
+        filter: ['in', ['get', 'oc'], ['literal', ['action', 'minor', 'moderate', 'major']]],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 5, 7, 10, 10, 14],
+            'circle-color': ['match', ['get', 'oc'],
+                'major', '#ff00ff',
+                'moderate', '#ff0000',
+                'minor', '#ff8800',
+                'action', '#ffff00',
+                '#888888'],
+            'circle-opacity': 0.3,
+            'circle-blur': 0.8
+        }
+    });
+    // Main gauge dots
+    map.addLayer({
+        id: 'river-gauges-layer', type: 'circle', source: 'river-gauges',
+        layout: { visibility: 'none' },
+        minzoom: 4,
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 2, 7, 4, 10, 6, 13, 9],
+            'circle-color': ['match', ['get', 'oc'],
+                'major', '#ff00ff',
+                'moderate', '#ff0000',
+                'minor', '#ff8800',
+                'action', '#ffff00',
+                'no_flooding', '#00cc00',
+                'low_threshold', '#00cccc',
+                'not_defined', '#888888',
+                'obs_not_current', '#555555',
+                '#666666'],
+            'circle-opacity': 0.9,
+            'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 4, 0.5, 10, 1.5],
+            'circle-stroke-color': '#000000'
+        }
+    });
+    // Gauge labels at high zoom
+    map.addLayer({
+        id: 'river-gauges-label', type: 'symbol', source: 'river-gauges',
+        layout: {
+            visibility: 'none',
+            'text-field': ['concat', ['to-string', ['get', 'os']], ' ', ['get', 'ou']],
+            'text-size': 9,
+            'text-offset': [0, 1.4],
+            'text-anchor': 'top',
+            'text-allow-overlap': false,
+            'text-optional': true
+        },
+        minzoom: 9,
+        paint: {
+            'text-color': ['match', ['get', 'oc'],
+                'major', '#ff88ff',
+                'moderate', '#ff6666',
+                'minor', '#ffaa44',
+                'action', '#ffff66',
+                '#aaaaaa'],
+            'text-halo-color': '#000000',
+            'text-halo-width': 1.2
+        }
+    });
+
+    // ─── Layer 9c: Solar Day/Night Terminator ───
     map.addSource('solar-terminator', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] }
@@ -1875,6 +1944,16 @@ function initFrontalPipIcons(map) {
     map.on('mouseenter', 'firms-fires-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'firms-fires-layer', () => { map.getCanvas().style.cursor = ''; });
 
+    // River gauge click — opens detail panel with hydrograph
+    map.on('click', 'river-gauges-layer', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties;
+        const gaugeId = p.id;
+        if (gaugeId) showGaugeDetail(gaugeId, e.lngLat, e.originalEvent);
+    });
+    map.on('mouseenter', 'river-gauges-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'river-gauges-layer', () => { map.getCanvas().style.cursor = ''; });
+
     // NHC Storm point click
     map.on('click', 'nhc-track-pts', e => {
         if (!e.features || !e.features[0]) return;
@@ -1916,7 +1995,7 @@ function initFrontalPipIcons(map) {
         if (!warningsActive && !watchesActive) return;
 
         // Ensure we didn't click on a METAR or FIRMS or MD icon
-        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nexrad-sites-layer'] });
+        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nexrad-sites-layer', 'river-gauges-layer'] });
         if (otherFeats.length > 0) return;
 
         const lat = e.lngLat.lat.toFixed(4);
@@ -2874,6 +2953,182 @@ async function fetchFIRMS(show) {
         addLiveLog(`FIRMS: ${allFeatures.length} fire detections loaded (VIIRS: ${vCount} + MODIS: ${mCount})`, '#00ff88');
     } catch (e) {
         addLiveLog(`FIRMS ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// ─── NWS River Gauges (NWPS API) ───
+let riverGaugeCache = null;
+let riverGaugeCacheTime = 0;
+const RIVER_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
+async function fetchRiverGauges(show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    addLiveLog('RIVERS: Fetching national river gauge data...', '#00aaff');
+
+    try {
+        const now = Date.now();
+        let gauges;
+
+        // Use cache if fresh
+        if (riverGaugeCache && (now - riverGaugeCacheTime) < RIVER_CACHE_TTL) {
+            gauges = riverGaugeCache;
+            addLiveLog(`RIVERS: Using cached data (${gauges.length} gauges)`, '#888');
+        } else {
+            // Try Vercel proxy first, fall back to direct API
+            let res;
+            try {
+                res = await fetch('/api/river-gauges');
+                if (!res.ok) throw new Error('Proxy error');
+            } catch (_) {
+                // Direct API fallback
+                res = await fetch('https://api.water.noaa.gov/nwps/v1/gauges');
+            }
+            const data = await res.json();
+
+            // Handle both proxy (array) and direct API (object with gauges array) formats
+            if (Array.isArray(data)) {
+                gauges = data;
+            } else {
+                // Direct API — need to minify
+                gauges = (data.gauges || []).map(g => {
+                    const obs = g.status?.observed || {};
+                    const fcst = g.status?.forecast || {};
+                    return {
+                        id: g.lid, n: g.name,
+                        la: g.latitude, lo: g.longitude,
+                        oc: obs.floodCategory || '', fc: fcst.floodCategory || '',
+                        os: obs.primary ?? -999, fs: fcst.primary ?? -999,
+                        ou: obs.primaryUnit || 'ft'
+                    };
+                }).filter(g => g.la && g.lo && g.oc !== 'out_of_service' && g.oc !== '');
+            }
+
+            riverGaugeCache = gauges;
+            riverGaugeCacheTime = now;
+        }
+
+        // Build GeoJSON
+        const features = gauges.filter(g => g.la && g.lo).map(g => ({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [g.lo, g.la] },
+            properties: {
+                id: g.id, name: g.n,
+                oc: g.oc, fc: g.fc,
+                os: g.os, fs: g.fs,
+                ou: g.ou || 'ft'
+            }
+        }));
+
+        const fc = { type: 'FeatureCollection', features };
+        Object.values(maps).forEach(m => {
+            if (m.getSource('river-gauges')) m.getSource('river-gauges').setData(fc);
+        });
+
+        // Count flooding gauges
+        const flooding = gauges.filter(g => ['action', 'minor', 'moderate', 'major'].includes(g.oc));
+        const majorCount = gauges.filter(g => g.oc === 'major').length;
+        const modCount = gauges.filter(g => g.oc === 'moderate').length;
+        const minorCount = gauges.filter(g => g.oc === 'minor').length;
+        const actionCount = gauges.filter(g => g.oc === 'action').length;
+
+        addLiveLog(`RIVERS: ${features.length} gauges loaded — ${flooding.length} flooding (${majorCount} major, ${modCount} mod, ${minorCount} minor, ${actionCount} action)`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`RIVERS ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
+    try {
+        const res = await fetch(`https://api.water.noaa.gov/nwps/v1/gauges/${gaugeId}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const g = await res.json();
+
+        const obs = g.status?.observed || {};
+        const fcst = g.status?.forecast || {};
+        const cats = g.flood?.categories || {};
+        const images = g.images?.hydrograph || {};
+
+        const catLabel = (cat) => {
+            if (!cat) return '--';
+            return cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        };
+        const stageBar = (val, cats) => {
+            if (!val || val <= 0) return '';
+            const major = cats.major?.stage;
+            const moderate = cats.moderate?.stage;
+            const minor = cats.minor?.stage;
+            const action = cats.action?.stage;
+            let color = '#00cc00';
+            if (major && val >= major) color = '#ff00ff';
+            else if (moderate && val >= moderate) color = '#ff0000';
+            else if (minor && val >= minor) color = '#ff8800';
+            else if (action && val >= action) color = '#ffff00';
+            return color;
+        };
+
+        const obsColor = stageBar(obs.primary, cats);
+        const fcstColor = stageBar(fcst.primary, cats);
+
+        const locStr = `${Math.abs(g.latitude).toFixed(3)}°${g.latitude >= 0 ? 'N' : 'S'}, ${Math.abs(g.longitude).toFixed(3)}°${g.longitude >= 0 ? 'E' : 'W'}`;
+        const wfo = g.wfo?.abbreviation || '';
+
+        let html = `
+            <div style="color:#88ccff; font-size:9px; margin-bottom:2px; font-weight:bold;">${g.name || gaugeId}</div>
+            <div style="color:#777; font-size:8px; margin-bottom:6px;">${locStr} | WFO: ${wfo} | ID: ${g.lid}</div>
+            <table style="border-collapse:collapse; width:100%; margin-bottom:6px;">
+                <tr style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">
+                    <td style="padding:1px 6px 3px 0;"></td>
+                    <td style="padding:1px 6px 3px 0;">Stage</td>
+                    <td style="padding:1px 0 3px 0;">Category</td>
+                </tr>
+                <tr>
+                    <td style="color:#aaa; padding:2px 6px 2px 0;">Observed</td>
+                    <td style="padding:2px 6px; color:${obsColor}; font-weight:bold;">${obs.primary > 0 ? obs.primary + ' ' + (obs.primaryUnit || 'ft') : '--'}</td>
+                    <td style="color:${obsColor};">${catLabel(obs.floodCategory)}</td>
+                </tr>
+                <tr>
+                    <td style="color:#aaa; padding:2px 6px 2px 0;">Forecast</td>
+                    <td style="padding:2px 6px; color:${fcstColor}; font-weight:bold;">${fcst.primary > 0 ? fcst.primary + ' ' + (fcst.primaryUnit || 'ft') : '--'}</td>
+                    <td style="color:${fcstColor};">${catLabel(fcst.floodCategory)}</td>
+                </tr>
+            </table>`;
+
+        // Flood categories table
+        if (cats.action || cats.minor || cats.moderate || cats.major) {
+            html += `<div style="border-top:1px solid rgba(0,229,255,0.15); padding-top:4px; margin-bottom:4px;">
+                <span style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">Flood Stages</span>
+            </div>
+            <table style="border-collapse:collapse; width:100%; margin-bottom:6px; font-size:9.5px;">`;
+            if (cats.action?.stage > 0) html += `<tr><td style="color:#ffff00; padding:1px 6px 1px 0;">Action</td><td>${cats.action.stage} ft</td></tr>`;
+            if (cats.minor?.stage > 0) html += `<tr><td style="color:#ff8800; padding:1px 6px 1px 0;">Minor</td><td>${cats.minor.stage} ft</td></tr>`;
+            if (cats.moderate?.stage > 0) html += `<tr><td style="color:#ff0000; padding:1px 6px 1px 0;">Moderate</td><td>${cats.moderate.stage} ft</td></tr>`;
+            if (cats.major?.stage > 0) html += `<tr><td style="color:#ff00ff; padding:1px 6px 1px 0;">Major</td><td>${cats.major.stage} ft</td></tr>`;
+            html += '</table>';
+        }
+
+        // Hydrograph image
+        if (images.default) {
+            html += `<div style="border-top:1px solid rgba(0,229,255,0.15); padding-top:4px; margin-bottom:3px;">
+                <span style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">Hydrograph</span>
+            </div>
+            <img src="${images.default}" style="width:100%; max-width:420px; border-radius:3px; border:1px solid rgba(0,229,255,0.15);" onerror="this.style.display='none'" />`;
+        }
+
+        // Link to water.weather.gov
+        html += `<div style="margin-top:4px;"><a href="https://water.weather.gov/ahps2/hydrograph.php?gage=${gaugeId.toLowerCase()}&wfo=${wfo.toLowerCase()}" target="_blank" style="color:#00e5ff; font-size:8px; text-decoration:none;">Open on water.weather.gov &rarr;</a></div>`;
+
+        const panel = document.getElementById('river-gauge-panel');
+        const body = document.getElementById('river-gauge-body');
+        if (panel && body) {
+            body.innerHTML = html;
+            const px = (originalEvent?.pageX || 400) + 15;
+            const py = (originalEvent?.pageY || 200) - 100;
+            panel.style.left = Math.min(px, window.innerWidth - 480) + 'px';
+            panel.style.top = Math.max(10, Math.min(py, window.innerHeight - 500)) + 'px';
+            panel.style.display = 'block';
+        }
+    } catch (e) {
+        addLiveLog(`GAUGE DETAIL ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -4202,6 +4457,7 @@ function updateSidebarToActivePane() {
         else if (layer === 'overlay-counties') isActive = isLayerVisible(map, 'counties-layer');
         else if (layer === 'overlay-roads') isActive = isLayerVisible(map, 'esri-roads-layer');
         else if (layer === 'overlay-cities') isActive = isLayerVisible(map, 'esri-labels-layer');
+        else if (layer === 'river-gauges') isActive = isLayerVisible(map, 'river-gauges-layer');
         else if (layer === 'solar-terminator') isActive = isLayerVisible(map, 'solar-night-fill');
         else if (layer === 'wpc-isobars') isActive = isLayerVisible(map, 'wpc-isobars-line');
         else if (layer === 'wpc-fronts') isActive = isLayerVisible(map, 'wpc-fronts-solid');
@@ -4481,6 +4737,22 @@ function initProductSidebar() {
                 const isActive = !item.classList.contains('active');
                 if (isActive) fetchFIRMS(true);
                 map.setLayoutProperty('firms-fires-layer', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── River Gauges ───
+            if (layer === 'river-gauges') {
+                const isActive = !item.classList.contains('active');
+                ['river-gauges-layer', 'river-gauges-glow', 'river-gauges-label'].forEach(l => {
+                    if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
+                });
+                if (isActive) await fetchRiverGauges(true);
+                // Hide detail panel on deactivate
+                if (!isActive) {
+                    const panel = document.getElementById('river-gauge-panel');
+                    if (panel) panel.style.display = 'none';
+                }
                 updateSidebarToActivePane();
                 return;
             }
@@ -5346,6 +5618,7 @@ function clearPane(map, paneId) {
         'wpc-hl-letter', 'wpc-hl-pressure',
         'wpc-qpf-layer',
         'mrms-echotops-layer', 'mrms-qpe-layer',
+        'river-gauges-layer', 'river-gauges-glow', 'river-gauges-label',
         'solar-night-fill', 'solar-twilight-fill', 'solar-terminator-line',
         'nhc-cone-fill', 'nhc-cone-outline', 'nhc-track-line', 'nhc-track-pts', 'nhc-track-labels',
         'nhc-warn-fill', 'nhc-warn-outline', 'nhc-outlook-fill', 'nhc-outlook-outline',
@@ -5561,6 +5834,13 @@ function startAutoRefresh() {
         // NHC Outlook
         const nhcOutlookActive = Object.values(maps).some(m => isLayerVisible(m, 'nhc-outlook-fill'));
         if (nhcOutlookActive) fetchNHCOutlook(true);
+
+        // River gauges refresh
+        const gaugesActive = Object.values(maps).some(m => isLayerVisible(m, 'river-gauges-layer'));
+        if (gaugesActive) {
+            riverGaugeCacheTime = 0; // Force cache bust
+            fetchRiverGauges(true);
+        }
 
         // MRMS Echo Tops tile refresh
         const echotopsActive = Object.values(maps).some(m => isLayerVisible(m, 'mrms-echotops-layer'));
@@ -5898,6 +6178,23 @@ function initSolarClickHandler() {
     });
 }
 
+function initRiverGaugePanel() {
+    const closeBtn = document.getElementById('river-gauge-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            const panel = document.getElementById('river-gauge-panel');
+            if (panel) panel.style.display = 'none';
+        });
+    }
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            const panel = document.getElementById('river-gauge-panel');
+            if (panel) panel.style.display = 'none';
+        }
+    });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 21b: UTILITY HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -6010,6 +6307,7 @@ function init() {
     initSoundingModal();
     initTextModal();
     initSolarClickHandler();
+    initRiverGaugePanel();
 
     // Start warning watchdog (check every 15 seconds for rapid convective updates)
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');

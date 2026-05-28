@@ -154,6 +154,13 @@
                     <div class="product-item" data-layer="cpc-precip" data-period="seasonal"><span>Seasonal Precip</span></div>
                 </div>
 
+                <!-- RIVERS & HYDROLOGY -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="waves"></i> RIVERS & HYDROLOGY</div>
+                    <div class="product-item" data-layer="river-gauges"><span>River Gauges (Flood Status)</span> <span class="badge blue">LIVE</span></div>
+                    <div class="sub-category">Click gauge for hydrograph &amp; forecast</div>
+                </div>
+
                 <!-- DROUGHT -->
                 <div class="category-group">
                     <div class="category-label"><i data-lucide="droplets"></i> DROUGHT</div>
@@ -504,6 +511,15 @@
         <div class="menu-item" data-action="clear-pane" style="color:#ff6666;"><i data-lucide="trash-2"></i> Clear Pane</div>
     </div>
 
+    <!-- River Gauge Detail Panel -->
+    <div id="river-gauge-panel" style="display:none; position:fixed; z-index:900; background:rgba(10,12,18,0.95); border:1px solid rgba(0,229,255,0.35); border-radius:4px; padding:10px 14px; font-family:'Roboto Mono',monospace; pointer-events:auto; min-width:280px; max-width:460px; box-shadow:0 4px 20px rgba(0,0,0,0.6); max-height:80vh; overflow-y:auto;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="color:#00e5ff; font-size:9px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase;">RIVER GAUGE</span>
+            <span id="river-gauge-close" style="color:#ff6666; cursor:pointer; font-size:14px; line-height:1;">&times;</span>
+        </div>
+        <div id="river-gauge-body" style="font-size:10px; color:rgba(255,255,255,0.85); line-height:1.6;"></div>
+    </div>
+
     <!-- Solar Info Panel -->
     <div id="solar-info-panel" style="display:none; position:fixed; z-index:900; background:rgba(10,12,18,0.95); border:1px solid rgba(0,229,255,0.35); border-radius:4px; padding:10px 14px; font-family:'Roboto Mono',monospace; pointer-events:auto; min-width:260px; box-shadow:0 4px 20px rgba(0,0,0,0.6);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
@@ -850,7 +866,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=124"></script>
+    <script src="app.js?v=125"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
