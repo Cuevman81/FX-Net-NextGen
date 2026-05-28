@@ -2,6 +2,12 @@ from http.server import BaseHTTPRequestHandler
 import urllib.request
 import json
 
+# Vercel function config — NWPS API can take 40-50s to respond
+# maxDuration in seconds (Hobby: max 60, Pro: max 300)
+config = {
+    "maxDuration": 60
+}
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
@@ -10,7 +16,7 @@ class handler(BaseHTTPRequestHandler):
                 'User-Agent': 'FXNet-NextGen/1.0',
                 'Accept': 'application/json'
             })
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=55) as response:
                 data = json.loads(response.read())
 
             # Minify: extract only the fields needed for map display

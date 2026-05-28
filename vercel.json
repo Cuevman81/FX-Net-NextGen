@@ -1,5 +1,13 @@
 {
   "version": 2,
+  "functions": {
+    "api/river-gauges.py": {
+      "maxDuration": 60
+    },
+    "api/drought-monitor.py": {
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
     {
       "source": "/api/metar",

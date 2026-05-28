@@ -3071,14 +3071,22 @@ async function fetchRiverGauges(show, prefetch) {
             gauges = riverGaugeCache;
             addLiveLog(`RIVERS: Using cached data (${gauges.length} gauges)`, '#888');
         } else {
-            // Try Vercel proxy first, fall back to direct API
+            // Try Vercel proxy first (fast, minified ~200KB), fall back to direct NWPS API (~6MB, slower)
             let res;
             try {
-                res = await fetch('/api/river-gauges');
-                if (!res.ok) throw new Error('Proxy error');
-            } catch (_) {
-                // Direct API fallback
-                res = await fetch('https://api.water.noaa.gov/nwps/v1/gauges');
+                const proxyCtrl = new AbortController();
+                setTimeout(() => proxyCtrl.abort(), 15000); // 15s timeout for proxy
+                res = await fetch('/api/river-gauges', { signal: proxyCtrl.signal });
+                if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
+            } catch (proxyErr) {
+                // Direct NWPS API fallback (has CORS, but slower — can take 40-60s)
+                addLiveLog(`RIVERS: Proxy unavailable (${proxyErr.message}), fetching direct from NWPS...`, '#ffb300');
+                const directCtrl = new AbortController();
+                setTimeout(() => directCtrl.abort(), 65000); // 65s timeout for direct API
+                res = await fetch('https://api.water.noaa.gov/nwps/v1/gauges', {
+                    signal: directCtrl.signal,
+                    headers: { 'Accept': 'application/json' }
+                });
             }
             const data = await res.json();
 
@@ -3086,7 +3094,7 @@ async function fetchRiverGauges(show, prefetch) {
             if (Array.isArray(data)) {
                 gauges = data;
             } else {
-                // Direct API — need to minify
+                // Direct API — need to minify client-side
                 gauges = (data.gauges || []).map(g => {
                     const obs = g.status?.observed || {};
                     const fcst = g.status?.forecast || {};
