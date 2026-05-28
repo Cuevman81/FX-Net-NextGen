@@ -4488,6 +4488,7 @@ function initProductSidebar() {
             if (layer === 'mrms-echotops') {
                 const isActive = !item.classList.contains('active');
                 map.setLayoutProperty('mrms-echotops-layer', 'visibility', isActive ? 'visible' : 'none');
+                updateRadarLegend();
                 updateSidebarToActivePane();
                 return;
             }
@@ -4510,6 +4511,7 @@ function initProductSidebar() {
                     });
                     map.setLayoutProperty('mrms-qpe-layer', 'visibility', 'visible');
                 }
+                updateRadarLegend();
                 updateSidebarToActivePane();
                 return;
             }
@@ -4953,6 +4955,45 @@ const NWS_PRECIP_SCALE = [
     { inches:  0.01,label: '< 0.10 in (Trace)',              r: 139, g: 139, b: 139 }
 ];
 
+// ═══ MRMS ENHANCED ECHO TOPS SCALE (kft) ═══
+// NCEP GeoServer conus_neet_v18 — 18 echo top height bins
+const MRMS_ECHOTOPS_SCALE = [
+    { kft: 70, r: 255, g: 255, b: 255 },
+    { kft: 65, r: 255, g: 170, b: 255 },
+    { kft: 60, r: 255, g:   0, b: 255 },
+    { kft: 55, r: 200, g:   0, b: 200 },
+    { kft: 50, r: 140, g:   0, b: 255 },
+    { kft: 45, r: 255, g:   0, b:   0 },
+    { kft: 40, r: 200, g:   0, b:   0 },
+    { kft: 35, r: 140, g:   0, b:   0 },
+    { kft: 30, r: 255, g: 140, b:   0 },
+    { kft: 25, r: 255, g: 200, b:   0 },
+    { kft: 20, r: 255, g: 255, b:   0 },
+    { kft: 15, r:   0, g: 255, b:   0 },
+    { kft: 10, r:   0, g: 180, b:   0 },
+    { kft:  5, r:   0, g: 100, b:   0 }
+];
+
+// ═══ MRMS QPE SCALE (inches) ═══
+// IEM mesonet MRMS radar+gauge QPE color ramp
+const MRMS_QPE_SCALE = [
+    { inches: 10.0,  r: 255, g: 255, b: 255 },
+    { inches:  8.0,  r: 255, g: 170, b: 255 },
+    { inches:  6.0,  r: 200, g:   0, b: 200 },
+    { inches:  5.0,  r: 140, g:   0, b: 255 },
+    { inches:  4.0,  r: 255, g:   0, b:   0 },
+    { inches:  3.0,  r: 200, g:   0, b:   0 },
+    { inches:  2.5,  r: 255, g:  85, b:   0 },
+    { inches:  2.0,  r: 255, g: 170, b:   0 },
+    { inches:  1.5,  r: 255, g: 255, b:   0 },
+    { inches:  1.0,  r:   0, g: 255, b:   0 },
+    { inches:  0.75, r:   0, g: 200, b:   0 },
+    { inches:  0.50, r:   0, g: 140, b:   0 },
+    { inches:  0.25, r:   0, g: 200, b: 255 },
+    { inches:  0.10, r:   0, g: 140, b: 200 },
+    { inches:  0.01, r: 100, g: 100, b: 100 }
+];
+
 function findClosestColorMatch(r, g, b, scale) {
     let minDist = Infinity;
     let bestMatch = scale[0];
@@ -5059,72 +5100,91 @@ function updateRadarLegend(paneId) {
     });
     const mosaicVis = (() => { try { return m.getLayoutProperty(mosaicLayer, 'visibility') === 'visible'; } catch { return false; } })();
 
-    if (!anyRadar && !mosaicVis) {
+    // Check MRMS layers
+    const mrmsEchotopsVis = isLayerVisible(m, 'mrms-echotops-layer');
+    const mrmsQpeVis = isLayerVisible(m, 'mrms-qpe-layer');
+
+    if (!anyRadar && !mosaicVis && !mrmsEchotopsVis && !mrmsQpeVis) {
         legend.classList.remove('visible');
         return;
     }
 
-    // Determine active product type
-    let activeProd = null;
-    if (mosaicVis) activeProd = 'sr_bref'; // mosaic is always reflectivity
-    else if (prod) activeProd = prod;
-    else {
-        // Detect from visible layer
-        if (isLayerVisible(m, 'site-bref-layer')) activeProd = 'sr_bref';
-        else if (isLayerVisible(m, 'site-bvel-layer')) activeProd = 'sr_bvel';
-        else if (isLayerVisible(m, 'site-bdhc-layer')) activeProd = 'bdhc';
-        else if (isLayerVisible(m, 'site-bdsa-layer')) activeProd = 'bdsa';
-        else if (isLayerVisible(m, 'site-boha-layer')) activeProd = 'boha';
-    }
-
-    if (!activeProd) { legend.classList.remove('visible'); return; }
-
-    // Build legend HTML based on product
+    // Build legend HTML — MRMS products take priority when visible (they overlay on top)
     let html = '';
-    if (activeProd === 'sr_bref') {
-        html = buildBarLegend('BASE REFLECTIVITY (dBZ)', NWS_REFLECTIVITY_SCALE.map(s => ({
+
+    if (mrmsEchotopsVis) {
+        html = buildBarLegend('MRMS ECHO TOPS (kft)', MRMS_ECHOTOPS_SCALE.map(s => ({
             color: `rgb(${s.r},${s.g},${s.b})`,
-            label: `${s.dbz}`
+            label: `${s.kft}`
         })));
-    } else if (activeProd === 'sr_bvel') {
-        // Velocity: show a condensed version — outbound top, inbound bottom
-        const condensed = [
-            { kts: 75, r: 255, g: 0, b: 255 },
-            { kts: 60, r: 255, g: 180, b: 0 },
-            { kts: 50, r: 255, g: 100, b: 0 },
-            { kts: 40, r: 255, g: 0, b: 0 },
-            { kts: 30, r: 200, g: 0, b: 0 },
-            { kts: 20, r: 150, g: 0, b: 0 },
-            { kts: 10, r: 100, g: 0, b: 0 },
-            { kts: 0,  r: 128, g: 128, b: 128 },
-            { kts: -10, r: 0, g: 100, b: 0 },
-            { kts: -20, r: 0, g: 150, b: 0 },
-            { kts: -30, r: 0, g: 200, b: 0 },
-            { kts: -40, r: 0, g: 255, b: 0 },
-            { kts: -50, r: 0, g: 255, b: 100 },
-            { kts: -60, r: 0, g: 175, b: 180 },
-            { kts: -75, r: 0, g: 235, b: 240 }
-        ];
-        html = buildBarLegend('BASE VELOCITY (kts)', condensed.map(s => ({
-            color: `rgb(${s.r},${s.g},${s.b})`,
-            label: s.kts === 0 ? '0' : (s.kts > 0 ? `+${s.kts} OUT` : `${s.kts} IN`)
-        })));
-    } else if (activeProd === 'bdhc') {
-        html = buildCategoryLegend('HYDROMETEOR CLASS', [
-            { color: 'rgb(255, 0, 255)', label: 'Hail / Heavy Ice' },
-            { color: 'rgb(255, 0, 0)',   label: 'Heavy Rain' },
-            { color: 'rgb(255, 255, 0)', label: 'Moderate Rain' },
-            { color: 'rgb(0, 255, 0)',   label: 'Light Rain' },
-            { color: 'rgb(0, 150, 255)', label: 'Dry Snow' },
-            { color: 'rgb(0, 255, 255)', label: 'Wet Snow' },
-            { color: 'rgb(180, 180, 180)', label: 'No Echo / Clutter' }
-        ]);
-    } else if (activeProd === 'bdsa' || activeProd === 'boha') {
-        const title = activeProd === 'bdsa' ? 'STORM TOTAL PRECIP (in)' : 'ONE-HOUR PRECIP (in)';
-        html = buildBarLegend(title, NWS_PRECIP_SCALE.map(s => ({
+    } else if (mrmsQpeVis && activeMrmsQpe) {
+        const qpeTitles = { '1h': 'MRMS 1-HR QPE (in)', '24h': 'MRMS 24-HR QPE (in)', '48h': 'MRMS 48-HR QPE (in)', '72h': 'MRMS 72-HR QPE (in)' };
+        const title = qpeTitles[activeMrmsQpe] || 'MRMS QPE (in)';
+        html = buildBarLegend(title, MRMS_QPE_SCALE.map(s => ({
             color: `rgb(${s.r},${s.g},${s.b})`,
             label: `${s.inches}`
         })));
+    } else {
+        // Determine active radar product type
+        let activeProd = null;
+        if (mosaicVis) activeProd = 'sr_bref'; // mosaic is always reflectivity
+        else if (prod) activeProd = prod;
+        else {
+            // Detect from visible layer
+            if (isLayerVisible(m, 'site-bref-layer')) activeProd = 'sr_bref';
+            else if (isLayerVisible(m, 'site-bvel-layer')) activeProd = 'sr_bvel';
+            else if (isLayerVisible(m, 'site-bdhc-layer')) activeProd = 'bdhc';
+            else if (isLayerVisible(m, 'site-bdsa-layer')) activeProd = 'bdsa';
+            else if (isLayerVisible(m, 'site-boha-layer')) activeProd = 'boha';
+        }
+
+        if (!activeProd) { legend.classList.remove('visible'); return; }
+
+        if (activeProd === 'sr_bref') {
+            html = buildBarLegend('BASE REFLECTIVITY (dBZ)', NWS_REFLECTIVITY_SCALE.map(s => ({
+                color: `rgb(${s.r},${s.g},${s.b})`,
+                label: `${s.dbz}`
+            })));
+        } else if (activeProd === 'sr_bvel') {
+            // Velocity: show a condensed version — outbound top, inbound bottom
+            const condensed = [
+                { kts: 75, r: 255, g: 0, b: 255 },
+                { kts: 60, r: 255, g: 180, b: 0 },
+                { kts: 50, r: 255, g: 100, b: 0 },
+                { kts: 40, r: 255, g: 0, b: 0 },
+                { kts: 30, r: 200, g: 0, b: 0 },
+                { kts: 20, r: 150, g: 0, b: 0 },
+                { kts: 10, r: 100, g: 0, b: 0 },
+                { kts: 0,  r: 128, g: 128, b: 128 },
+                { kts: -10, r: 0, g: 100, b: 0 },
+                { kts: -20, r: 0, g: 150, b: 0 },
+                { kts: -30, r: 0, g: 200, b: 0 },
+                { kts: -40, r: 0, g: 255, b: 0 },
+                { kts: -50, r: 0, g: 255, b: 100 },
+                { kts: -60, r: 0, g: 175, b: 180 },
+                { kts: -75, r: 0, g: 235, b: 240 }
+            ];
+            html = buildBarLegend('BASE VELOCITY (kts)', condensed.map(s => ({
+                color: `rgb(${s.r},${s.g},${s.b})`,
+                label: s.kts === 0 ? '0' : (s.kts > 0 ? `+${s.kts} OUT` : `${s.kts} IN`)
+            })));
+        } else if (activeProd === 'bdhc') {
+            html = buildCategoryLegend('HYDROMETEOR CLASS', [
+                { color: 'rgb(255, 0, 255)', label: 'Hail / Heavy Ice' },
+                { color: 'rgb(255, 0, 0)',   label: 'Heavy Rain' },
+                { color: 'rgb(255, 255, 0)', label: 'Moderate Rain' },
+                { color: 'rgb(0, 255, 0)',   label: 'Light Rain' },
+                { color: 'rgb(0, 150, 255)', label: 'Dry Snow' },
+                { color: 'rgb(0, 255, 255)', label: 'Wet Snow' },
+                { color: 'rgb(180, 180, 180)', label: 'No Echo / Clutter' }
+            ]);
+        } else if (activeProd === 'bdsa' || activeProd === 'boha') {
+            const title = activeProd === 'bdsa' ? 'STORM TOTAL PRECIP (in)' : 'ONE-HOUR PRECIP (in)';
+            html = buildBarLegend(title, NWS_PRECIP_SCALE.map(s => ({
+                color: `rgb(${s.r},${s.g},${s.b})`,
+                label: `${s.inches}`
+            })));
+        }
     }
 
     legend.innerHTML = html;
