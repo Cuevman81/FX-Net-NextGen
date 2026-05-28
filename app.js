@@ -3380,11 +3380,20 @@ async function checkNewWarnings() {
             f.properties.isPDS = isPDS;
         });
 
-        const ibwCount = data.features.filter(f => f.properties.damageThreat || f.properties.isEmergency || f.properties.isPDS).length;
-        if (ibwCount !== lastIbwCount) {
-            if (ibwCount > 0) addLiveLog(`WATCHDOG: ${ibwCount} impact-based warning(s) active (Considerable/Catastrophic/Emergency/PDS)`, '#ff6600');
-            else if (lastIbwCount > 0) addLiveLog('WATCHDOG: All impact-based warnings have expired', '#00ff88');
-            lastIbwCount = ibwCount;
+        const ibwFeatures = data.features.filter(f => f.properties.damageThreat || f.properties.isEmergency || f.properties.isPDS);
+        if (ibwFeatures.length !== lastIbwCount) {
+            if (ibwFeatures.length > 0) {
+                addLiveLog(`WATCHDOG: ${ibwFeatures.length} impact-based warning(s) active`, '#ff6600');
+                ibwFeatures.forEach(f => {
+                    const p = f.properties;
+                    const threat = p.isEmergency ? 'EMERGENCY' : (p.damageThreat || '').toUpperCase() || (p.isPDS ? 'PDS' : '');
+                    const area = (p.areaDesc || '').substring(0, 100);
+                    addLiveLog(`  ⚠ ${p.event} [${threat}] → ${area}`, p.isEmergency || p.damageThreat === 'Catastrophic' ? '#ff0000' : '#ff6600');
+                });
+            } else if (lastIbwCount > 0) {
+                addLiveLog('WATCHDOG: All impact-based warnings have expired', '#00ff88');
+            }
+            lastIbwCount = ibwFeatures.length;
         }
 
         warningsLoaded = true;
