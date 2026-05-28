@@ -69,6 +69,17 @@
                     <div class="product-item" data-layer="radar-oha"><span>One-Hour Precip</span> <span class="badge orange">SITE</span></div>
                 </div>
 
+                <!-- MRMS PRODUCTS -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="radar"></i> MRMS (National)</div>
+                    <div class="product-item" data-layer="mrms-echotops"><span>Enhanced Echo Tops</span> <span class="badge green">CONUS</span></div>
+                    <div class="sub-category">QPE (Radar + Gauge Estimated Precip)</div>
+                    <div class="product-item" data-layer="mrms-qpe" data-qpe="1h"><span>1-Hour QPE</span></div>
+                    <div class="product-item" data-layer="mrms-qpe" data-qpe="24h"><span>24-Hour QPE</span></div>
+                    <div class="product-item" data-layer="mrms-qpe" data-qpe="48h"><span>48-Hour QPE</span></div>
+                    <div class="product-item" data-layer="mrms-qpe" data-qpe="72h"><span>72-Hour QPE</span></div>
+                </div>
+
                 <!-- SATELLITE (GOES-EAST) -->
                 <div class="category-group">
                     <div class="category-label"><i data-lucide="satellite"></i> Satellite (GOES-East)</div>
@@ -823,7 +834,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=120"></script>
+    <script src="app.js?v=121"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

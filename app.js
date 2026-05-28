@@ -46,6 +46,7 @@ let greatLakesLoaded = false;
 let greatLakesGeoJSON = { type: 'FeatureCollection', features: [] };
 let activeSpcDay = null;
 let activeQpfLayer = null;
+let activeMrmsQpe = null;
 let activeCpcTempLayer = null;
 let activeCpcPrecipLayer = null;
 let isSyncingMaps = false;
@@ -1079,6 +1080,23 @@ function setupMapLayers(map, paneId) {
         tileSize: 256
     });
     map.addLayer({ id: 'nws-watches-wms-layer', type: 'raster', source: 'nws-watches-wms', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.8 } });
+
+    // ─── Layer 6d: MRMS Products (National WMS Tiles) ───
+    // Enhanced Echo Tops (NCEP GeoServer, 1km CONUS, ~2 min updates)
+    map.addSource('mrms-echotops', {
+        type: 'raster',
+        tiles: ['https://opengeo.ncep.noaa.gov/geoserver/conus/conus_neet_v18/ows?service=wms&version=1.1.1&request=GetMap&layers=conus_neet_v18&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}'],
+        tileSize: 256
+    });
+    map.addLayer({ id: 'mrms-echotops-layer', type: 'raster', source: 'mrms-echotops', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85 } });
+
+    // MRMS QPE — gauge-corrected precipitation estimates (IEM WMS, transparent for no-data)
+    map.addSource('mrms-qpe', {
+        type: 'raster',
+        tiles: ['https://mesonet.agron.iastate.edu/cgi-bin/wms/us/mrms_nn.cgi?service=WMS&version=1.1.1&request=GetMap&layers=mrms_p1h&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}'],
+        tileSize: 256
+    });
+    map.addLayer({ id: 'mrms-qpe-layer', type: 'raster', source: 'mrms-qpe', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85 } });
 
     // ─── Layer 7: HMS Smoke Plumes ───
     map.addSource('hms-smoke', {
@@ -4158,6 +4176,11 @@ function updateSidebarToActivePane() {
             const period = item.getAttribute('data-period');
             isActive = isLayerVisible(map, 'cpc-precip-layer') && activeCpcPrecipLayer === period;
         }
+        else if (layer === 'mrms-echotops') isActive = isLayerVisible(map, 'mrms-echotops-layer');
+        else if (layer === 'mrms-qpe') {
+            const qpePeriod = item.getAttribute('data-qpe');
+            isActive = isLayerVisible(map, 'mrms-qpe-layer') && activeMrmsQpe === qpePeriod;
+        }
         else if (layer === 'drought-monitor') isActive = isLayerVisible(map, 'drought-fill');
         else if (layer === 'cpc-drought-outlook') isActive = isLayerVisible(map, 'cpc-drought-layer');
 
@@ -4456,6 +4479,36 @@ function initProductSidebar() {
                     });
                     map.setLayoutProperty('wpc-qpf-layer', 'visibility', 'visible');
                     updateHealth('wpcQpf');
+                }
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── MRMS Enhanced Echo Tops ───
+            if (layer === 'mrms-echotops') {
+                const isActive = !item.classList.contains('active');
+                map.setLayoutProperty('mrms-echotops-layer', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── MRMS QPE (tile-swap for 1h/24h/48h/72h) ───
+            if (layer === 'mrms-qpe') {
+                const qpePeriod = item.getAttribute('data-qpe');
+                const isAlreadyActive = item.classList.contains('active');
+
+                if (isAlreadyActive) {
+                    map.setLayoutProperty('mrms-qpe-layer', 'visibility', 'none');
+                    activeMrmsQpe = null;
+                } else {
+                    activeMrmsQpe = qpePeriod;
+                    const layerMap = { '1h': 'mrms_p1h', '24h': 'mrms_p24h', '48h': 'mrms_p48h', '72h': 'mrms_p72h' };
+                    const wmsLayer = layerMap[qpePeriod] || 'mrms_p1h';
+                    const wmsUrl = `https://mesonet.agron.iastate.edu/cgi-bin/wms/us/mrms_nn.cgi?service=WMS&version=1.1.1&request=GetMap&layers=${wmsLayer}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`;
+                    Object.values(maps).forEach(m => {
+                        if (m.getSource('mrms-qpe')) m.getSource('mrms-qpe').setTiles([wmsUrl]);
+                    });
+                    map.setLayoutProperty('mrms-qpe-layer', 'visibility', 'visible');
                 }
                 updateSidebarToActivePane();
                 return;
@@ -5140,6 +5193,7 @@ function clearPane(map, paneId) {
         'wpc-fronts-solid', 'wpc-fronts-stnry', 'wpc-fronts-trof', 'wpc-fronts-pips',
         'wpc-hl-letter', 'wpc-hl-pressure',
         'wpc-qpf-layer',
+        'mrms-echotops-layer', 'mrms-qpe-layer',
         'nhc-cone-fill', 'nhc-cone-outline', 'nhc-track-line', 'nhc-track-pts', 'nhc-track-labels',
         'nhc-warn-fill', 'nhc-warn-outline', 'nhc-outlook-fill', 'nhc-outlook-outline',
         'cpc-temp-layer', 'cpc-precip-layer',
@@ -5151,6 +5205,7 @@ function clearPane(map, paneId) {
     paneGoesChannels[paneId] = null;
     if (paneId === activePaneId) activeGoesChannel = null;
     activeQpfLayer = null;
+    activeMrmsQpe = null;
     activeCpcTempLayer = null;
     activeCpcPrecipLayer = null;
     updateRadarLegend(paneId);
@@ -5349,6 +5404,25 @@ function startAutoRefresh() {
         // NHC Outlook
         const nhcOutlookActive = Object.values(maps).some(m => isLayerVisible(m, 'nhc-outlook-fill'));
         if (nhcOutlookActive) fetchNHCOutlook(true);
+
+        // MRMS Echo Tops tile refresh
+        const echotopsActive = Object.values(maps).some(m => isLayerVisible(m, 'mrms-echotops-layer'));
+        if (echotopsActive) {
+            const etUrl = cacheBust('https://opengeo.ncep.noaa.gov/geoserver/conus/conus_neet_v18/ows?service=wms&version=1.1.1&request=GetMap&layers=conus_neet_v18&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}');
+            Object.values(maps).forEach(m => {
+                if (m.getSource('mrms-echotops')) m.getSource('mrms-echotops').setTiles([etUrl]);
+            });
+        }
+
+        // MRMS QPE tile refresh
+        if (activeMrmsQpe) {
+            const layerMap = { '1h': 'mrms_p1h', '24h': 'mrms_p24h', '48h': 'mrms_p48h', '72h': 'mrms_p72h' };
+            const wmsLayer = layerMap[activeMrmsQpe] || 'mrms_p1h';
+            const qpeUrl = cacheBust(`https://mesonet.agron.iastate.edu/cgi-bin/wms/us/mrms_nn.cgi?service=WMS&version=1.1.1&request=GetMap&layers=${wmsLayer}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`);
+            Object.values(maps).forEach(m => {
+                if (m.getSource('mrms-qpe')) m.getSource('mrms-qpe').setTiles([qpeUrl]);
+            });
+        }
 
         // WPC QPF tile refresh
         if (activeQpfLayer) {
