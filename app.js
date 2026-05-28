@@ -3000,7 +3000,7 @@ async function fetchRiverGauges(show) {
                         os: obs.primary ?? -999, fs: fcst.primary ?? -999,
                         ou: obs.primaryUnit || 'ft'
                     };
-                }).filter(g => g.la && g.lo && g.oc !== 'out_of_service' && g.oc !== '');
+                }).filter(g => g.la && g.lo && !['out_of_service', '', 'not_defined', 'obs_not_current'].includes(g.oc));
             }
 
             riverGaugeCache = gauges;

@@ -25,8 +25,8 @@ class handler(BaseHTTPRequestHandler):
                 fcst = g.get('status', {}).get('forecast', {})
                 obs_cat = obs.get('floodCategory', '')
                 fcst_cat = fcst.get('floodCategory', '')
-                # Skip gauges with no useful status
-                if obs_cat in ('out_of_service', ''):
+                # Skip inactive/undefined gauges — cuts payload by ~40%
+                if obs_cat in ('out_of_service', '', 'not_defined', 'obs_not_current'):
                     continue
                 minimal.append({
                     'id': g.get('lid', ''),
