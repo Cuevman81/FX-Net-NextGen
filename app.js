@@ -448,6 +448,7 @@ function initMap(paneId) {
     map.on('load', () => {
         registerWindBarbs(map);
         setupMapLayers(map, paneId);
+        createRadarLegend(paneId);
         addLiveLog(`PANE ${paneId}: Map ready`, '#00ff88');
         setTimeout(() => map.resize(), 100);
     });
@@ -4301,6 +4302,7 @@ function initProductSidebar() {
                 updateSidebarToActivePane();
                 updateHealth('radar');
                 refreshTimestampLabel();
+                updateRadarLegend();
                 return;
             }
 
@@ -4318,6 +4320,7 @@ function initProductSidebar() {
                 updateSidebarToActivePane();
                 updateHealth('radar');
                 refreshTimestampLabel();
+                updateRadarLegend();
                 return;
             }
 
@@ -4335,6 +4338,7 @@ function initProductSidebar() {
                 updateSidebarToActivePane();
                 updateHealth('radar');
                 refreshTimestampLabel();
+                updateRadarLegend();
                 return;
             }
 
@@ -4352,6 +4356,7 @@ function initProductSidebar() {
                 updateSidebarToActivePane();
                 updateHealth('radar');
                 refreshTimestampLabel();
+                updateRadarLegend();
                 return;
             }
 
@@ -4369,6 +4374,7 @@ function initProductSidebar() {
                 updateSidebarToActivePane();
                 updateHealth('radar');
                 refreshTimestampLabel();
+                updateRadarLegend();
                 return;
             }
 
@@ -4678,6 +4684,7 @@ function initRadarSiteSelector() {
             updateSidebarToActivePane();
             refreshTimestampLabel();
             updateHealth('radar');
+            updateRadarLegend();
         });
     }
 
@@ -4721,6 +4728,7 @@ function initRadarSiteSelector() {
             updateHealth('radar');
             addLiveLog(`RADAR [Pane ${activePaneId}]: Product changed to ${product}`, '#00e5ff');
             refreshTimestampLabel();
+            updateRadarLegend();
         });
     }
 }
@@ -4967,6 +4975,131 @@ function decodeRadarPixel(r, g, b, product) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// RADAR COLOR LEGEND
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function createRadarLegend(paneId) {
+    const paneEl = document.querySelector(`.pane[data-pane="${paneId}"]`);
+    if (!paneEl || paneEl.querySelector('.radar-legend')) return;
+    const legend = document.createElement('div');
+    legend.className = 'radar-legend';
+    legend.id = `radar-legend-${paneId}`;
+    paneEl.appendChild(legend);
+}
+
+function updateRadarLegend(paneId) {
+    const legend = document.getElementById(`radar-legend-${paneId || activePaneId}`);
+    if (!legend) return;
+
+    const pid = paneId || activePaneId;
+    const prod = paneRadarProducts[pid];
+
+    // Determine which radar layers are visible
+    const m = maps[pid];
+    if (!m) { legend.classList.remove('visible'); return; }
+
+    const siteRadarLayers = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'];
+    const mosaicLayer = 'nexrad-layer';
+    const anyRadar = siteRadarLayers.some(l => {
+        try { return m.getLayoutProperty(l, 'visibility') === 'visible'; } catch { return false; }
+    });
+    const mosaicVis = (() => { try { return m.getLayoutProperty(mosaicLayer, 'visibility') === 'visible'; } catch { return false; } })();
+
+    if (!anyRadar && !mosaicVis) {
+        legend.classList.remove('visible');
+        return;
+    }
+
+    // Determine active product type
+    let activeProd = null;
+    if (mosaicVis) activeProd = 'sr_bref'; // mosaic is always reflectivity
+    else if (prod) activeProd = prod;
+    else {
+        // Detect from visible layer
+        if (isLayerVisible(m, 'site-bref-layer')) activeProd = 'sr_bref';
+        else if (isLayerVisible(m, 'site-bvel-layer')) activeProd = 'sr_bvel';
+        else if (isLayerVisible(m, 'site-bdhc-layer')) activeProd = 'bdhc';
+        else if (isLayerVisible(m, 'site-bdsa-layer')) activeProd = 'bdsa';
+        else if (isLayerVisible(m, 'site-boha-layer')) activeProd = 'boha';
+    }
+
+    if (!activeProd) { legend.classList.remove('visible'); return; }
+
+    // Build legend HTML based on product
+    let html = '';
+    if (activeProd === 'sr_bref') {
+        html = buildBarLegend('BASE REFLECTIVITY (dBZ)', NWS_REFLECTIVITY_SCALE.map(s => ({
+            color: `rgb(${s.r},${s.g},${s.b})`,
+            label: `${s.dbz}`
+        })));
+    } else if (activeProd === 'sr_bvel') {
+        // Velocity: show a condensed version — outbound top, inbound bottom
+        const condensed = [
+            { kts: 75, r: 255, g: 0, b: 255 },
+            { kts: 60, r: 255, g: 180, b: 0 },
+            { kts: 50, r: 255, g: 100, b: 0 },
+            { kts: 40, r: 255, g: 0, b: 0 },
+            { kts: 30, r: 200, g: 0, b: 0 },
+            { kts: 20, r: 150, g: 0, b: 0 },
+            { kts: 10, r: 100, g: 0, b: 0 },
+            { kts: 0,  r: 128, g: 128, b: 128 },
+            { kts: -10, r: 0, g: 100, b: 0 },
+            { kts: -20, r: 0, g: 150, b: 0 },
+            { kts: -30, r: 0, g: 200, b: 0 },
+            { kts: -40, r: 0, g: 255, b: 0 },
+            { kts: -50, r: 0, g: 255, b: 100 },
+            { kts: -60, r: 0, g: 175, b: 180 },
+            { kts: -75, r: 0, g: 235, b: 240 }
+        ];
+        html = buildBarLegend('BASE VELOCITY (kts)', condensed.map(s => ({
+            color: `rgb(${s.r},${s.g},${s.b})`,
+            label: s.kts === 0 ? '0' : (s.kts > 0 ? `+${s.kts} OUT` : `${s.kts} IN`)
+        })));
+    } else if (activeProd === 'bdhc') {
+        html = buildCategoryLegend('HYDROMETEOR CLASS', [
+            { color: 'rgb(255, 0, 255)', label: 'Hail / Heavy Ice' },
+            { color: 'rgb(255, 0, 0)',   label: 'Heavy Rain' },
+            { color: 'rgb(255, 255, 0)', label: 'Moderate Rain' },
+            { color: 'rgb(0, 255, 0)',   label: 'Light Rain' },
+            { color: 'rgb(0, 150, 255)', label: 'Dry Snow' },
+            { color: 'rgb(0, 255, 255)', label: 'Wet Snow' },
+            { color: 'rgb(180, 180, 180)', label: 'No Echo / Clutter' }
+        ]);
+    } else if (activeProd === 'bdsa' || activeProd === 'boha') {
+        const title = activeProd === 'bdsa' ? 'STORM TOTAL PRECIP (in)' : 'ONE-HOUR PRECIP (in)';
+        html = buildBarLegend(title, NWS_PRECIP_SCALE.map(s => ({
+            color: `rgb(${s.r},${s.g},${s.b})`,
+            label: `${s.inches}`
+        })));
+    }
+
+    legend.innerHTML = html;
+    legend.classList.add('visible');
+}
+
+function buildBarLegend(title, items) {
+    // items: [{ color, label }] — ordered top-to-bottom (high to low)
+    const swatches = items.map(i => `<div class="swatch" style="background:${i.color}"></div>`).join('');
+    // Show every other label to keep it compact, always first and last
+    const labels = items.map((item, idx) => {
+        const show = idx === 0 || idx === items.length - 1 || idx % 2 === 0;
+        return `<span>${show ? item.label : ''}</span>`;
+    }).join('');
+    return `<div class="radar-legend-title">${title}</div>
+        <div class="radar-legend-body">
+            <div class="radar-legend-bar">${swatches}</div>
+            <div class="radar-legend-labels">${labels}</div>
+        </div>`;
+}
+
+function buildCategoryLegend(title, items) {
+    const rows = items.map(i =>
+        `<div class="legend-row"><div class="legend-swatch" style="background:${i.color}"></div><span class="legend-label">${i.label}</span></div>`
+    ).join('');
+    return `<div class="radar-legend-title">${title}</div><div class="radar-legend-rows">${rows}</div>`;
+}
+
 function safeGetVisibility(map, layerId) {
     try {
         return map.getLayoutProperty(layerId, 'visibility') || 'none';
@@ -5020,6 +5153,7 @@ function clearPane(map, paneId) {
     activeQpfLayer = null;
     activeCpcTempLayer = null;
     activeCpcPrecipLayer = null;
+    updateRadarLegend(paneId);
     addLiveLog(`PANE ${paneId}: Cleared`, '#ff3333');
 }
 

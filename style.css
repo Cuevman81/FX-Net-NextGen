@@ -496,6 +496,84 @@ body {
     z-index: 1;
 }
 
+/* ── Radar Color Legend ── */
+.radar-legend {
+    position: absolute;
+    bottom: 32px;
+    right: 8px;
+    z-index: 12;
+    background: rgba(0, 0, 0, 0.82);
+    border: 1px solid rgba(0, 229, 255, 0.25);
+    border-radius: 3px;
+    padding: 6px 8px 6px 6px;
+    pointer-events: none;
+    display: none;
+    font-family: 'Roboto Mono', monospace;
+    max-height: calc(100% - 80px);
+    overflow: hidden;
+}
+.radar-legend.visible { display: block; }
+.radar-legend-title {
+    font-size: 8px;
+    font-weight: 700;
+    color: var(--accent-cyan);
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    white-space: nowrap;
+}
+.radar-legend-body {
+    display: flex;
+    flex-direction: row;
+    gap: 3px;
+}
+.radar-legend-bar {
+    display: flex;
+    flex-direction: column;
+    width: 14px;
+    border-radius: 1px;
+    overflow: hidden;
+}
+.radar-legend-bar .swatch {
+    width: 100%;
+    flex: 1;
+    min-height: 3px;
+}
+.radar-legend-labels {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    font-size: 7.5px;
+    color: rgba(255, 255, 255, 0.8);
+    line-height: 1;
+    padding: 0 0 0 1px;
+}
+.radar-legend-labels span {
+    white-space: nowrap;
+}
+/* Hydrometeor class legend uses rows instead of bar */
+.radar-legend-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.radar-legend-rows .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.radar-legend-rows .legend-swatch {
+    width: 12px;
+    height: 10px;
+    border-radius: 1px;
+    flex-shrink: 0;
+}
+.radar-legend-rows .legend-label {
+    font-size: 7.5px;
+    color: rgba(255, 255, 255, 0.8);
+    white-space: nowrap;
+}
+
 /* ═══════════════════════════════════════
    HUD BOTTOM BAR
    ═══════════════════════════════════════ */
