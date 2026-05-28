@@ -6134,7 +6134,7 @@ function solarHourAngle(lat, dec, elevation) {
     return Math.acos(cosHA) * 180 / Math.PI;
 }
 
-function computeSolarTable(lat, lon, date) {
+function computeSolarTable(lat, lon, date, tzName) {
     const { declination, eqTime } = solarPosition(date);
 
     function timeForElevation(elev) {
@@ -6162,15 +6162,39 @@ function computeSolarTable(lat, lon, date) {
 
     function fmtLocal(totalMinUTC) {
         if (totalMinUTC == null) return '--:--';
-        // Convert UTC minutes to local Date to get proper timezone offset
+        // Convert UTC minutes to a Date, then format in the LOCATION's timezone
         const d = new Date(date);
         d.setUTCHours(0, 0, 0, 0);
         d.setUTCMinutes(d.getUTCMinutes() + totalMinUTC);
+        if (tzName) {
+            // Use Intl to format in the clicked location's actual timezone
+            try {
+                const parts = new Intl.DateTimeFormat('en-US', {
+                    timeZone: tzName, hour: 'numeric', minute: '2-digit', hour12: true
+                }).formatToParts(d);
+                const hr = parts.find(p => p.type === 'hour')?.value || '';
+                const mn = parts.find(p => p.type === 'minute')?.value || '';
+                const dp = parts.find(p => p.type === 'dayPeriod')?.value || '';
+                return `${hr}:${mn} ${dp}`;
+            } catch (_) { /* fall through to browser-local */ }
+        }
+        // Fallback: browser's local timezone
         const lh = d.getHours();
         const lm = d.getMinutes();
         const ampm = lh >= 12 ? 'PM' : 'AM';
         const h12 = lh === 0 ? 12 : (lh > 12 ? lh - 12 : lh);
         return `${h12}:${String(lm).padStart(2, '0')} ${ampm}`;
+    }
+
+    // Resolve short timezone abbreviation for display (e.g., "CDT", "EDT", "MST")
+    let tzAbbrev = '';
+    if (tzName) {
+        try {
+            const parts = new Intl.DateTimeFormat('en-US', {
+                timeZone: tzName, timeZoneName: 'short'
+            }).formatToParts(date);
+            tzAbbrev = parts.find(p => p.type === 'timeZoneName')?.value || '';
+        } catch (_) {}
     }
 
     const dayLen = standard ? (standard.set - standard.rise) : null;
@@ -6187,7 +6211,8 @@ function computeSolarTable(lat, lon, date) {
         astroDawn:    { utc: fmtMin(astronomical?.rise), local: fmtLocal(astronomical?.rise) },
         astroDusk:    { utc: fmtMin(astronomical?.set),  local: fmtLocal(astronomical?.set) },
         dayLength:    dayLenStr,
-        declination:  declination.toFixed(2) + '°'
+        declination:  declination.toFixed(2) + '°',
+        tzAbbrev:     tzAbbrev
     };
 }
 
@@ -6303,19 +6328,69 @@ function updateTerminator() {
 
 // ─── Solar Panel Click Handler ───
 
+// Resolve IANA timezone name for a lat/lon coordinate
+// Uses NWS API for US locations, longitude-based fallback for international
+const solarTzCache = {};
+async function resolveTimezone(lat, lon) {
+    const key = `${lat.toFixed(1)},${lon.toFixed(1)}`;
+    if (solarTzCache[key]) return solarTzCache[key];
+
+    // Try NWS points API for US/territory locations
+    try {
+        const res = await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`, {
+            headers: { 'Accept': 'application/geo+json' }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const tz = data.properties?.timeZone;
+            if (tz) { solarTzCache[key] = tz; return tz; }
+        }
+    } catch (_) {}
+
+    // Fallback: estimate IANA timezone from longitude (works globally, approximate)
+    const offsetHrs = Math.round(lon / 15);
+    const etcTz = `Etc/GMT${offsetHrs <= 0 ? '+' : ''}${-offsetHrs}`;
+    try {
+        // Validate the Etc/GMT timezone is recognized
+        Intl.DateTimeFormat('en-US', { timeZone: etcTz });
+        solarTzCache[key] = etcTz;
+        return etcTz;
+    } catch (_) {}
+
+    return null; // Will fall back to browser timezone
+}
+
 function initSolarClickHandler() {
     Object.entries(maps).forEach(([paneId, map]) => {
-        map.on('click', e => {
+        map.on('click', async e => {
             // Only trigger when solar terminator is visible
             if (!isLayerVisible(map, 'solar-night-fill')) return;
 
             const lat = e.lngLat.lat;
             const lon = e.lngLat.lng;
             const now = new Date();
-            const table = computeSolarTable(lat, lon, now);
+            const clickPx = e.originalEvent.pageX;
+            const clickPy = e.originalEvent.pageY;
+
+            // Show panel immediately with "loading" while timezone resolves
+            const panel = document.getElementById('solar-info-panel');
+            const body = document.getElementById('solar-info-body');
+            if (!panel || !body) return;
+
+            const locStr = `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? 'E' : 'W'}`;
+            body.innerHTML = `<div style="color:#88ccff; font-size:8.5px;">${locStr}</div><div style="color:#888; font-size:9px; padding:10px 0;">Resolving timezone...</div>`;
+            const px = clickPx + 15;
+            const py = clickPy - 80;
+            panel.style.left = Math.min(px, window.innerWidth - 300) + 'px';
+            panel.style.top = Math.max(10, Math.min(py, window.innerHeight - 350)) + 'px';
+            panel.style.display = 'block';
+
+            // Resolve timezone for the clicked location
+            const tzName = await resolveTimezone(lat, lon);
+            const table = computeSolarTable(lat, lon, now, tzName);
 
             const dateStr = now.toISOString().split('T')[0];
-            const locStr = `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? 'E' : 'W'}`;
+            const localLabel = table.tzAbbrev ? `Local (${table.tzAbbrev})` : 'Local';
 
             const html = `
                 <div style="color:#88ccff; font-size:8.5px; margin-bottom:5px;">${locStr} — ${dateStr}</div>
@@ -6323,7 +6398,7 @@ function initSolarClickHandler() {
                     <tr style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">
                         <td style="padding:1px 6px 3px 0;"></td>
                         <td style="padding:1px 6px 3px 0;">UTC</td>
-                        <td style="padding:1px 0 3px 0;">Local</td>
+                        <td style="padding:1px 0 3px 0;">${localLabel}</td>
                     </tr>
                     <tr><td style="color:#ffaa00; padding:1px 6px 1px 0;">Astro Dawn</td><td style="padding:1px 6px 1px 0;">${table.astroDawn.utc}Z</td><td>${table.astroDawn.local}</td></tr>
                     <tr><td style="color:#ff8844; padding:1px 6px 1px 0;">Nautical Dawn</td><td style="padding:1px 6px 1px 0;">${table.nauticalDawn.utc}Z</td><td>${table.nauticalDawn.local}</td></tr>
@@ -6339,17 +6414,7 @@ function initSolarClickHandler() {
                     <tr><td style="color:#aaaaaa; padding:1px 6px 1px 0;">Declination</td><td colspan="2">${table.declination}</td></tr>
                 </table>`;
 
-            const panel = document.getElementById('solar-info-panel');
-            const body = document.getElementById('solar-info-body');
-            if (panel && body) {
-                body.innerHTML = html;
-                // Position near click but keep on screen
-                const px = e.originalEvent.pageX + 15;
-                const py = e.originalEvent.pageY - 80;
-                panel.style.left = Math.min(px, window.innerWidth - 300) + 'px';
-                panel.style.top = Math.max(10, Math.min(py, window.innerHeight - 350)) + 'px';
-                panel.style.display = 'block';
-            }
+            body.innerHTML = html;
         });
     });
 
