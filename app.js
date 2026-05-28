@@ -38,6 +38,7 @@ let latestHmsTime = null;
 let warningsSeen = new Set();
 let warningsFirstLoad = true;
 let warningsLoaded = false;
+let lastIbwCount = 0;
 let warningsGeoJSON = { type: 'FeatureCollection', features: [] };
 const zoneGeometryCache = {};  // Global cache for NWS zone polygons (persists across polling cycles)
 let watchesLoaded = false;
@@ -3380,7 +3381,11 @@ async function checkNewWarnings() {
         });
 
         const ibwCount = data.features.filter(f => f.properties.damageThreat || f.properties.isEmergency || f.properties.isPDS).length;
-        if (ibwCount > 0) addLiveLog(`WATCHDOG: ${ibwCount} impact-based warning(s) detected (Considerable/Catastrophic/Emergency/PDS)`, '#ff6600');
+        if (ibwCount !== lastIbwCount) {
+            if (ibwCount > 0) addLiveLog(`WATCHDOG: ${ibwCount} impact-based warning(s) active (Considerable/Catastrophic/Emergency/PDS)`, '#ff6600');
+            else if (lastIbwCount > 0) addLiveLog('WATCHDOG: All impact-based warnings have expired', '#00ff88');
+            lastIbwCount = ibwCount;
+        }
 
         warningsLoaded = true;
         warningsGeoJSON = data;
