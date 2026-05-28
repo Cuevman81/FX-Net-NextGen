@@ -1020,6 +1020,81 @@ function setupMapLayers(map, paneId) {
         }
     });
 
+    // 6a-IBW: Enhanced / Impact-Based Warning Overlays (Considerable, Catastrophic, Emergency, PDS)
+    // These layers sit on top of regular warnings and pulse to draw attention
+    const enhancedWarnFilter = ['any',
+        ['in', ['get', 'damageThreat'], ['literal', ['Considerable', 'Catastrophic', 'Destructive']]],
+        ['==', ['get', 'isEmergency'], true],
+        ['==', ['get', 'isPDS'], true]
+    ];
+    const enhancedColorExpr = ['case',
+        ['any', ['==', ['get', 'damageThreat'], 'Catastrophic'], ['==', ['get', 'damageThreat'], 'Destructive'], ['==', ['get', 'isEmergency'], true]],
+        '#ff0000',
+        '#ff8800'  // Considerable / PDS
+    ];
+    map.addLayer({
+        id: 'nws-enhanced-glow', type: 'line', source: 'nws-warnings',
+        layout: { visibility: 'none' },
+        filter: enhancedWarnFilter,
+        paint: {
+            'line-color': enhancedColorExpr,
+            'line-width': 10,
+            'line-opacity': 0.35,
+            'line-blur': 6
+        }
+    });
+    map.addLayer({
+        id: 'nws-enhanced-outline', type: 'line', source: 'nws-warnings',
+        layout: { visibility: 'none' },
+        filter: enhancedWarnFilter,
+        paint: {
+            'line-color': '#ffffff',
+            'line-width': ['case',
+                ['any', ['==', ['get', 'damageThreat'], 'Catastrophic'], ['==', ['get', 'isEmergency'], true]], 3.5,
+                2.5
+            ],
+            'line-opacity': 0.95,
+            'line-dasharray': [3, 2]
+        }
+    });
+    map.addLayer({
+        id: 'nws-enhanced-fill', type: 'fill', source: 'nws-warnings',
+        layout: { visibility: 'none' },
+        filter: enhancedWarnFilter,
+        paint: {
+            'fill-color': enhancedColorExpr,
+            'fill-opacity': 0.25
+        }
+    });
+    // IBW label — shows threat tag ("CONSIDERABLE", "CATASTROPHIC", "EMERGENCY", "PDS") inside polygon
+    map.addLayer({
+        id: 'nws-enhanced-label', type: 'symbol', source: 'nws-warnings',
+        layout: {
+            visibility: 'none',
+            'symbol-placement': 'point',
+            'text-field': ['case',
+                ['==', ['get', 'isEmergency'], true], '⚠ EMERGENCY',
+                ['any', ['==', ['get', 'damageThreat'], 'Catastrophic'], ['==', ['get', 'damageThreat'], 'Destructive']], '⚠ CATASTROPHIC',
+                ['==', ['get', 'isPDS'], true], '⚠ PDS',
+                ['==', ['get', 'damageThreat'], 'Considerable'], '⚠ CONSIDERABLE',
+                ''
+            ],
+            'text-size': 12,
+            'text-font': ['Open Sans Bold'],
+            'text-allow-overlap': true,
+            'text-ignore-placement': true
+        },
+        filter: enhancedWarnFilter,
+        paint: {
+            'text-color': '#ffffff',
+            'text-halo-color': ['case',
+                ['any', ['==', ['get', 'damageThreat'], 'Catastrophic'], ['==', ['get', 'isEmergency'], true]], '#cc0000',
+                '#cc6600'
+            ],
+            'text-halo-width': 2
+        }
+    });
+
     // 6b: Watches Layer (High-fidelity vector polygons from NOAA REST MapServer)
     map.addLayer({
         id: 'nws-watches-only-fill', type: 'fill', source: 'nws-watches-vector',
@@ -2035,9 +2110,20 @@ function initFrontalPipIcons(map) {
                 const desc = (p.description || '').replace(/\n/g, '<br>');
                 const instr = (p.instruction || '').replace(/\n/g, '<br>');
                 const evtColor = getEventColor(p.event);
+                // Detect IBW threat level from API response parameters
+                const apiParams = p.parameters || {};
+                const threatVal = apiParams.flashFloodDamageThreat?.[0] || apiParams.tornadoDamageThreat?.[0] || apiParams.thunderstormDamageThreat?.[0] || '';
+                const hl = (p.headline || '').toLowerCase();
+                const popupIsEmergency = hl.includes('tornado emergency') || hl.includes('flash flood emergency');
+                const popupIsPDS = hl.includes('particularly dangerous situation');
+                let threatBadge = '';
+                if (popupIsEmergency) threatBadge = '<span style="display:inline-block;background:#ff0000;color:#fff;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:3px;margin-left:8px;animation:ibw-badge-flash 1s ease-in-out infinite;">⚠ EMERGENCY</span>';
+                else if (threatVal === 'Catastrophic' || threatVal === 'Destructive') threatBadge = `<span style="display:inline-block;background:#cc0000;color:#fff;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:3px;margin-left:8px;">${threatVal.toUpperCase()}</span>`;
+                else if (threatVal === 'Considerable') threatBadge = '<span style="display:inline-block;background:#ff6600;color:#fff;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:3px;margin-left:8px;">CONSIDERABLE</span>';
+                else if (popupIsPDS) threatBadge = '<span style="display:inline-block;background:#ff8800;color:#000;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:3px;margin-left:8px;">PDS</span>';
                 if (idx > 0) combinedHtml += `<hr style="border:0;border-top:1px solid #333;margin:12px 0;">`;
                 combinedHtml += `
-                    <div style="font-weight:bold;color:${evtColor};font-size:14px;margin-bottom:4px;">${p.event || 'Weather Alert'}</div>
+                    <div style="font-weight:bold;color:${evtColor};font-size:14px;margin-bottom:4px;">${p.event || 'Weather Alert'}${threatBadge}</div>
                     <div style="color:#888;margin-bottom:4px;">${p.senderName || ''}</div>
                     <div style="margin-bottom:6px;font-weight:bold;color:#fff;">${p.headline || ''}</div>
                     <div style="color:#ffb300;font-size:10px;margin-bottom:8px;">Expires: ${p.expires ? new Date(p.expires).toUTCString() : 'Unknown'}</div>
@@ -3247,6 +3333,55 @@ async function checkNewWarnings() {
         // Filter out features with null geometry (MapLibre can't render them)
         data.features = data.features.filter(f => f.geometry);
 
+        // ─── Enrich features with Impact-Based Warning (IBW) threat levels ───
+        // NWS API `parameters` field contains damage threat tags for elevated warnings:
+        //   flashFloodDamageThreat: ["Considerable"] or ["Catastrophic"]
+        //   tornadoDamageThreat: ["Considerable"] or ["Catastrophic"]
+        //   thunderstormDamageThreat: ["Considerable"] or ["Destructive"]
+        data.features.forEach(f => {
+            const params = f.properties?.parameters || {};
+            let threat = '';
+            let isEmergency = false;
+            let isPDS = false;
+
+            // Extract damage threat from IBW parameters
+            if (params.flashFloodDamageThreat?.[0]) threat = params.flashFloodDamageThreat[0];
+            else if (params.tornadoDamageThreat?.[0]) threat = params.tornadoDamageThreat[0];
+            else if (params.thunderstormDamageThreat?.[0]) threat = params.thunderstormDamageThreat[0];
+
+            const evt = (f.properties?.event || '').toLowerCase();
+            const headline = (f.properties?.headline || '').toLowerCase();
+
+            // Tornado Emergency detection
+            if (evt.includes('tornado emergency') ||
+                headline.includes('tornado emergency') ||
+                (evt.includes('tornado') && headline.includes('this is a tornado emergency'))) {
+                threat = 'Catastrophic';
+                isEmergency = true;
+            }
+
+            // Flash Flood Emergency detection
+            if (evt.includes('flash flood') &&
+                (headline.includes('flash flood emergency') ||
+                 headline.includes('this is a flash flood emergency'))) {
+                threat = 'Catastrophic';
+                isEmergency = true;
+            }
+
+            // PDS (Particularly Dangerous Situation) detection
+            if (headline.includes('particularly dangerous situation')) {
+                if (!threat) threat = 'Considerable';
+                isPDS = true;
+            }
+
+            f.properties.damageThreat = threat || '';
+            f.properties.isEmergency = isEmergency;
+            f.properties.isPDS = isPDS;
+        });
+
+        const ibwCount = data.features.filter(f => f.properties.damageThreat || f.properties.isEmergency || f.properties.isPDS).length;
+        if (ibwCount > 0) addLiveLog(`WATCHDOG: ${ibwCount} impact-based warning(s) detected (Considerable/Catastrophic/Emergency/PDS)`, '#ff6600');
+
         warningsLoaded = true;
         warningsGeoJSON = data;
 
@@ -3292,10 +3427,14 @@ async function checkNewWarnings() {
             const event = f.properties?.event;
             const area = f.properties?.areaDesc;
             const severity = f.properties?.severity;
+            const threat = f.properties?.damageThreat || '';
+            const isEmergency = f.properties?.isEmergency || false;
+            const isPDS = f.properties?.isPDS || false;
             addWarningToTicker(event, area, severity, f.properties);
             if (!isFirst) {
-                const color = severity === 'Extreme' ? '#ff0000' : severity === 'Severe' ? '#ff3333' : '#ffb300';
-                addLiveLog(`WATCHDOG: NEW ${event} → ${(area || '').substring(0, 80)}`, color);
+                const threatTag = isEmergency ? ' ⚠ EMERGENCY' : threat === 'Catastrophic' || threat === 'Destructive' ? ` ⚠ ${threat.toUpperCase()}` : threat === 'Considerable' ? ' ⚠ CONSIDERABLE' : isPDS ? ' ⚠ PDS' : '';
+                const color = isEmergency || threat === 'Catastrophic' ? '#ff0000' : threat === 'Considerable' || isPDS ? '#ff6600' : severity === 'Extreme' ? '#ff0000' : severity === 'Severe' ? '#ff3333' : '#ffb300';
+                addLiveLog(`WATCHDOG: NEW ${event}${threatTag} → ${(area || '').substring(0, 80)}`, color);
             }
         }
         newCount = toProcess.length;
@@ -3439,7 +3578,26 @@ function addWarningToTicker(event, area, severity, props) {
     item.dataset.state = stateStr;  // Comma-separated for multi-state alerts
     item.dataset.wfo = wfo;
     const time = props?.sent ? new Date(props.sent).toISOString().substring(11, 16) : new Date().toISOString().substring(11, 16);
-    item.innerHTML = `<div class="warning-header">${time}Z — ${event || 'Alert'}</div><div>${stateTag}${(area || '').substring(0, 120)}</div>`;
+
+    // IBW (Impact-Based Warning) threat badge
+    const params = props?.parameters || {};
+    const threat = params.flashFloodDamageThreat?.[0] || params.tornadoDamageThreat?.[0] || params.thunderstormDamageThreat?.[0] || '';
+    const headline = (props?.headline || '').toLowerCase();
+    const isEmergency = headline.includes('tornado emergency') || headline.includes('flash flood emergency');
+    const isPDS = headline.includes('particularly dangerous situation');
+    let ibwBadge = '';
+    if (isEmergency) {
+        ibwBadge = '<span class="ibw-badge ibw-emergency">⚠ EMERGENCY</span>';
+    } else if (threat === 'Catastrophic' || threat === 'Destructive') {
+        ibwBadge = `<span class="ibw-badge ibw-catastrophic">⚠ ${threat.toUpperCase()}</span>`;
+    } else if (threat === 'Considerable') {
+        ibwBadge = '<span class="ibw-badge ibw-considerable">⚠ CONSIDERABLE</span>';
+    } else if (isPDS) {
+        ibwBadge = '<span class="ibw-badge ibw-pds">⚠ PDS</span>';
+    }
+
+    if (ibwBadge) item.classList.add('ibw-enhanced');
+    item.innerHTML = `<div class="warning-header">${time}Z — ${event || 'Alert'}${ibwBadge}</div><div>${stateTag}${(area || '').substring(0, 120)}</div>`;
 
     item.addEventListener('click', () => {
         const panel = document.getElementById('text-panel');
@@ -4959,6 +5117,10 @@ function initProductSidebar() {
                 const isActive = !item.classList.contains('active');
                 map.setLayoutProperty('nws-warnings-only-fill', 'visibility', isActive ? 'visible' : 'none');
                 map.setLayoutProperty('nws-warnings-only-outline', 'visibility', isActive ? 'visible' : 'none');
+                // Enhanced IBW layers ride along with warnings
+                ['nws-enhanced-fill', 'nws-enhanced-outline', 'nws-enhanced-glow', 'nws-enhanced-label'].forEach(l => {
+                    if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
+                });
                 updateSidebarToActivePane();
                 return;
             }
@@ -5621,6 +5783,7 @@ function clearPane(map, paneId) {
         'spc-outlook-fill', 'spc-outlook-line',
         'spc-md-fill', 'spc-md-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
+        'nws-enhanced-fill', 'nws-enhanced-outline', 'nws-enhanced-glow', 'nws-enhanced-label',
         'nws-watches-only-fill', 'nws-watches-only-outline',
         'nws-wwa-wms-layer', 'nws-watches-wms-layer',
         'hms-smoke-fill', 'hms-smoke-outline',
@@ -6329,6 +6492,28 @@ function init() {
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');
     checkNewWarnings();
     setInterval(checkNewWarnings, 15 * 1000);
+
+    // ─── Enhanced Warning Pulse Animation ───
+    // Smoothly oscillates opacity of IBW (Impact-Based Warning) overlay layers
+    // to create a pulsing "danger" effect for Considerable/Catastrophic/Emergency polygons
+    let enhancedPulsePhase = 0;
+    setInterval(() => {
+        enhancedPulsePhase = (enhancedPulsePhase + 1) % 60;
+        const t = Math.abs(Math.sin(enhancedPulsePhase * Math.PI / 30));
+        const fillOp = 0.10 + 0.40 * t;
+        const glowOp = 0.15 + 0.50 * t;
+        const outlineOp = 0.50 + 0.50 * t;
+        Object.values(maps).forEach(m => {
+            try {
+                if (m.getLayer('nws-enhanced-fill') && m.getLayoutProperty('nws-enhanced-fill', 'visibility') === 'visible')
+                    m.setPaintProperty('nws-enhanced-fill', 'fill-opacity', fillOp);
+                if (m.getLayer('nws-enhanced-glow') && m.getLayoutProperty('nws-enhanced-glow', 'visibility') === 'visible')
+                    m.setPaintProperty('nws-enhanced-glow', 'line-opacity', glowOp);
+                if (m.getLayer('nws-enhanced-outline') && m.getLayoutProperty('nws-enhanced-outline', 'visibility') === 'visible')
+                    m.setPaintProperty('nws-enhanced-outline', 'line-opacity', outlineOp);
+            } catch (_) {}
+        });
+    }, 50); // ~20fps smooth pulse
 
     // Start watch vector monitoring simultaneously with warnings (15s polling for zero lag)
     checkNewWatches();

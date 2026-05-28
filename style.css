@@ -272,6 +272,56 @@ body {
 .warning-item.advisory     { border-left: 3px solid #6699cc; }
 .warning-item.advisory .warning-header { color: #6699cc; }
 
+/* ─── Impact-Based Warning (IBW) Enhanced Ticker Styles ─── */
+.warning-item.ibw-enhanced {
+    border-left-width: 4px;
+    animation: ibw-ticker-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes ibw-ticker-pulse {
+    0%   { background: rgba(255, 0, 0, 0.05); }
+    50%  { background: rgba(255, 0, 0, 0.20); }
+    100% { background: rgba(255, 0, 0, 0.05); }
+}
+
+.ibw-badge {
+    display: inline-block;
+    font-size: 7px;
+    font-weight: bold;
+    padding: 1px 4px;
+    border-radius: 2px;
+    margin-left: 6px;
+    vertical-align: middle;
+    letter-spacing: 0.5px;
+    animation: ibw-badge-flash 1s ease-in-out infinite;
+}
+
+.ibw-badge.ibw-emergency {
+    background: #ff0000;
+    color: #ffffff;
+}
+
+.ibw-badge.ibw-catastrophic {
+    background: #cc0000;
+    color: #ffffff;
+}
+
+.ibw-badge.ibw-considerable {
+    background: #ff6600;
+    color: #ffffff;
+}
+
+.ibw-badge.ibw-pds {
+    background: #ff8800;
+    color: #000000;
+}
+
+@keyframes ibw-badge-flash {
+    0%   { opacity: 1; }
+    50%  { opacity: 0.4; }
+    100% { opacity: 1; }
+}
+
 .warning-header {
     font-weight: bold;
     font-size: 8px;
