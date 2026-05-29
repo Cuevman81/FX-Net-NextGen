@@ -3066,54 +3066,43 @@ async function fetchRiverGauges(show, prefetch) {
         const now = Date.now();
         let gauges;
 
-        // Use cache if fresh
+        // Use cache if fresh (15 min TTL)
         if (riverGaugeCache && (now - riverGaugeCacheTime) < RIVER_CACHE_TTL) {
             gauges = riverGaugeCache;
             addLiveLog(`RIVERS: Using cached data (${gauges.length} gauges)`, '#888');
         } else {
-            // Try Vercel proxy first (fast, minified ~200KB), fall back to direct NWPS API (~6MB, slower)
-            let res;
-            try {
-                const proxyCtrl = new AbortController();
-                setTimeout(() => proxyCtrl.abort(), 15000); // 15s timeout for proxy
-                res = await fetch('/api/river-gauges', { signal: proxyCtrl.signal });
-                if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
-            } catch (proxyErr) {
-                // Direct NWPS API fallback (has CORS, but slower — can take 40-60s)
-                addLiveLog(`RIVERS: Proxy unavailable (${proxyErr.message}), fetching direct from NWPS...`, '#ffb300');
-                const directCtrl = new AbortController();
-                setTimeout(() => directCtrl.abort(), 65000); // 65s timeout for direct API
-                res = await fetch('https://api.water.noaa.gov/nwps/v1/gauges', {
-                    signal: directCtrl.signal,
-                    headers: { 'Accept': 'application/json' }
-                });
-            }
+            // Use NOAA EventDriven MapServer — fast (2-3s), has CORS, pre-filtered GeoJSON
+            // This replaces the slow NWPS API (60s+) and eliminates need for Vercel proxy
+            const gaugeUrl = 'https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer/0/query' +
+                '?where=status+NOT+IN+(%27out_of_service%27%2C%27not_defined%27%2C%27obs_not_current%27%2C%27%27)' +
+                '&outFields=gaugelid,status,waterbody,location,observed,units,latitude,longitude,state' +
+                '&f=geojson&resultRecordCount=10000';
+            const res = await fetch(gaugeUrl);
+            if (!res.ok) throw new Error(`MapServer HTTP ${res.status}`);
             const data = await res.json();
 
-            // Handle both proxy (array) and direct API (object with gauges array) formats
-            if (Array.isArray(data)) {
-                gauges = data;
-            } else {
-                // Direct API — need to minify client-side
-                gauges = (data.gauges || []).map(g => {
-                    const obs = g.status?.observed || {};
-                    const fcst = g.status?.forecast || {};
-                    return {
-                        id: g.lid, n: g.name,
-                        la: g.latitude, lo: g.longitude,
-                        oc: obs.floodCategory || '', fc: fcst.floodCategory || '',
-                        os: obs.primary ?? -999, fs: fcst.primary ?? -999,
-                        ou: obs.primaryUnit || 'ft'
-                    };
-                }).filter(g => g.la && g.lo && !['out_of_service', '', 'not_defined', 'obs_not_current'].includes(g.oc));
-            }
+            // Map MapServer fields to our internal format
+            gauges = (data.features || []).map(f => {
+                const p = f.properties || {};
+                return {
+                    id: (p.gaugelid || '').toLowerCase(),
+                    n: p.location || p.waterbody || p.gaugelid || '',
+                    la: p.latitude || f.geometry?.coordinates?.[1] || 0,
+                    lo: p.longitude || f.geometry?.coordinates?.[0] || 0,
+                    oc: p.status || 'no_flooding',
+                    fc: '',  // Forecast not in this endpoint (available in layers 1-15)
+                    os: parseFloat(p.observed) || -999,
+                    fs: -999,
+                    ou: p.units || 'ft'
+                };
+            }).filter(g => g.la && g.lo);
 
             riverGaugeCache = gauges;
             riverGaugeCacheTime = now;
         }
 
-        // Build GeoJSON
-        const features = gauges.filter(g => g.la && g.lo).map(g => ({
+        // Build GeoJSON for map
+        const features = gauges.map(g => ({
             type: 'Feature',
             geometry: { type: 'Point', coordinates: [g.lo, g.la] },
             properties: {
