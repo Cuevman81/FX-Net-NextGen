@@ -2065,6 +2065,52 @@ function initFrontalPipIcons(map) {
     map.on('mouseenter', 'nhc-track-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'nhc-track-pts', () => { map.getCanvas().style.cursor = ''; });
 
+    // NHC Tropical Outlook area click — shows probabilities + loads TWO discussion
+    map.on('click', 'nhc-outlook-fill', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties;
+        const basin = (p.basin || '').toLowerCase();
+        const basinLabel = basin.includes('pacific') || basin.includes('epac') ? 'Eastern Pacific' : basin.includes('atlantic') || basin.includes('atl') ? 'Atlantic' : (p.basin || 'Unknown');
+        const basinCode = basin.includes('pacific') || basin.includes('epac') ? 'epac' : 'atl';
+
+        const riskColor = (risk) => {
+            const r = (risk || '').toLowerCase();
+            if (r.includes('high') || r === 'high') return '#ff0000';
+            if (r.includes('med') || r === 'medium') return '#ff9900';
+            return '#ffff00';
+        };
+
+        const prob2 = p.prob2day || '0%';
+        const prob7 = p.prob7day || '0%';
+        const risk2 = p.risk2day || 'Low';
+        const risk7 = p.risk7day || 'Low';
+        const risk2Str = typeof risk2 === 'string' ? risk2 : (risk2 > 60 ? 'High' : risk2 > 20 ? 'Medium' : 'Low');
+        const risk7Str = typeof risk7 === 'string' ? risk7 : (risk7 > 60 ? 'High' : risk7 > 20 ? 'Medium' : 'Low');
+
+        const popupId = `nhc-two-btn-${Date.now()}`;
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:10px;border-radius:4px;max-width:320px;">
+            <div style="font-weight:bold;color:#ffcc00;font-size:13px;margin-bottom:6px;">Tropical Outlook — ${basinLabel}</div>
+            <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:3px 12px;margin-bottom:8px;">
+                <span></span><span style="color:#00e5ff;font-size:9px;text-transform:uppercase;">Probability</span><span style="color:#00e5ff;font-size:9px;text-transform:uppercase;">Risk</span>
+                <span style="color:#888;">2-Day:</span><span style="font-weight:bold;">${prob2}</span><span style="color:${riskColor(risk2Str)};font-weight:bold;">${risk2Str}</span>
+                <span style="color:#888;">7-Day:</span><span style="font-weight:bold;">${prob7}</span><span style="color:${riskColor(risk7Str)};font-weight:bold;">${risk7Str}</span>
+            </div>
+            <button id="${popupId}" style="background:#1a3a4a;color:#00e5ff;border:1px solid #00e5ff;padding:4px 10px;border-radius:3px;cursor:pointer;font-size:10px;width:100%;">View Full TWO Discussion →</button>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+
+        // Wire up the button after popup renders
+        setTimeout(() => {
+            const btn = document.getElementById(popupId);
+            if (btn) btn.addEventListener('click', () => {
+                popup.remove();
+                fetchNHCDiscussion(basinCode);
+            });
+        }, 50);
+    });
+    map.on('mouseenter', 'nhc-outlook-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'nhc-outlook-fill', () => { map.getCanvas().style.cursor = ''; });
+
     // Drought Monitor click
     map.on('click', 'drought-fill', e => {
         if (!e.features || !e.features[0]) return;
@@ -2086,7 +2132,7 @@ function initFrontalPipIcons(map) {
         if (!warningsActive && !watchesActive) return;
 
         // Ensure we didn't click on a METAR or FIRMS or MD icon
-        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nexrad-sites-layer', 'river-gauges-layer'] });
+        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nexrad-sites-layer', 'river-gauges-layer'] });
         if (otherFeats.length > 0) return;
 
         const lat = e.lngLat.lat.toFixed(4);
@@ -2817,6 +2863,9 @@ async function fetchNHCOutlook(show) {
 
         const combined = { type: 'FeatureCollection', features: [] };
         (sevenDay.features || []).forEach(f => {
+            f.properties.basin = f.properties.basin || f.properties.BASIN || '';
+            f.properties.prob2day = f.properties.prob2day || f.properties.PROB2DAY || '0%';
+            f.properties.prob7day = f.properties.prob7day || f.properties.PROB7DAY || '0%';
             f.properties.risk2day = f.properties.RISK2DAY || f.properties.risk2day || 0;
             f.properties.risk7day = f.properties.RISK7DAY || f.properties.risk7day || 0;
             combined.features.push(f);
