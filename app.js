@@ -1979,23 +1979,30 @@ function initFrontalPipIcons(map) {
     map.on('click', 'airnow-aqi-layer', e => {
         if (!e.features || !e.features[0]) return;
         const p = e.features[0].properties;
-        const ozTxt = p.ozone_aqi != null && p.ozone_aqi !== 'null' ? `${p.ozone_aqi} (${aqiCategory(+p.ozone_aqi)})` : 'N/A';
-        const pmTxt = p.pm25_aqi != null && p.pm25_aqi !== 'null' ? `${p.pm25_aqi} (${aqiCategory(+p.pm25_aqi)})` : 'N/A';
+        const ozAqi = (p.ozone_aqi != null && p.ozone_aqi !== 'null' && +p.ozone_aqi >= 0) ? +p.ozone_aqi : null;
+        const pmAqi = (p.pm25_aqi != null && p.pm25_aqi !== 'null' && +p.pm25_aqi >= 0) ? +p.pm25_aqi : null;
+        const ozPpb = (p.ozone_ppb != null && p.ozone_ppb !== 'null') ? +p.ozone_ppb : null;
+        const pmUgm = (p.pm25_ugm3 != null && p.pm25_ugm3 !== 'null') ? +p.pm25_ugm3 : null;
+        const ozTxt = ozAqi != null ? `${ozAqi} (${aqiCategory(ozAqi)})` : 'N/A';
+        const pmTxt = pmAqi != null ? `${pmAqi} (${aqiCategory(pmAqi)})` : 'N/A';
+        const ozConc = ozPpb != null ? `${ozPpb} ppb` : '';
+        const pmConc = pmUgm != null ? `${pmUgm} µg/m³` : '';
         const overall = p.aqi || 0;
         const vtDate = p.valid_time ? new Date(p.valid_time) : null;
         const validStr = vtDate ? `${vtDate.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric', timeZoneName: 'short' })} (${vtDate.toISOString().substring(11, 16)}Z)` : 'Unknown';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;">
             <div style="font-weight:bold;color:${aqiColor(overall)};font-size:13px;margin-bottom:4px;">${p.site_name || 'Monitor'}</div>
             <div style="color:#888;margin-bottom:6px;">${validStr}</div>
-            <div style="display:flex;gap:12px;margin-bottom:4px;">
-                <div><span style="color:#888;">Ozone:</span> <span style="color:${p.ozone_aqi > 0 ? aqiColor(+p.ozone_aqi) : '#666'}">${ozTxt}</span></div>
+            <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin-bottom:6px;">
+                <span style="color:#888;">Ozone AQI:</span><span style="color:${ozAqi > 0 ? aqiColor(ozAqi) : '#666'}">${ozTxt}</span>
+                ${ozConc ? `<span style="color:#888;">Ozone Conc:</span><span style="color:#aaa;">${ozConc}</span>` : ''}
+                <span style="color:#888;">PM2.5 AQI:</span><span style="color:${pmAqi > 0 ? aqiColor(pmAqi) : '#666'}">${pmTxt}</span>
+                ${pmConc ? `<span style="color:#888;">PM2.5 Conc:</span><span style="color:#aaa;">${pmConc}</span>` : ''}
             </div>
-            <div style="display:flex;gap:12px;margin-bottom:4px;">
-                <div><span style="color:#888;">PM2.5:</span> <span style="color:${p.pm25_aqi > 0 ? aqiColor(+p.pm25_aqi) : '#666'}">${pmTxt}</span></div>
-            </div>
-            <div style="border-top:1px solid #333;padding-top:4px;margin-top:4px;">
+            <div style="border-top:1px solid #333;padding-top:4px;">
                 <span style="color:#888;">Overall AQI:</span> <span style="font-weight:bold;color:${aqiColor(overall)}">${overall} — ${aqiCategory(overall)}</span>
             </div>
+            <div style="color:#555;font-size:9px;margin-top:4px;">Hourly EPA breakpoint AQI (not NowCast)</div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -2959,17 +2966,21 @@ async function fetchAQI(show) {
                 const coords = f.geometry.coordinates;
                 if (!coords || coords.length < 2 || coords[0] === 0 || coords[1] === 0) return false;
                 const p = f.properties;
-                const oz = p.OZONE_AQI ?? -1;
-                const pm = p.PM25_AQI ?? -1;
-                if (oz < 0 && pm < 0) return false;
+                // Check for raw concentrations (preferred) or fallback to NowCast AQI fields
+                const hasOzone = (p.OZONE != null && p.OZONE >= 0) || (p.OZONE_AQI != null && p.OZONE_AQI >= 0);
+                const hasPm = (p.PM25 != null && p.PM25 >= 0) || (p.PM25_AQI != null && p.PM25_AQI >= 0);
+                if (!hasOzone && !hasPm) return false;
                 const site = p.SiteName || p.SITE_NAME || `${coords[0]},${coords[1]}`;
                 if (seenSites.has(site)) return false;
                 seenSites.add(site);
                 return true;
             }).map(f => {
                 const p = f.properties;
-                const ozoneAqi = p.OZONE_AQI ?? -1;
-                const pm25Aqi = p.PM25_AQI ?? -1;
+                // Convert raw hourly concentrations to AQI using EPA breakpoints (NOT NowCast)
+                const ozoneRaw = p.OZONE ?? null;
+                const pm25Raw = p.PM25 ?? null;
+                const ozoneAqi = concToAqi(ozoneRaw, 'ozone');
+                const pm25Aqi = concToAqi(pm25Raw, 'pm25');
                 const aqi = Math.max(ozoneAqi, pm25Aqi, 0);
                 return {
                     type: 'Feature',
@@ -2978,6 +2989,8 @@ async function fetchAQI(show) {
                         aqi,
                         ozone_aqi: ozoneAqi >= 0 ? ozoneAqi : null,
                         pm25_aqi: pm25Aqi >= 0 ? pm25Aqi : null,
+                        ozone_ppb: ozoneRaw,
+                        pm25_ugm3: pm25Raw,
                         site_name: p.SiteName || p.SITE_NAME || 'Unknown',
                         valid_time: p.ValidTime || p.VALID_TIME || p.ValidDate || ''
                     }
@@ -3261,6 +3274,45 @@ function aqiColor(val) {
     if (val <= 200) return '#ff0000';
     if (val <= 300) return '#8f3f97';
     return '#7e0023';
+}
+
+// ─── EPA AQI Breakpoint Conversion (hourly, NOT NowCast) ───
+// Converts raw concentration to AQI using EPA breakpoint linear interpolation
+// Ozone breakpoints: 8-hour standard (ppb) — used for values < 125 ppb
+// PM2.5 breakpoints: 24-hour standard (µg/m³) — 2024 revised breakpoints
+function concToAqi(conc, pollutant) {
+    if (conc == null || conc < 0) return -1;
+    let bp;
+    if (pollutant === 'ozone') {
+        // Ozone in ppb — EPA 8-hour breakpoints (used for hourly display when < 125 ppb)
+        bp = [
+            { cLow: 0,   cHigh: 54,  iLow: 0,   iHigh: 50 },
+            { cLow: 55,  cHigh: 70,  iLow: 51,  iHigh: 100 },
+            { cLow: 71,  cHigh: 85,  iLow: 101, iHigh: 150 },
+            { cLow: 86,  cHigh: 105, iLow: 151, iHigh: 200 },
+            { cLow: 106, cHigh: 200, iLow: 201, iHigh: 300 }
+        ];
+    } else if (pollutant === 'pm25') {
+        // PM2.5 in µg/m³ — EPA 24-hour breakpoints
+        bp = [
+            { cLow: 0.0,   cHigh: 9.0,   iLow: 0,   iHigh: 50 },
+            { cLow: 9.1,   cHigh: 35.4,  iLow: 51,  iHigh: 100 },
+            { cLow: 35.5,  cHigh: 55.4,  iLow: 101, iHigh: 150 },
+            { cLow: 55.5,  cHigh: 125.4, iLow: 151, iHigh: 200 },
+            { cLow: 125.5, cHigh: 225.4, iLow: 201, iHigh: 300 },
+            { cLow: 225.5, cHigh: 325.4, iLow: 301, iHigh: 500 }
+        ];
+    } else {
+        return -1;
+    }
+    // Truncate to 1 decimal for PM2.5, integer for ozone (EPA convention)
+    const c = pollutant === 'pm25' ? Math.floor(conc * 10) / 10 : Math.floor(conc);
+    for (const b of bp) {
+        if (c >= b.cLow && c <= b.cHigh) {
+            return Math.round(((b.iHigh - b.iLow) / (b.cHigh - b.cLow)) * (c - b.cLow) + b.iLow);
+        }
+    }
+    return c > bp[bp.length - 1].cHigh ? 500 : -1; // Beyond scale
 }
 
 
