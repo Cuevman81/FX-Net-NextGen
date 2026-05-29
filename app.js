@@ -1632,15 +1632,28 @@ function initFrontalPipIcons(map) {
         id: 'nhc-outlook-fill', type: 'fill', source: 'nhc-outlook',
         layout: { visibility: 'none' },
         paint: {
-            'fill-color': ['step', ['coalesce', ['get', 'risk2day'], 0],
-                '#ffff00', 40, '#ff9900', 70, '#ff0000'],
+            'fill-color': ['match', ['get', 'risk7day'],
+                'High', '#ff0000',
+                'Medium', '#ff9900',
+                'Low', '#ffff00',
+                '#ffff00'
+            ],
             'fill-opacity': 0.25
         }
     });
     map.addLayer({
         id: 'nhc-outlook-outline', type: 'line', source: 'nhc-outlook',
         layout: { visibility: 'none' },
-        paint: { 'line-color': '#ffcc00', 'line-width': 1.5, 'line-dasharray': [4, 2] }
+        paint: {
+            'line-color': ['match', ['get', 'risk7day'],
+                'High', '#ff0000',
+                'Medium', '#ff9900',
+                'Low', '#ffff00',
+                '#ffcc00'
+            ],
+            'line-width': 2,
+            'line-dasharray': [4, 2]
+        }
     });
 
     // ─── Layer 7h: CPC Temperature Outlook (WMS Raster) ───
