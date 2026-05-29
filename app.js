@@ -1982,7 +1982,8 @@ function initFrontalPipIcons(map) {
         const ozTxt = p.ozone_aqi != null && p.ozone_aqi !== 'null' ? `${p.ozone_aqi} (${aqiCategory(+p.ozone_aqi)})` : 'N/A';
         const pmTxt = p.pm25_aqi != null && p.pm25_aqi !== 'null' ? `${p.pm25_aqi} (${aqiCategory(+p.pm25_aqi)})` : 'N/A';
         const overall = p.aqi || 0;
-        const validStr = p.valid_time ? new Date(p.valid_time).toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric' }) : 'Unknown';
+        const vtDate = p.valid_time ? new Date(p.valid_time) : null;
+        const validStr = vtDate ? `${vtDate.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric', timeZoneName: 'short' })} (${vtDate.toISOString().substring(11, 16)}Z)` : 'Unknown';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;">
             <div style="font-weight:bold;color:${aqiColor(overall)};font-size:13px;margin-bottom:4px;">${p.site_name || 'Monitor'}</div>
             <div style="color:#888;margin-bottom:6px;">${validStr}</div>
@@ -2923,19 +2924,33 @@ async function fetchAQI(show) {
 
     addLiveLog('AQI: Fetching AirNow monitor data...', '#00e5ff');
     try {
-        let res = await fetch('https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Air_Now_Monitor_Data_Public/FeatureServer/0/query?where=CountryCode%3D%27US%27&orderByFields=ValidTime%20DESC&outFields=*&f=geojson&outSR=4326&resultRecordCount=5000');
+        // Time filter: only fetch data from the last 2 hours to ensure we get the latest reporting cycle
+        // AirNow updates hourly; ValidTime is in epoch ms
+        const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+        const timeFilter = encodeURIComponent(`CountryCode='US' AND ValidTime >= ${twoHoursAgo}`);
+
+        let res = await fetch(`https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Air_Now_Monitor_Data_Public/FeatureServer/0/query?where=${timeFilter}&orderByFields=ValidTime+DESC&outFields=*&f=geojson&outSR=4326&resultRecordCount=8000`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         let data = await res.json();
 
         // If primary service returns 0 features (backend maintenance/clearing), failover to active mirror
         if (!data || !data.features || data.features.length === 0) {
             addLiveLog('AQI: Primary table empty, failing over to secondary AirNow mirror...', '#ffaa00');
-            res = await fetch('https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Air_Now_Monitors_Ozone_and_PM/FeatureServer/0/query?where=1%3D1&orderByFields=ValidTime%20DESC&outFields=*&f=geojson&outSR=4326&resultRecordCount=5000');
+            res = await fetch('https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Air_Now_Monitors_Ozone_and_PM/FeatureServer/0/query?where=1%3D1&orderByFields=ValidTime+DESC&outFields=*&f=geojson&outSR=4326&resultRecordCount=8000');
             if (res.ok) {
                 data = await res.json();
             }
         }
 
+        // Determine the most recent ValidTime in the dataset (latest reporting hour)
+        let latestHour = 0;
+        (data.features || []).forEach(f => {
+            const vt = f.properties?.ValidTime || f.properties?.VALID_TIME || 0;
+            if (vt > latestHour) latestHour = vt;
+        });
+
+        // Deduplicate: keep only the most recent observation per site
+        // Prefer records from the latest hour
         const seenSites = new Set();
         const filtered = {
             type: 'FeatureCollection',
@@ -2970,11 +2985,14 @@ async function fetchAQI(show) {
             })
         };
 
+        // Report the data hour to the user
+        const dataHourStr = latestHour ? new Date(latestHour).toISOString().substring(11, 16) + 'Z' : 'unknown';
+
         Object.values(maps).forEach(m => {
             if (m.getSource('airnow-aqi')) m.getSource('airnow-aqi').setData(filtered);
         });
         updateHealth('aqi');
-        addLiveLog(`AQI: ${filtered.features.length} monitors loaded`, '#00ff88');
+        addLiveLog(`AQI: ${filtered.features.length} monitors loaded (latest hour: ${dataHourStr})`, '#00ff88');
     } catch (e) {
         addLiveLog(`AQI ERROR: ${e.message}`, '#ff3333');
     }
