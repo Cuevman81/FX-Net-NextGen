@@ -861,14 +861,16 @@ function setupMapLayers(map, paneId) {
 
     // 6a: Warnings & Advisories Layer (Broadened)
     // ── Official NWS WWA Color Table (https://www.weather.gov/help-map) ──
-    const nwsWwaFilter = ['any',
-        ['in', 'Warning', ['get', 'event']],
-        ['in', 'Watch', ['get', 'event']],
-        ['in', 'Emergency', ['get', 'event']],
-        ['in', 'Statement', ['get', 'event']],
-        ['in', 'Advisory', ['get', 'event']],
-        ['in', 'Alert', ['get', 'event']],
-        ['in', 'Outlook', ['get', 'event']]
+    const nwsWwaFilter = ['all',
+        ['any',
+            ['in', 'Warning', ['get', 'event']],
+            ['in', 'Emergency', ['get', 'event']],
+            ['in', 'Statement', ['get', 'event']],
+            ['in', 'Advisory', ['get', 'event']],
+            ['in', 'Alert', ['get', 'event']],
+            ['in', 'Outlook', ['get', 'event']]
+        ],
+        ['!', ['in', 'Watch', ['get', 'event']]]  // Watches have their own dedicated layer
     ];
     const nwsColorExpr = ['match', ['get', 'event'],
         // ── Warnings (imminent threat) ──
@@ -995,7 +997,6 @@ function setupMapLayers(map, paneId) {
                 ['==', ['get', 'event'], 'Severe Thunderstorm Warning'], 0.5,
                 ['==', ['get', 'event'], 'Flash Flood Warning'], 0.5,
                 ['in', 'Warning', ['get', 'event']], 0.4,
-                ['in', 'Watch', ['get', 'event']], 0.3,
                 ['in', 'Statement', ['get', 'event']], 0.25,
                 ['in', 'Outlook', ['get', 'event']], 0.2,
                 0.35
@@ -1013,7 +1014,6 @@ function setupMapLayers(map, paneId) {
                 ['==', ['get', 'event'], 'Severe Thunderstorm Warning'], 2.5,
                 ['==', ['get', 'event'], 'Flash Flood Warning'], 2.5,
                 ['in', 'Warning', ['get', 'event']], 2.0,
-                ['in', 'Watch', ['get', 'event']], 1.5,
                 ['in', 'Statement', ['get', 'event']], 1.0,
                 1.5
             ],
