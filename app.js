@@ -659,6 +659,36 @@ function setupMapLayers(map, paneId) {
     });
     map.addLayer({ id: 'states-layer', type: 'raster', source: 'states', layout: { visibility: 'visible' }, paint: { 'raster-opacity': 0.9 } });
 
+    // ─── Layer 1b: NWS CWA Boundaries (County Warning Areas / WFO Zones) ───
+    map.addSource('nws-cwa-wms', {
+        type: 'raster',
+        tiles: ['https://mapservices.weather.noaa.gov/static/services/nws_reference_maps/nws_reference_map/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&layers=11&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}'],
+        tileSize: 256
+    });
+    map.addLayer({ id: 'nws-cwa-layer', type: 'raster', source: 'nws-cwa-wms', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85 } });
+
+    // CWA Labels (WFO identifiers at office locations)
+    map.addSource('nws-cwa-labels', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+    });
+    map.addLayer({
+        id: 'nws-cwa-label-layer', type: 'symbol', source: 'nws-cwa-labels',
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'wfo'],
+            'text-size': 11,
+            'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+            'text-allow-overlap': false,
+            'text-ignore-placement': false,
+            'text-padding': 4
+        },
+        paint: {
+            'text-color': '#00ddff',
+            'text-halo-color': '#000000',
+            'text-halo-width': 1.5
+        }
+    });
 
     // ─── Layer 4: SPC Outlooks (Independent Days) ───
     [1, 2, 3].forEach(day => {
@@ -2620,6 +2650,36 @@ function parseIsobarsText(text) {
     }
 
     return { type: 'FeatureCollection', features };
+}
+
+// ─── CWA Labels (WFO identifiers) ───
+let cwaLabelsLoaded = false;
+async function fetchCWALabels() {
+    if (cwaLabelsLoaded) return;
+    try {
+        const url = 'https://mapservices.weather.noaa.gov/static/rest/services/nws_reference_maps/nws_reference_map/MapServer/1/query' +
+            '?where=1%3D1&outFields=cwa,wfo,city,state,lon,lat&f=json&returnGeometry=false&resultRecordCount=200';
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const features = (data.features || []).map(f => {
+            const a = f.attributes;
+            return {
+                type: 'Feature',
+                geometry: { type: 'Point', coordinates: [a.lon, a.lat] },
+                properties: { wfo: a.wfo || a.cwa, city: a.city, state: a.state }
+            };
+        }).filter(f => f.geometry.coordinates[0] && f.geometry.coordinates[1]);
+
+        const geojson = { type: 'FeatureCollection', features };
+        Object.values(maps).forEach(m => {
+            if (m.getSource('nws-cwa-labels')) m.getSource('nws-cwa-labels').setData(geojson);
+        });
+        cwaLabelsLoaded = true;
+        addLiveLog(`CWA: Loaded ${features.length} WFO labels`, '#00ddff');
+    } catch (err) {
+        addLiveLog(`CWA LABELS ERROR: ${err.message}`, '#ff3333');
+    }
 }
 
 async function fetchWPCIsobars(show) {
@@ -4769,6 +4829,7 @@ function updateSidebarToActivePane() {
         else if (layer === 'overlay-counties') isActive = isLayerVisible(map, 'counties-layer');
         else if (layer === 'overlay-roads') isActive = isLayerVisible(map, 'esri-roads-layer');
         else if (layer === 'overlay-cities') isActive = isLayerVisible(map, 'esri-labels-layer');
+        else if (layer === 'overlay-cwa') isActive = isLayerVisible(map, 'nws-cwa-layer');
         else if (layer === 'river-gauges') isActive = isLayerVisible(map, 'river-gauges-layer');
         else if (layer === 'solar-terminator') isActive = isLayerVisible(map, 'solar-night-fill');
         else if (layer === 'wpc-isobars') isActive = isLayerVisible(map, 'wpc-isobars-line');
@@ -5278,6 +5339,16 @@ function initProductSidebar() {
                 } catch (err) {
                     addLiveLog(`WATCHES ERROR: ${err.message}`, '#ff3333');
                 }
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── NWS CWA Boundaries ───
+            if (layer === 'overlay-cwa') {
+                const isActive = !item.classList.contains('active');
+                if (map.getLayer('nws-cwa-layer')) map.setLayoutProperty('nws-cwa-layer', 'visibility', isActive ? 'visible' : 'none');
+                if (map.getLayer('nws-cwa-label-layer')) map.setLayoutProperty('nws-cwa-label-layer', 'visibility', isActive ? 'visible' : 'none');
+                if (isActive) fetchCWALabels();
                 updateSidebarToActivePane();
                 return;
             }
@@ -5942,7 +6013,8 @@ function clearPane(map, paneId) {
         'nhc-cone-fill', 'nhc-cone-outline', 'nhc-track-line', 'nhc-track-pts', 'nhc-track-labels',
         'nhc-warn-fill', 'nhc-warn-outline', 'nhc-outlook-fill', 'nhc-outlook-outline',
         'cpc-temp-layer', 'cpc-precip-layer',
-        'drought-fill', 'drought-outline', 'cpc-drought-layer'
+        'drought-fill', 'drought-outline', 'cpc-drought-layer',
+        'nws-cwa-layer', 'nws-cwa-label-layer'
     ];
     allToggleLayers.forEach(l => {
         if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
