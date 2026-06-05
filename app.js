@@ -1672,11 +1672,15 @@ function initFrontalPipIcons(map) {
         filter: ['==', ['get', 'layerType'], 'point'],
         layout: {
             visibility: 'none',
-            'text-field': ['concat', ['get', 'stormname'], '\n', ['to-string', ['get', 'maxwind']], ' kt'],
+            'text-field': ['case',
+                ['==', ['get', 'tau'], 0],
+                ['concat', ['get', 'stormname'], '\n', ['to-string', ['get', 'maxwind']], ' kt'],
+                ['concat', '+', ['to-string', ['round', ['get', 'tau']]], 'h ', ['to-string', ['get', 'maxwind']], ' kt']
+            ],
             'text-font': ['Noto Sans Bold'],
             'text-size': 10,
             'text-offset': [0, 1.5],
-            'text-allow-overlap': true
+            'text-allow-overlap': false
         },
         paint: { 'text-color': '#ffcc00', 'text-halo-color': '#000', 'text-halo-width': 1.5 }
     });
@@ -2136,15 +2140,34 @@ function initFrontalPipIcons(map) {
         if (!e.features || !e.features[0]) return;
         const p = e.features[0].properties;
         const name = p.stormname || p.STORMNAME || 'Unknown';
-        const wind = p.maxwind || p.MAXWIND || 'N/A';
-        const mslp = p.MSLP || p.mslp || 'N/A';
-        const cat = wind >= 137 ? 'CAT 5' : wind >= 113 ? 'CAT 4' : wind >= 96 ? 'CAT 3' : wind >= 83 ? 'CAT 2' : wind >= 64 ? 'CAT 1' : wind >= 34 ? 'TS' : 'TD';
-        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:280px;">
-            <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:4px;">${name}</div>
-            <div><span style="color:#888;">Classification:</span> <span style="color:#ffcc00;">${cat}</span></div>
-            <div><span style="color:#888;">Max Wind:</span> ${wind} kt</div>
-            <div><span style="color:#888;">Min Pressure:</span> ${mslp} mb</div>
-            <div><span style="color:#888;">Advisory:</span> ${p.ADVISNUM || p.advisnum || 'N/A'}</div>
+        const wind = p.maxwind || p.MAXWIND || 0;
+        const gust = p.gust || p.GUST || 0;
+        const rawMslp = p.MSLP || p.mslp || 9999;
+        const mslp = (rawMslp && rawMslp < 9990) ? `${Math.round(rawMslp)} mb` : 'N/A';
+        const tau = p.tau || p.TAU || 0;
+        const tauLabel = tau == 0 ? 'Current Position' : `Forecast +${Math.round(tau)}h`;
+        const stormType = p.stormtype || p.STORMTYPE || '';
+        // Use API classification, fall back to wind-based
+        const cat = stormType === 'HU' ? (wind >= 137 ? 'CAT 5' : wind >= 113 ? 'CAT 4' : wind >= 96 ? 'CAT 3' : wind >= 83 ? 'CAT 2' : 'CAT 1') :
+                    stormType === 'TS' ? 'Tropical Storm' :
+                    stormType === 'TD' ? 'Tropical Depression' :
+                    stormType === 'STD' ? 'Subtropical Depression' :
+                    stormType === 'STS' ? 'Subtropical Storm' :
+                    stormType === 'EX' ? 'Post-Tropical' :
+                    stormType === 'LO' ? 'Remnant Low' :
+                    stormType === 'DB' ? 'Disturbance' :
+                    wind >= 64 ? 'Hurricane' : wind >= 34 ? 'Tropical Storm' : 'Tropical Depression';
+        const validTime = p.fldatelbl || p.FLDATELBL || p.datelbl || p.DATELBL || '';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:300px;">
+            <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:2px;">${name}</div>
+            <div style="color:#888;font-size:10px;margin-bottom:6px;">${tauLabel}${validTime ? ' — ' + validTime : ''}</div>
+            <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;">
+                <span style="color:#888;">Classification:</span><span style="color:#ffcc00;">${cat}</span>
+                <span style="color:#888;">Max Wind:</span><span>${wind} kt${gust > 0 ? ' (gusts ' + Math.round(gust) + ' kt)' : ''}</span>
+                <span style="color:#888;">Min Pressure:</span><span>${mslp}</span>
+                <span style="color:#888;">Movement:</span><span>${p.tcdir != null ? Math.round(p.tcdir) + '° at ' + Math.round(p.tcspd || 0) + ' kt' : 'N/A'}</span>
+                <span style="color:#888;">Advisory:</span><span>#${p.ADVISNUM || p.advisnum || 'N/A'}</span>
+            </div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
