@@ -1289,6 +1289,46 @@ function setupMapLayers(map, paneId) {
         }
     });
 
+    // ─── Layer 7b2: METAR-Contoured Isobars (2mb), Isotherms (2°F), Isodrosotherms (2°F) ───
+    const contourProducts = [
+        { id: 'sfc-isobars-2mb',       color: '#d0d0d0', field: 'value' },
+        { id: 'sfc-isotherms',         color: '#ff4444', field: 'value' },
+        { id: 'sfc-isodrosotherms',    color: '#44cc44', field: 'value' }
+    ];
+    contourProducts.forEach(p => {
+        map.addSource(p.id, {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] }
+        });
+        map.addLayer({
+            id: `${p.id}-line`, type: 'line', source: p.id,
+            layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+            paint: {
+                'line-color': p.color,
+                'line-width': 1.2,
+                'line-opacity': 0.8
+            }
+        });
+        map.addLayer({
+            id: `${p.id}-label`, type: 'symbol', source: p.id,
+            layout: {
+                'visibility': 'none',
+                'symbol-placement': 'line',
+                'text-field': ['to-string', ['get', 'value']],
+                'text-font': ['Noto Sans Regular'],
+                'text-size': 10,
+                'text-allow-overlap': false,
+                'symbol-spacing': 250,
+                'text-max-angle': 30
+            },
+            paint: {
+                'text-color': p.color,
+                'text-halo-color': '#000000',
+                'text-halo-width': 1.5
+            }
+        });
+    });
+
 function getRadarSitesGeoJSON() {
     const features = [];
     for (const [id, coords] of Object.entries(RADAR_LOCATIONS)) {
@@ -2680,6 +2720,235 @@ async function fetchCWALabels() {
     } catch (err) {
         addLiveLog(`CWA LABELS ERROR: ${err.message}`, '#ff3333');
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 8b-CONTOUR: METAR-BASED CONTOURING ENGINE (IDW + Marching Squares)
+// Generates isotherms, isodrosotherms, and 2mb isobars from METAR point obs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Inverse Distance Weighting interpolation from scattered points to a regular grid.
+ * @param {Array} pts - [{lon, lat, val}] observation points
+ * @param {Object} bounds - {west, east, south, north}
+ * @param {number} cols - grid columns
+ * @param {number} rows - grid rows
+ * @param {number} power - IDW exponent (2 = standard)
+ * @param {number} searchRadius - max degrees to search for neighbours
+ * @returns {Float64Array} grid[row * cols + col]
+ */
+function idwGrid(pts, bounds, cols, rows, power = 2, searchRadius = 5) {
+    const grid = new Float64Array(rows * cols);
+    const dLon = (bounds.east - bounds.west) / cols;
+    const dLat = (bounds.north - bounds.south) / rows;
+
+    for (let r = 0; r < rows; r++) {
+        const lat = bounds.south + (r + 0.5) * dLat;
+        for (let c = 0; c < cols; c++) {
+            const lon = bounds.west + (c + 0.5) * dLon;
+            let wSum = 0, vSum = 0, exact = null;
+            for (let i = 0; i < pts.length; i++) {
+                const dx = (pts[i].lon - lon) * Math.cos(lat * Math.PI / 180);
+                const dy = pts[i].lat - lat;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < 1e-10) { exact = pts[i].val; break; }
+                const d = Math.sqrt(d2);
+                if (d > searchRadius) continue;
+                const w = 1 / Math.pow(d, power);
+                wSum += w;
+                vSum += w * pts[i].val;
+            }
+            grid[r * cols + c] = exact !== null ? exact : (wSum > 0 ? vSum / wSum : NaN);
+        }
+    }
+    return grid;
+}
+
+/**
+ * Marching Squares contour tracer.
+ * Returns an array of polylines [{coords:[[lon,lat],...], value}] for a given level.
+ */
+function traceContours(grid, cols, rows, bounds, levels) {
+    const dLon = (bounds.east - bounds.west) / cols;
+    const dLat = (bounds.north - bounds.south) / rows;
+    const features = [];
+
+    function gridVal(r, c) {
+        if (r < 0 || r >= rows || c < 0 || c >= cols) return NaN;
+        return grid[r * cols + c];
+    }
+    function lerp(v1, v2, level) {
+        const t = (level - v1) / (v2 - v1);
+        return Math.max(0, Math.min(1, t));
+    }
+    function lonAt(c) { return bounds.west + (c + 0.5) * dLon; }
+    function latAt(r) { return bounds.south + (r + 0.5) * dLat; }
+
+    for (let li = 0; li < levels.length; li++) {
+        const level = levels[li];
+        // Segment map: collect all contour segments for this level
+        const segments = [];
+
+        for (let r = 0; r < rows - 1; r++) {
+            for (let c = 0; c < cols - 1; c++) {
+                const bl = gridVal(r, c);
+                const br = gridVal(r, c + 1);
+                const tr = gridVal(r + 1, c + 1);
+                const tl = gridVal(r + 1, c);
+                if (isNaN(bl) || isNaN(br) || isNaN(tr) || isNaN(tl)) continue;
+
+                // Marching squares case index (4-bit)
+                let idx = 0;
+                if (bl >= level) idx |= 1;
+                if (br >= level) idx |= 2;
+                if (tr >= level) idx |= 4;
+                if (tl >= level) idx |= 8;
+                if (idx === 0 || idx === 15) continue;
+
+                // Edge midpoints with linear interpolation
+                const bottom = [lonAt(c) + lerp(bl, br, level) * dLon, latAt(r)];
+                const right  = [lonAt(c + 1), latAt(r) + lerp(br, tr, level) * dLat];
+                const top    = [lonAt(c) + lerp(tl, tr, level) * dLon, latAt(r + 1)];
+                const left   = [lonAt(c), latAt(r) + lerp(bl, tl, level) * dLat];
+
+                const addSeg = (a, b) => segments.push([a, b]);
+                switch (idx) {
+                    case 1: case 14: addSeg(bottom, left); break;
+                    case 2: case 13: addSeg(bottom, right); break;
+                    case 3: case 12: addSeg(left, right); break;
+                    case 4: case 11: addSeg(right, top); break;
+                    case 5: // Saddle: use average to resolve ambiguity
+                        if ((bl + br + tr + tl) / 4 >= level) {
+                            addSeg(bottom, right); addSeg(left, top);
+                        } else {
+                            addSeg(bottom, left); addSeg(right, top);
+                        }
+                        break;
+                    case 6: case 9: addSeg(bottom, top); break;
+                    case 7: case 8: addSeg(left, top); break;
+                    case 10: // Saddle
+                        if ((bl + br + tr + tl) / 4 >= level) {
+                            addSeg(left, top); addSeg(bottom, right);
+                        } else {
+                            addSeg(left, bottom); addSeg(right, top);
+                        }
+                        break;
+                }
+            }
+        }
+
+        // Chain segments into polylines
+        if (segments.length === 0) continue;
+        const EPS = 1e-8;
+        const used = new Uint8Array(segments.length);
+        function near(a, b) { return Math.abs(a[0] - b[0]) < EPS && Math.abs(a[1] - b[1]) < EPS; }
+
+        for (let s = 0; s < segments.length; s++) {
+            if (used[s]) continue;
+            used[s] = 1;
+            const chain = [segments[s][0], segments[s][1]];
+            let changed = true;
+            while (changed) {
+                changed = false;
+                for (let t = 0; t < segments.length; t++) {
+                    if (used[t]) continue;
+                    const seg = segments[t];
+                    if (near(chain[chain.length - 1], seg[0])) {
+                        chain.push(seg[1]); used[t] = 1; changed = true;
+                    } else if (near(chain[chain.length - 1], seg[1])) {
+                        chain.push(seg[0]); used[t] = 1; changed = true;
+                    } else if (near(chain[0], seg[1])) {
+                        chain.unshift(seg[0]); used[t] = 1; changed = true;
+                    } else if (near(chain[0], seg[0])) {
+                        chain.unshift(seg[1]); used[t] = 1; changed = true;
+                    }
+                }
+            }
+            if (chain.length >= 3) {
+                features.push({
+                    type: 'Feature',
+                    geometry: { type: 'LineString', coordinates: chain },
+                    properties: { value: level }
+                });
+            }
+        }
+    }
+    return { type: 'FeatureCollection', features };
+}
+
+/**
+ * Generate contour GeoJSON from METAR observations.
+ * @param {string} field - 'tmpf' | 'dwpf' | 'mslp'
+ * @param {number} interval - contour interval (2 for °F, 2 for mb)
+ * @returns {Object} GeoJSON FeatureCollection
+ */
+function generateMetarContours(field, interval) {
+    if (!metarGeoJSON || !metarGeoJSON.features || metarGeoJSON.features.length === 0) {
+        return { type: 'FeatureCollection', features: [] };
+    }
+
+    // Collect valid observations
+    const pts = [];
+    metarGeoJSON.features.forEach(f => {
+        const val = f.properties?.[field];
+        const coords = f.geometry?.coordinates;
+        if (val != null && !isNaN(val) && coords) {
+            pts.push({ lon: coords[0], lat: coords[1], val });
+        }
+    });
+    if (pts.length < 10) return { type: 'FeatureCollection', features: [] };
+
+    // Grid bounds: CONUS
+    const bounds = { west: -130, east: -60, south: 23, north: 50 };
+    const cols = 140;  // ~0.5° resolution
+    const rows = 54;
+
+    // Generate IDW grid
+    const grid = idwGrid(pts, bounds, cols, rows, 2, 6);
+
+    // Determine contour levels from data range, snapped to interval
+    let minV = Infinity, maxV = -Infinity;
+    for (let i = 0; i < grid.length; i++) {
+        if (!isNaN(grid[i])) {
+            if (grid[i] < minV) minV = grid[i];
+            if (grid[i] > maxV) maxV = grid[i];
+        }
+    }
+    if (!isFinite(minV)) return { type: 'FeatureCollection', features: [] };
+
+    const startLevel = Math.ceil(minV / interval) * interval;
+    const endLevel = Math.floor(maxV / interval) * interval;
+    const levels = [];
+    for (let v = startLevel; v <= endLevel; v += interval) levels.push(v);
+
+    // Trace contours
+    const geojson = traceContours(grid, cols, rows, bounds, levels);
+
+    // Round display values
+    geojson.features.forEach(f => {
+        f.properties.value = Math.round(f.properties.value);
+    });
+
+    return geojson;
+}
+
+/**
+ * Render METAR-based contours to the map.
+ */
+function renderContourProduct(sourceId, field, interval, label) {
+    if (!metarsLoaded) {
+        addLiveLog(`${label}: Waiting for METAR data...`, '#ffaa00');
+        return;
+    }
+    addLiveLog(`${label}: Generating contours (every ${interval}${field === 'mslp' ? 'mb' : '°F'})...`, '#d0d0d0');
+
+    const geojson = generateMetarContours(field, interval);
+
+    Object.values(maps).forEach(m => {
+        if (m.getSource(sourceId)) m.getSource(sourceId).setData(geojson);
+    });
+
+    addLiveLog(`${label}: ${geojson.features.length} contour lines generated`, '#00ff88');
 }
 
 async function fetchWPCIsobars(show) {
@@ -4833,6 +5102,9 @@ function updateSidebarToActivePane() {
         else if (layer === 'river-gauges') isActive = isLayerVisible(map, 'river-gauges-layer');
         else if (layer === 'solar-terminator') isActive = isLayerVisible(map, 'solar-night-fill');
         else if (layer === 'wpc-isobars') isActive = isLayerVisible(map, 'wpc-isobars-line');
+        else if (layer === 'sfc-isobars-2mb') isActive = isLayerVisible(map, 'sfc-isobars-2mb-line');
+        else if (layer === 'sfc-isotherms') isActive = isLayerVisible(map, 'sfc-isotherms-line');
+        else if (layer === 'sfc-isodrosotherms') isActive = isLayerVisible(map, 'sfc-isodrosotherms-line');
         else if (layer === 'wpc-fronts') isActive = isLayerVisible(map, 'wpc-fronts-solid');
         else if (layer === 'wpc-qpf') {
             const qpfId = item.getAttribute('data-qpf');
@@ -5147,6 +5419,28 @@ function initProductSidebar() {
                 if (isActive) await fetchWPCIsobars(true);
                 map.setLayoutProperty('wpc-isobars-line', 'visibility', isActive ? 'visible' : 'none');
                 map.setLayoutProperty('wpc-isobars-label', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── METAR-Contoured Products (Isobars 2mb, Isotherms, Isodrosotherms) ───
+            if (layer === 'sfc-isobars-2mb' || layer === 'sfc-isotherms' || layer === 'sfc-isodrosotherms') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) {
+                    // Ensure METARs are loaded first
+                    if (!metarsLoaded) {
+                        addLiveLog('CONTOUR: Fetching METARs first...', '#ffaa00');
+                        await fetchMETARs();
+                    }
+                    const config = {
+                        'sfc-isobars-2mb':    { field: 'mslp', interval: 2, label: 'ISOBARS 2mb' },
+                        'sfc-isotherms':      { field: 'tmpf', interval: 2, label: 'ISOTHERMS' },
+                        'sfc-isodrosotherms': { field: 'dwpf', interval: 2, label: 'ISODROSOTHERMS' }
+                    }[layer];
+                    renderContourProduct(layer, config.field, config.interval, config.label);
+                }
+                map.setLayoutProperty(`${layer}-line`, 'visibility', isActive ? 'visible' : 'none');
+                map.setLayoutProperty(`${layer}-label`, 'visibility', isActive ? 'visible' : 'none');
                 updateSidebarToActivePane();
                 return;
             }
@@ -6004,6 +6298,9 @@ function clearPane(map, paneId) {
         'airnow-aqi-layer', 'firms-fires-layer',
         'metars-temp', 'metars-dewp', 'metars-press', 'metars-id', 'metars-city', 'metars-barb',
         'wpc-isobars-line', 'wpc-isobars-label',
+        'sfc-isobars-2mb-line', 'sfc-isobars-2mb-label',
+        'sfc-isotherms-line', 'sfc-isotherms-label',
+        'sfc-isodrosotherms-line', 'sfc-isodrosotherms-label',
         'wpc-fronts-solid', 'wpc-fronts-stnry', 'wpc-fronts-trof', 'wpc-fronts-pips',
         'wpc-hl-letter', 'wpc-hl-pressure',
         'wpc-qpf-layer',
