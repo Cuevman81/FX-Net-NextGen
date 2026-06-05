@@ -2963,9 +2963,12 @@ function generateMetarContours(field, interval) {
                     return;
                 }
             }
-            // Filter obviously bad pressure values
-            if (val < 950 || val > 1070) return;
+            if (val < 950 || val > 1070) return;  // Bad pressure values
         }
+
+        // Filter obviously bad temperature/dewpoint values
+        if (field === 'tmpf' && (val < -60 || val > 140)) return;
+        if (field === 'dwpf' && (val < -60 || val > 100)) return;
 
         if (val != null && !isNaN(val) && coords) {
             pts.push({ lon: coords[0], lat: coords[1], val });
@@ -2973,10 +2976,10 @@ function generateMetarContours(field, interval) {
     });
     if (pts.length < 10) return { type: 'FeatureCollection', features: [] };
 
-    // For pressure: remove statistical outliers (> 3 sigma from mean)
-    if (field === 'mslp') {
-        const mean = pts.reduce((s, p) => s + p.val, 0) / pts.length;
-        const std = Math.sqrt(pts.reduce((s, p) => s + (p.val - mean) ** 2, 0) / pts.length);
+    // Remove statistical outliers (> 3 sigma from mean) for all fields
+    const mean = pts.reduce((s, p) => s + p.val, 0) / pts.length;
+    const std = Math.sqrt(pts.reduce((s, p) => s + (p.val - mean) ** 2, 0) / pts.length);
+    if (std > 0) {
         const filtered = pts.filter(p => Math.abs(p.val - mean) <= 3 * std);
         pts.length = 0;
         pts.push(...filtered);
@@ -2991,9 +2994,7 @@ function generateMetarContours(field, interval) {
     let grid = idwGrid(pts, bounds, cols, rows, 1.5, 8, 3);
 
     // Smooth the grid to remove point-source artifacts (bullseye patterns)
-    // More passes for pressure (very smooth) vs temp (moderate)
-    const smoothPasses = field === 'mslp' ? 4 : 3;
-    grid = smoothGrid(grid, cols, rows, smoothPasses);
+    grid = smoothGrid(grid, cols, rows, 4);
 
     // Determine contour levels from data range, snapped to interval
     let minV = Infinity, maxV = -Infinity;
