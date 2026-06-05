@@ -2138,20 +2138,16 @@ function initFrontalPipIcons(map) {
     // NHC Storm point click
     map.on('click', 'nhc-track-pts', e => {
         if (!e.features || !e.features[0]) return;
-        const p = e.features[0].properties;
+        const feat = e.features[0];
+        const p = feat.properties;
         const name = p.stormname || p.STORMNAME || 'Unknown';
         const wind = p.maxwind || p.MAXWIND || 0;
-        const rawGust = p.gust || p.GUST || 0;
-        const gust = (rawGust && rawGust < 9990) ? rawGust : 0;
+        const gust = p.gust || p.GUST || 0;
         const rawMslp = p.MSLP || p.mslp || 9999;
-        const mslp = (rawMslp && rawMslp < 9990) ? `${Math.round(rawMslp)} mb` : 'N/A';
-        const rawDir = p.tcdir != null ? p.tcdir : (p.TCDIR != null ? p.TCDIR : 9999);
-        const rawSpd = p.tcspd != null ? p.tcspd : (p.TCSPD != null ? p.TCSPD : 9999);
-        const movement = (rawDir < 9990 && rawSpd < 9990) ? `${Math.round(rawDir)}° at ${Math.round(rawSpd)} kt` : 'N/A';
+        const mslp = (rawMslp && rawMslp < 9990) ? `${Math.round(rawMslp)} mb` : null;
         const tau = p.tau || p.TAU || 0;
         const tauLabel = tau == 0 ? 'Current Position' : `Forecast +${Math.round(tau)}h`;
         const stormType = p.stormtype || p.STORMTYPE || '';
-        // Use API classification, fall back to wind-based
         const cat = stormType === 'HU' ? (wind >= 137 ? 'CAT 5' : wind >= 113 ? 'CAT 4' : wind >= 96 ? 'CAT 3' : wind >= 83 ? 'CAT 2' : 'CAT 1') :
                     stormType === 'TS' ? 'Tropical Storm' :
                     stormType === 'TD' ? 'Tropical Depression' :
@@ -2161,6 +2157,45 @@ function initFrontalPipIcons(map) {
                     stormType === 'LO' ? 'Remnant Low' :
                     stormType === 'DB' ? 'Disturbance' :
                     wind >= 64 ? 'Hurricane' : wind >= 34 ? 'Tropical Storm' : 'Tropical Depression';
+
+        // Movement: use API values if real, otherwise compute from track points
+        const rawDir = p.tcdir != null ? p.tcdir : 9999;
+        const rawSpd = p.tcspd != null ? p.tcspd : 9999;
+        let movement = '';
+        if (rawDir < 9990 && rawSpd < 9990) {
+            movement = `${Math.round(rawDir)}° at ${Math.round(rawSpd)} kt`;
+        } else {
+            // Compute from consecutive forecast positions
+            try {
+                const src = map.getSource('nhc-storms');
+                if (src && src._data) {
+                    const stormId = p.binnumber || p.BINNUMBER || '';
+                    const pts = (src._data.features || [])
+                        .filter(f => f.properties.layerType === 'point' && (f.properties.binnumber || f.properties.BINNUMBER) === stormId)
+                        .sort((a, b) => (a.properties.tau || 0) - (b.properties.tau || 0));
+                    const idx = pts.findIndex(f => (f.properties.tau || 0) == tau);
+                    if (idx > 0) {
+                        const prev = pts[idx - 1].geometry.coordinates;
+                        const curr = feat.geometry.coordinates;
+                        const prevTau = pts[idx - 1].properties.tau || 0;
+                        const dLon = (curr[0] - prev[0]) * Math.PI / 180;
+                        const lat1 = prev[1] * Math.PI / 180, lat2 = curr[1] * Math.PI / 180;
+                        const y = Math.sin(dLon) * Math.cos(lat2);
+                        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+                        let bearing = Math.atan2(y, x) * 180 / Math.PI;
+                        if (bearing < 0) bearing += 360;
+                        // Distance in nautical miles (1° lat ≈ 60 nm)
+                        const dLatNm = (curr[1] - prev[1]) * 60;
+                        const dLonNm = (curr[0] - prev[0]) * 60 * Math.cos((lat1 + lat2) / 2);
+                        const distNm = Math.sqrt(dLatNm * dLatNm + dLonNm * dLonNm);
+                        const hours = tau - prevTau;
+                        const speed = hours > 0 ? distNm / hours : 0;
+                        movement = `${Math.round(bearing)}° at ${Math.round(speed)} kt`;
+                    }
+                }
+            } catch (err) { /* silently fall back */ }
+        }
+
         const validTime = p.fldatelbl || p.FLDATELBL || p.datelbl || p.DATELBL || '';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:300px;">
             <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:2px;">${name}</div>
@@ -2168,8 +2203,8 @@ function initFrontalPipIcons(map) {
             <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;">
                 <span style="color:#888;">Classification:</span><span style="color:#ffcc00;">${cat}</span>
                 <span style="color:#888;">Max Wind:</span><span>${wind} kt${gust > 0 ? ' (gusts ' + Math.round(gust) + ' kt)' : ''}</span>
-                <span style="color:#888;">Min Pressure:</span><span>${mslp}</span>
-                <span style="color:#888;">Movement:</span><span>${movement}</span>
+                ${mslp ? `<span style="color:#888;">Min Pressure:</span><span>${mslp}</span>` : ''}
+                ${movement ? `<span style="color:#888;">Movement:</span><span>${movement}</span>` : ''}
                 <span style="color:#888;">Advisory:</span><span>#${p.ADVISNUM || p.advisnum || 'N/A'}</span>
             </div>
         </div>`;
