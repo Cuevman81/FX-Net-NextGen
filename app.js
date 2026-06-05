@@ -3655,8 +3655,8 @@ async function fetchRiverGauges(show, prefetch) {
         const now = Date.now();
         let gauges;
 
-        // Use cache if fresh (15 min TTL)
-        if (riverGaugeCache && (now - riverGaugeCacheTime) < RIVER_CACHE_TTL) {
+        // Use cache if fresh (15 min TTL) and non-empty
+        if (riverGaugeCache && riverGaugeCache.length > 0 && (now - riverGaugeCacheTime) < RIVER_CACHE_TTL) {
             gauges = riverGaugeCache;
             addLiveLog(`RIVERS: Using cached data (${gauges.length} gauges)`, '#888');
         } else {
