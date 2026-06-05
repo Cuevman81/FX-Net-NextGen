@@ -1974,11 +1974,14 @@ function initFrontalPipIcons(map) {
         paint: { 'text-color': '#00ff88', 'text-halo-color': '#000', 'text-halo-width': 1 }
     });
 
-    // Altimeter/Pressure (cyan, upper-right)
+    // Altimeter/Pressure in millibars (cyan, upper-right)
+    // Convert altimeter (inHg) to mb: alti × 33.8639
     map.addLayer({
         id: 'metars-press', type: 'symbol', source: 'metars', minzoom: 7,
         layout: {
-            'text-field': ['case', ['has', 'alti'], ['to-string', ['round', ['*', 100, ['get', 'alti']]]], ''],
+            'text-field': ['case', ['has', 'alti'],
+                ['concat', ['to-string', ['round', ['*', 33.8639, ['get', 'alti']]]], 'mb'],
+                ''],
             'text-font': ['Noto Sans Regular'], 'text-size': 9,
             'text-offset': [1.8, -0.8], visibility: 'none', 'text-allow-overlap': true
         },
@@ -2046,7 +2049,7 @@ function initFrontalPipIcons(map) {
                 <span style="color:#888;">RH:</span><span>${p.relh != null ? Math.round(p.relh) + '%' : 'M'}</span>
                 <span style="color:#888;">Wind:</span><span>${windDir} ${windSpd}${gustTxt}</span>
                 <span style="color:#888;">Visibility:</span><span>${p.vsby != null ? p.vsby + ' mi' : 'M'}</span>
-                <span style="color:#888;">Altimeter:</span><span>${p.alti != null ? p.alti.toFixed(2) + ' inHg' : 'M'}</span>
+                <span style="color:#888;">Altimeter:</span><span>${p.alti != null ? p.alti.toFixed(2) + ' inHg (' + Math.round(p.alti * 33.8639) + ' mb)' : 'M'}</span>
                 <span style="color:#888;">Sky:</span><span>${sky}</span>
                 ${wx ? `<span style="color:#888;">Wx:</span><span style="color:#ffb300;">${wx}</span>` : ''}
                 ${p.feel != null ? `<span style="color:#888;">Feels Like:</span><span>${Math.round(p.feel)}°F</span>` : ''}
