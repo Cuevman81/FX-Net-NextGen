@@ -77,7 +77,10 @@ const HEALTH_THRESHOLDS = {
     riverGauges:  { label: 'River Gauges',   thresholdMs: 30 * 60 * 1000 },
     mrmsEchotops: { label: 'MRMS Echo Tops', thresholdMs: 30 * 60 * 1000 },
     mrmsQpe:      { label: 'MRMS QPE',       thresholdMs: 30 * 60 * 1000 },
-    solar:        { label: 'Solar/Terminator', thresholdMs: 10 * 60 * 1000 }
+    solar:        { label: 'Solar/Terminator', thresholdMs: 10 * 60 * 1000 },
+    sfcIsobars2mb:    { label: 'Isobars 2mb',       thresholdMs: 15 * 60 * 1000 },
+    sfcIsotherms:     { label: 'Isotherms',          thresholdMs: 15 * 60 * 1000 },
+    sfcIsodrosotherms:{ label: 'Isodrosotherms',     thresholdMs: 15 * 60 * 1000 }
 };
 
 // ═══ US STATE CODES (all 50 for METAR fetch) ═══
@@ -3103,6 +3106,14 @@ function renderContourProduct(sourceId, field, interval, label) {
     Object.values(maps).forEach(m => {
         if (m.getSource(sourceId)) m.getSource(sourceId).setData(geojson);
     });
+
+    // Update data health timestamp
+    const healthMap = {
+        'sfc-isobars-2mb': 'sfcIsobars2mb',
+        'sfc-isotherms': 'sfcIsotherms',
+        'sfc-isodrosotherms': 'sfcIsodrosotherms'
+    };
+    if (healthMap[sourceId]) updateHealth(healthMap[sourceId]);
 
     addLiveLog(`${label}: ${geojson.features.length} contour lines generated`, '#00ff88');
 }
@@ -6571,7 +6582,7 @@ function startAutoRefresh() {
     }, 60 * 1000);
 
     // 2. High Frequency (5 minutes)
-    setInterval(() => {
+    setInterval(async () => {
         if (isPlaying) return;
         
         // Radar refresh — national mosaic
@@ -6602,9 +6613,21 @@ function startAutoRefresh() {
             addLiveLog('AUTO: Site radar tiles refreshed', '#444');
         }
         
-        // METARs refresh
+        // METARs refresh + re-generate any visible contour products
         const metarsActive = Object.values(maps).some(m => isLayerVisible(m, 'metars-temp') || isLayerVisible(m, 'metars-barb'));
-        if (metarsActive) fetchMETARs();
+        const isobars2mbActive = Object.values(maps).some(m => isLayerVisible(m, 'sfc-isobars-2mb-line'));
+        const isothermsActive = Object.values(maps).some(m => isLayerVisible(m, 'sfc-isotherms-line'));
+        const isodrosActive = Object.values(maps).some(m => isLayerVisible(m, 'sfc-isodrosotherms-line'));
+        const anyContourActive = isobars2mbActive || isothermsActive || isodrosActive;
+
+        if (metarsActive || anyContourActive) {
+            await fetchMETARs();
+            // Re-generate contours from fresh METAR data
+            if (isobars2mbActive) renderContourProduct('sfc-isobars-2mb', 'mslp', 2, 'ISOBARS 2mb');
+            if (isothermsActive) renderContourProduct('sfc-isotherms', 'tmpf', 2, 'ISOTHERMS');
+            if (isodrosActive) renderContourProduct('sfc-isodrosotherms', 'dwpf', 2, 'ISODROSOTHERMS');
+            if (anyContourActive) addLiveLog('AUTO: Contour products refreshed from new METARs', '#444');
+        }
 
         // Solar terminator refresh
         const terminatorActive = Object.values(maps).some(m => isLayerVisible(m, 'solar-night-fill'));
