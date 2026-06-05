@@ -2732,39 +2732,95 @@ async function fetchCWALabels() {
 
 /**
  * Inverse Distance Weighting interpolation from scattered points to a regular grid.
+ * Uses a spatial index (binning) for fast neighbour lookup.
  * @param {Array} pts - [{lon, lat, val}] observation points
  * @param {Object} bounds - {west, east, south, north}
  * @param {number} cols - grid columns
  * @param {number} rows - grid rows
- * @param {number} power - IDW exponent (2 = standard)
+ * @param {number} power - IDW exponent (1.5 = smooth blend, 2 = standard, 3 = sharp)
  * @param {number} searchRadius - max degrees to search for neighbours
+ * @param {number} minNeighbours - require at least N neighbours or mark NaN
  * @returns {Float64Array} grid[row * cols + col]
  */
-function idwGrid(pts, bounds, cols, rows, power = 2, searchRadius = 5) {
+function idwGrid(pts, bounds, cols, rows, power = 1.5, searchRadius = 8, minNeighbours = 3) {
     const grid = new Float64Array(rows * cols);
     const dLon = (bounds.east - bounds.west) / cols;
     const dLat = (bounds.north - bounds.south) / rows;
+
+    // Build spatial bins for faster lookup (~2° bins)
+    const binSize = 2.0;
+    const bins = {};
+    pts.forEach((p, i) => {
+        const bx = Math.floor(p.lon / binSize);
+        const by = Math.floor(p.lat / binSize);
+        const key = `${bx},${by}`;
+        if (!bins[key]) bins[key] = [];
+        bins[key].push(i);
+    });
+
+    const searchBins = Math.ceil(searchRadius / binSize);
 
     for (let r = 0; r < rows; r++) {
         const lat = bounds.south + (r + 0.5) * dLat;
         for (let c = 0; c < cols; c++) {
             const lon = bounds.west + (c + 0.5) * dLon;
-            let wSum = 0, vSum = 0, exact = null;
-            for (let i = 0; i < pts.length; i++) {
-                const dx = (pts[i].lon - lon) * Math.cos(lat * Math.PI / 180);
-                const dy = pts[i].lat - lat;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < 1e-10) { exact = pts[i].val; break; }
-                const d = Math.sqrt(d2);
-                if (d > searchRadius) continue;
-                const w = 1 / Math.pow(d, power);
-                wSum += w;
-                vSum += w * pts[i].val;
+            const cosLat = Math.cos(lat * Math.PI / 180);
+            let wSum = 0, vSum = 0, nCount = 0;
+
+            const cbx = Math.floor(lon / binSize);
+            const cby = Math.floor(lat / binSize);
+
+            for (let by = cby - searchBins; by <= cby + searchBins; by++) {
+                for (let bx = cbx - searchBins; bx <= cbx + searchBins; bx++) {
+                    const bin = bins[`${bx},${by}`];
+                    if (!bin) continue;
+                    for (let k = 0; k < bin.length; k++) {
+                        const p = pts[bin[k]];
+                        const dx = (p.lon - lon) * cosLat;
+                        const dy = p.lat - lat;
+                        const d = Math.sqrt(dx * dx + dy * dy);
+                        if (d > searchRadius) continue;
+                        if (d < 0.01) { // Very close — near-exact match
+                            wSum += 10000; vSum += 10000 * p.val; nCount++; continue;
+                        }
+                        const w = 1 / Math.pow(d, power);
+                        wSum += w;
+                        vSum += w * p.val;
+                        nCount++;
+                    }
+                }
             }
-            grid[r * cols + c] = exact !== null ? exact : (wSum > 0 ? vSum / wSum : NaN);
+            grid[r * cols + c] = (nCount >= minNeighbours && wSum > 0) ? vSum / wSum : NaN;
         }
     }
     return grid;
+}
+
+/**
+ * Smooth a grid using a simple 3×3 box-average filter.
+ * Repeated passes produce increasingly smooth contours.
+ */
+function smoothGrid(grid, cols, rows, passes = 2) {
+    let current = grid;
+    for (let p = 0; p < passes; p++) {
+        const next = new Float64Array(rows * cols);
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                let sum = 0, cnt = 0;
+                for (let dr = -1; dr <= 1; dr++) {
+                    for (let dc = -1; dc <= 1; dc++) {
+                        const rr = r + dr, cc = c + dc;
+                        if (rr < 0 || rr >= rows || cc < 0 || cc >= cols) continue;
+                        const v = current[rr * cols + cc];
+                        if (!isNaN(v)) { sum += v; cnt++; }
+                    }
+                }
+                next[r * cols + c] = cnt >= 3 ? sum / cnt : NaN;
+            }
+        }
+        current = next;
+    }
+    return current;
 }
 
 /**
@@ -2893,21 +2949,51 @@ function generateMetarContours(field, interval) {
     // Collect valid observations
     const pts = [];
     metarGeoJSON.features.forEach(f => {
-        const val = f.properties?.[field];
+        const p = f.properties;
+        let val = p?.[field];
         const coords = f.geometry?.coordinates;
+
+        // For pressure: prefer mslp, fall back to alti converted to mb
+        if (field === 'mslp') {
+            if (val == null || isNaN(val)) {
+                // Convert altimeter (inHg) to mb
+                if (p?.alti != null && !isNaN(p.alti)) {
+                    val = p.alti * 33.8639;
+                } else {
+                    return;
+                }
+            }
+            // Filter obviously bad pressure values
+            if (val < 950 || val > 1070) return;
+        }
+
         if (val != null && !isNaN(val) && coords) {
             pts.push({ lon: coords[0], lat: coords[1], val });
         }
     });
     if (pts.length < 10) return { type: 'FeatureCollection', features: [] };
 
-    // Grid bounds: CONUS
-    const bounds = { west: -130, east: -60, south: 23, north: 50 };
-    const cols = 140;  // ~0.5° resolution
-    const rows = 54;
+    // For pressure: remove statistical outliers (> 3 sigma from mean)
+    if (field === 'mslp') {
+        const mean = pts.reduce((s, p) => s + p.val, 0) / pts.length;
+        const std = Math.sqrt(pts.reduce((s, p) => s + (p.val - mean) ** 2, 0) / pts.length);
+        const filtered = pts.filter(p => Math.abs(p.val - mean) <= 3 * std);
+        pts.length = 0;
+        pts.push(...filtered);
+    }
 
-    // Generate IDW grid
-    const grid = idwGrid(pts, bounds, cols, rows, 2, 6);
+    // Grid bounds: CONUS — higher resolution for smoother contours
+    const bounds = { west: -130, east: -60, south: 23, north: 50 };
+    const cols = 280;  // ~0.25° resolution
+    const rows = 108;
+
+    // Generate IDW grid (power=1.5 for smoother blending, 8° search radius)
+    let grid = idwGrid(pts, bounds, cols, rows, 1.5, 8, 3);
+
+    // Smooth the grid to remove point-source artifacts (bullseye patterns)
+    // More passes for pressure (very smooth) vs temp (moderate)
+    const smoothPasses = field === 'mslp' ? 4 : 3;
+    grid = smoothGrid(grid, cols, rows, smoothPasses);
 
     // Determine contour levels from data range, snapped to interval
     let minV = Infinity, maxV = -Infinity;
@@ -2927,10 +3013,14 @@ function generateMetarContours(field, interval) {
     // Trace contours
     const geojson = traceContours(grid, cols, rows, bounds, levels);
 
-    // Round display values
-    geojson.features.forEach(f => {
-        f.properties.value = Math.round(f.properties.value);
-    });
+    // Smooth contour lines and filter short fragments
+    geojson.features = geojson.features
+        .filter(f => f.geometry.coordinates.length >= 5)  // Drop tiny fragments
+        .map(f => {
+            f.geometry.coordinates = smoothLineString(f.geometry.coordinates, 2);
+            f.properties.value = Math.round(f.properties.value);
+            return f;
+        });
 
     return geojson;
 }
