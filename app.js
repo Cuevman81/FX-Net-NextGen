@@ -2141,9 +2141,13 @@ function initFrontalPipIcons(map) {
         const p = e.features[0].properties;
         const name = p.stormname || p.STORMNAME || 'Unknown';
         const wind = p.maxwind || p.MAXWIND || 0;
-        const gust = p.gust || p.GUST || 0;
+        const rawGust = p.gust || p.GUST || 0;
+        const gust = (rawGust && rawGust < 9990) ? rawGust : 0;
         const rawMslp = p.MSLP || p.mslp || 9999;
         const mslp = (rawMslp && rawMslp < 9990) ? `${Math.round(rawMslp)} mb` : 'N/A';
+        const rawDir = p.tcdir != null ? p.tcdir : (p.TCDIR != null ? p.TCDIR : 9999);
+        const rawSpd = p.tcspd != null ? p.tcspd : (p.TCSPD != null ? p.TCSPD : 9999);
+        const movement = (rawDir < 9990 && rawSpd < 9990) ? `${Math.round(rawDir)}° at ${Math.round(rawSpd)} kt` : 'N/A';
         const tau = p.tau || p.TAU || 0;
         const tauLabel = tau == 0 ? 'Current Position' : `Forecast +${Math.round(tau)}h`;
         const stormType = p.stormtype || p.STORMTYPE || '';
@@ -2165,7 +2169,7 @@ function initFrontalPipIcons(map) {
                 <span style="color:#888;">Classification:</span><span style="color:#ffcc00;">${cat}</span>
                 <span style="color:#888;">Max Wind:</span><span>${wind} kt${gust > 0 ? ' (gusts ' + Math.round(gust) + ' kt)' : ''}</span>
                 <span style="color:#888;">Min Pressure:</span><span>${mslp}</span>
-                <span style="color:#888;">Movement:</span><span>${p.tcdir != null ? Math.round(p.tcdir) + '° at ' + Math.round(p.tcspd || 0) + ' kt' : 'N/A'}</span>
+                <span style="color:#888;">Movement:</span><span>${movement}</span>
                 <span style="color:#888;">Advisory:</span><span>#${p.ADVISNUM || p.advisnum || 'N/A'}</span>
             </div>
         </div>`;
