@@ -6,16 +6,8 @@
 .claude/
 .vercel/
 
-# Alternate AI-built variant kept locally as an archive (not deployed)
-FXNet Gemini/
-
-# Redundant working-copy duplicate of the app (canonical source now lives at repo root)
-FXNet Claude/
-
 # Local dev scratch / test artifacts
 *.log
-fxnet_diagnostic_log.txt
-aqi_test.json
-test_aqi.js
+*_test.json
+test_*.js
 wms_caps.xml
-TEST_UPDATE.txt
