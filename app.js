@@ -4116,6 +4116,7 @@ async function checkNewWarnings() {
                 for (let i = newItems.length - 1; i >= 0; i--) frag.appendChild(newItems[i]);
                 list.insertBefore(frag, list.firstChild);
                 while (list.children.length > 1000) list.lastChild.remove();
+                rebuildWfoFilter(); // surface any newly-seen offices in the dropdown
                 applyWatchdogFilter();
             }
         }
@@ -4184,7 +4185,7 @@ const ALL_WFOS = [
     'Flagstaff','Gaylord','Glasgow','Goodland','Grand Forks','Grand Junction','Grand Rapids',
     'Gray','Great Falls','Green Bay','Greenville','Guam','Hanford','Hastings','Honolulu',
     'Houston','Huntsville','Indianapolis','Jackson','Jacksonville','Juneau','Kansas City',
-    'Key West','Knoxville','La Crosse','Lake Charles','Las Vegas','Little Rock',
+    'Key West','Knoxville','La Crosse','Lake Charles','Las Vegas','Lincoln','Little Rock',
     'Los Angeles','Louisville','Lubbock','Marquette','Medford','Melbourne','Memphis',
     'Miami','Midland','Milwaukee','Minneapolis','Missoula','Mobile',
     'Morristown','Nashville','New Orleans','New York City','Norman','North Platte',
@@ -4332,6 +4333,42 @@ function applyWatchdogFilter() {
         const noRes = list.querySelector('.filter-no-results');
         if (noRes) noRes.remove();
     }
+}
+
+// Rebuild the WFO filter dropdown from the COMPLETE static roster PLUS the actual office
+// names present in live alerts (item.dataset.wfo). The dynamic part guarantees every office
+// currently issuing alerts is selectable with an exact-matching name — including offices the
+// static roster lacks or mis-labels (e.g. ILX = "Lincoln"). Dedup case-insensitively; preserve
+// the current selection; skip the DOM rebuild when the option set is unchanged.
+function rebuildWfoFilter() {
+    const sel = document.getElementById('watchdog-filter-wfo');
+    if (!sel) return;
+    const seen = new Map(); // lowercase key -> display value
+    ALL_WFOS.forEach(w => { const k = w.toLowerCase(); if (!seen.has(k)) seen.set(k, w); });
+    const list = document.getElementById('latest-warnings-list');
+    if (list) {
+        for (const item of list.children) {
+            if (!item.classList || !item.classList.contains('warning-item')) continue;
+            const w = (item.dataset.wfo || '').trim();
+            if (w) { const k = w.toLowerCase(); if (!seen.has(k)) seen.set(k, w); }
+        }
+    }
+    const wfos = [...seen.values()].sort((a, b) => a.localeCompare(b));
+    const sig = wfos.join('|');
+    if (sel.dataset.sig === sig) return; // no change → avoid churn
+    sel.dataset.sig = sig;
+    const current = sel.value;
+    // Build options via DOM (not innerHTML) so feed-derived names can't inject markup
+    sel.replaceChildren();
+    const allOpt = document.createElement('option');
+    allOpt.value = 'all'; allOpt.textContent = 'All WFOs';
+    sel.appendChild(allOpt);
+    wfos.forEach(w => {
+        const opt = document.createElement('option');
+        opt.value = w; opt.textContent = w;
+        sel.appendChild(opt);
+    });
+    sel.value = (current === 'all' || wfos.includes(current)) ? current : 'all';
 }
 
 
@@ -5394,11 +5431,7 @@ function initProductSidebar() {
         });
     }
     if (wfoFilter) {
-        ALL_WFOS.forEach(w => {
-            const opt = document.createElement('option');
-            opt.value = w; opt.textContent = w;
-            wfoFilter.appendChild(opt);
-        });
+        rebuildWfoFilter(); // seed from static roster; live offices merged in as alerts arrive
         wfoFilter.addEventListener('change', () => {
             if (stateFilter) stateFilter.value = 'all';
             applyWatchdogFilter();
