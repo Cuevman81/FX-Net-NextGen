@@ -23,7 +23,9 @@ const USE_SUPER_RES_RADAR = false;
 
 let animLastRi = -1;
 let preAnimVisibility = {}; // Stores layer visibility before loop starts
-let paneRadarSites = { '1': 'DGX', '2': 'DGX', '3': 'DGX', '4': 'DGX', '5': 'DGX', '6': 'DGX', '7': 'DGX', '8': 'DGX' };
+// Default radar mode = National Mosaic so "Reflectivity" shows CONUS, not a distant single site.
+// (A real site code here switches that pane to single-site products via the SITE selector.)
+let paneRadarSites = { '1': 'nexrad-n0q-900913', '2': 'nexrad-n0q-900913', '3': 'nexrad-n0q-900913', '4': 'nexrad-n0q-900913', '5': 'nexrad-n0q-900913', '6': 'nexrad-n0q-900913', '7': 'nexrad-n0q-900913', '8': 'nexrad-n0q-900913' };
 let paneRadarProducts = { '1': 'sr_bref', '2': 'sr_bref', '3': 'sr_bref', '4': 'sr_bref', '5': 'sr_bref', '6': 'sr_bref', '7': 'sr_bref', '8': 'sr_bref' };
 let activeGoesChannel = null; // Convenience: always mirrors paneGoesChannels[activePaneId]
 let paneGoesChannels = { '1': null, '2': null, '3': null, '4': null, '5': null, '6': null, '7': null, '8': null };
@@ -57,6 +59,7 @@ const healthTrackers = {};
 const HEALTH_THRESHOLDS = {
     radar:    { label: 'NEXRAD Radar',    thresholdMs: 6 * 60 * 1000 },
     sat:      { label: 'GOES Satellite',  thresholdMs: 10 * 60 * 1000 },
+    lightning:{ label: 'NLDN Lightning',  thresholdMs: 30 * 60 * 1000 },
     metar:    { label: 'METAR Obs',       thresholdMs: 30 * 60 * 1000 },
     warnings: { label: 'NWS Warnings',    thresholdMs: 15 * 60 * 1000 },
     watches:  { label: 'NWS Watches',     thresholdMs: 15 * 60 * 1000 },
@@ -252,6 +255,19 @@ function snapToNowCoastTime(date) {
 
 function nationalRadarUrl() {
     return 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q/{z}/{x}/{y}.png';
+}
+
+// ─── Lightning — NOAA nowCOAST NLDN (cloud-to-ground strike density) ───
+// Keyless NOAA WMS; supports a TIME dimension (omit for latest). Chosen over GOES
+// GLM because the only GLM tiles (SSEC RealEarth) watermark any full-viewport map:
+// even a registered access key caps cumulative adjacent tiles at 2048px (~8 tiles),
+// far below a normal map viewport — removable only via RealEarth Plus ($500/mo).
+function lightningUrl(isoTimeStr) {
+    let u = 'https://nowcoast.noaa.gov/geoserver/lightning_detection/wms?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap'
+        + '&LAYERS=ldn_lightning_strike_density&FORMAT=image/png&TRANSPARENT=true&STYLES=&SRS=EPSG:3857'
+        + '&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}';
+    if (isoTimeStr) u += `&TIME=${isoTimeStr}`;
+    return u;
 }
 
 function iemRadarAnimUrl(layerName) {
@@ -726,6 +742,14 @@ function setupMapLayers(map, paneId) {
     });
     map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.8 } });
 
+    // ─── Layer 3b: Lightning — NLDN Cloud-to-Ground Strike Density (NOAA nowCOAST) ───
+    map.addSource('lightning', {
+        type: 'raster',
+        tiles: [lightningUrl()],
+        tileSize: 256
+    });
+    map.addLayer({ id: 'lightning-layer', type: 'raster', source: 'lightning', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85, 'raster-fade-duration': 150 } });
+
     // ─── Layer 4: National Radar (IEM mosaic) ───
     map.addSource('radar', {
         type: 'raster',
@@ -735,7 +759,10 @@ function setupMapLayers(map, paneId) {
     map.addLayer({ id: 'radar-layer', type: 'raster', source: 'radar', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.9, 'raster-resampling': 'linear', 'raster-fade-duration': 150 } });
 
     // ─── Layer 4b: Site-Specific Radar (NCEP OpenGeo WMS) ───
-    const defaultSite = (paneRadarSites[paneId] || 'dgx').toLowerCase();
+    // Init hidden site sources with a valid placeholder when the pane is in National mode
+    // (the national pseudo-site isn't a real OpenGeo workspace). Real site set on selection.
+    const paneSite = paneRadarSites[paneId] || '';
+    const defaultSite = (paneSite && !paneSite.includes('nexrad') ? paneSite : 'dgx').toLowerCase();
     map.addSource('site-bref', {
         type: 'raster',
         tiles: [siteRadarUrl(defaultSite, 'sr_bref')],
@@ -4060,7 +4087,10 @@ async function checkNewWarnings() {
         // On first load, keep up to 1000 alerts so all active nationwide alerts are available for filtering
         const toProcess = isFirst ? newAlerts.slice(-1000) : newAlerts;
 
-        // Process forward so that when we prepend, the absolute newest alert ends up exactly on top
+        // Build all new ticker nodes first (toProcess is oldest→newest), then insert as ONE
+        // batch and run applyWatchdogFilter a single time — avoids per-alert reflow/filter
+        // churn that made bulk updates (esp. the ~1000-alert first load) janky.
+        const newItems = [];
         for (let i = 0; i < toProcess.length; i++) {
             const f = toProcess[i];
             const event = f.properties?.event;
@@ -4069,11 +4099,24 @@ async function checkNewWarnings() {
             const threat = f.properties?.damageThreat || '';
             const isEmergency = f.properties?.isEmergency || false;
             const isPDS = f.properties?.isPDS || false;
-            addWarningToTicker(event, area, severity, f.properties);
+            newItems.push(buildWarningItem(event, area, severity, f.properties));
             if (!isFirst) {
                 const threatTag = isEmergency ? ' ⚠ EMERGENCY' : threat === 'Catastrophic' || threat === 'Destructive' ? ` ⚠ ${threat.toUpperCase()}` : threat === 'Considerable' ? ' ⚠ CONSIDERABLE' : isPDS ? ' ⚠ PDS' : '';
                 const color = isEmergency || threat === 'Catastrophic' ? '#ff0000' : threat === 'Considerable' || isPDS ? '#ff6600' : severity === 'Extreme' ? '#ff0000' : severity === 'Severe' ? '#ff3333' : '#ffb300';
                 addLiveLog(`WATCHDOG: NEW ${event}${threatTag} → ${(area || '').substring(0, 80)}`, color);
+            }
+        }
+        if (newItems.length > 0) {
+            const list = document.getElementById('latest-warnings-list');
+            if (list) {
+                const placeholder = list.querySelector('.warning-placeholder');
+                if (placeholder) placeholder.remove();
+                // Insert newest-on-top: iterate newItems in reverse into a fragment, prepend once
+                const frag = document.createDocumentFragment();
+                for (let i = newItems.length - 1; i >= 0; i--) frag.appendChild(newItems[i]);
+                list.insertBefore(frag, list.firstChild);
+                while (list.children.length > 1000) list.lastChild.remove();
+                applyWatchdogFilter();
             }
         }
         newCount = toProcess.length;
@@ -4154,9 +4197,9 @@ const ALL_WFOS = [
     'Wichita','Wilmington'
 ];
 
-function addWarningToTicker(event, area, severity, props) {
-    const list = document.getElementById('latest-warnings-list');
-    if (!list) return;
+// Builds a single ticker DOM node WITHOUT touching the list — caller batch-inserts.
+// (Avoids per-alert reflow + per-alert applyWatchdogFilter churn on bulk updates.)
+function buildWarningItem(event, area, severity, props) {
     const item = document.createElement('div');
     let type = 'advisory';
     const evt = (event || '').toLowerCase();
@@ -4255,10 +4298,7 @@ function addWarningToTicker(event, area, severity, props) {
             `</div>`;
         panel.style.display = 'flex';
     });
-    if (list.querySelector('.warning-placeholder')) list.innerHTML = '';
-    list.prepend(item);
-    while (list.children.length > 1000) list.lastChild.remove();
-    applyWatchdogFilter();
+    return item;
 }
 
 function applyWatchdogFilter() {
@@ -4733,70 +4773,82 @@ function restoreLiveLayers() {
 // SECTION 12: TIMESTAMPS & LABELS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Enumerate every active product in a pane as {label, color} for the legend stack.
+// Colors mirror each product's map styling so the stack reads at a glance.
+function getPaneLegend(paneId) {
+    const map = maps[paneId];
+    if (!map) return [];
+    const site = (paneRadarSites[paneId] || '').toUpperCase();
+    const ch = paneGoesChannels[paneId];
+    const rows = [];
+    const add = (cond, label, color) => { if (cond) rows.push({ label, color }); };
+
+    // Imagery / base fields
+    add(isLayerVisible(map, 'radar-layer'), 'NATL REFLECTIVITY', '#39ff5a');
+    add(isLayerVisible(map, 'site-bref-layer'), `${site} BREF 0.5°`, '#39ff5a');
+    add(isLayerVisible(map, 'site-bvel-layer'), `${site} VELOCITY 0.5°`, '#5ad1ff');
+    add(isLayerVisible(map, 'site-bdhc-layer'), `${site} HYDROMETEOR CLASS`, '#ff9a3c');
+    add(isLayerVisible(map, 'site-bdsa-layer'), `${site} STORM TOTAL PRECIP`, '#3cff9a');
+    add(isLayerVisible(map, 'site-boha-layer'), `${site} ONE-HOUR PRECIP`, '#3cff9a');
+    add(isLayerVisible(map, 'satellite-layer') && ch !== null, `GOES-E CH${ch} SATELLITE`, '#cfd8e3');
+    add(isLayerVisible(map, 'lightning-layer'), 'NLDN LIGHTNING', '#ffd23c');
+    add(isLayerVisible(map, 'mrms-echotops-layer'), 'MRMS ECHO TOPS', '#9b59ff');
+    add(isLayerVisible(map, 'mrms-qpe-layer'), 'MRMS QPE', '#39ff5a');
+    // Surface / analysis
+    add(isLayerVisible(map, 'metars-temp'), 'METAR OBS', '#39ff5a');
+    add(isLayerVisible(map, 'sfc-isobars-2mb-line'), 'ISOBARS 2mb', '#d0d0d0');
+    add(isLayerVisible(map, 'sfc-isotherms-line'), 'ISOTHERMS 2°F', '#ff4444');
+    add(isLayerVisible(map, 'sfc-isodrosotherms-line'), 'ISODROSOTHERMS 2°F', '#44cc44');
+    add(isLayerVisible(map, 'wpc-isobars-line'), 'WPC ISOBARS 4mb', '#d0d0d0');
+    add(isLayerVisible(map, 'wpc-fronts-solid'), 'WPC FRONTS', '#4488ff');
+    add(isLayerVisible(map, 'wpc-qpf-layer'), 'WPC QPF', '#39ff5a');
+    // Hazards
+    add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d');
+    add(isLayerVisible(map, 'spc-day2-fill'), 'SPC DAY 2 OUTLOOK', '#ff4d4d');
+    add(isLayerVisible(map, 'spc-day3-fill'), 'SPC DAY 3 OUTLOOK', '#ff4d4d');
+    add(isLayerVisible(map, 'spc-md-fill'), 'SPC MESO DISCUSSIONS', '#ff6a00');
+    add(isLayerVisible(map, 'spc-lsr-icons'), 'LOCAL STORM REPORTS', '#ff8c00');
+    add(isLayerVisible(map, 'nws-warnings-only-fill'), 'NWS WARNINGS', '#ff3333');
+    add(isLayerVisible(map, 'nws-watches-only-fill'), 'NWS WATCHES', '#ffaa00');
+    add(isLayerVisible(map, 'nhc-track-pts'), 'NHC STORMS', '#ff3333');
+    add(isLayerVisible(map, 'nhc-outlook-fill'), 'NHC TROPICAL OUTLOOK', '#ffaa00');
+    // Climate / environment
+    add(isLayerVisible(map, 'cpc-temp-layer'), 'CPC TEMP OUTLOOK', '#ff8c69');
+    add(isLayerVisible(map, 'cpc-precip-layer'), 'CPC PRECIP OUTLOOK', '#69b3ff');
+    add(isLayerVisible(map, 'drought-fill'), 'US DROUGHT MONITOR', '#d2a679');
+    add(isLayerVisible(map, 'cpc-drought-layer'), 'CPC DROUGHT OUTLOOK', '#4488ff');
+    add(isLayerVisible(map, 'firms-fires-layer'), 'ACTIVE FIRES', '#ff4500');
+    add(isLayerVisible(map, 'hms-smoke-fill'), 'HMS SMOKE', '#aaaaaa');
+    add(isLayerVisible(map, 'airnow-aqi-layer'), 'AIR QUALITY (AQI)', '#39ff5a');
+    add(isLayerVisible(map, 'river-gauges-layer'), 'RIVER GAUGES', '#5ad1ff');
+    add(isLayerVisible(map, 'solar-night-fill'), 'DAY/NIGHT TERMINATOR', '#8893a3');
+    // Reference overlays
+    add(isLayerVisible(map, 'nws-cwa-layer'), 'NWS CWA BOUNDARIES', '#00e5ff');
+    return rows;
+}
+
 function updatePaneTimestamps(forceLabel = null) {
     Object.keys(maps).forEach(paneId => {
         const el = document.getElementById(`radar-ts-${paneId}`);
         if (!el) return;
 
         if (forceLabel) {
+            el.classList.remove('legend-stack');
             el.textContent = forceLabel;
             return;
         }
 
-        const map = maps[paneId];
-        const site = (paneRadarSites[paneId] || 'DGX').toUpperCase();
-        let label = 'LIVE';
-        if (isLayerVisible(map, 'site-bref-layer')) {
-            label = `${site} BREF | VCP 212 | Tilt 1 (0.5°)`;
-        } else if (isLayerVisible(map, 'site-bvel-layer')) {
-            label = `${site} BVEL | VCP 212 | Tilt 1 (0.5°)`;
-        } else if (isLayerVisible(map, 'site-bdhc-layer')) {
-            label = `${site} BDHC | VCP 212 | Tilt 1 (0.5°)`;
-        } else if (isLayerVisible(map, 'site-bdsa-layer')) {
-            label = `${site} STP (Storm Total Precip)`;
-        } else if (isLayerVisible(map, 'site-boha-layer')) {
-            label = `${site} OHA (One-Hour Accum)`;
-        } else if (isLayerVisible(map, 'radar-layer')) {
-            label = 'NATL RADAR MOSAIC';
-        } else if (isLayerVisible(map, 'satellite-layer')) {
-            label = `GOES-16 CH ${paneGoesChannels[paneId] || 1}`;
+        const rows = getPaneLegend(paneId);
+        if (rows.length === 0) {
+            el.classList.remove('legend-stack');
+            el.textContent = 'LIVE';
+            return;
         }
-
-        el.textContent = label;
+        el.classList.add('legend-stack');
+        el.innerHTML = rows.map(r =>
+            `<span class="legend-row" style="border-left-color:${r.color}">${r.label}</span>`
+        ).join('');
     });
-}
-
-function getActiveProductLabel(paneId) {
-    const map = maps[paneId];
-    if (!map) return 'LIVE';
-
-    const parts = [];
-    
-    // Check Satellite
-    if (isLayerVisible(map, 'satellite-layer') && paneGoesChannels[paneId] !== null) {
-        parts.push(`GOES Ch${paneGoesChannels[paneId]}`);
-    }
-
-    // Check Radar
-    if (isLayerVisible(map, 'radar-layer')) parts.push('Radar REF');
-    else if (isLayerVisible(map, 'site-bref-layer')) parts.push('Site BREF');
-    
-    if (isLayerVisible(map, 'site-bvel-layer')) parts.push('Site BVEL');
-    if (isLayerVisible(map, 'site-bdhc-layer')) parts.push('Site BDHC');
-    if (isLayerVisible(map, 'site-bdsa-layer')) parts.push('Site STP');
-    if (isLayerVisible(map, 'site-boha-layer')) parts.push('Site OHA');
-
-    // Check METARs
-    if (isLayerVisible(map, 'metars-temp') && latestMetarTime) {
-        const localTimeStr = latestMetarTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
-        parts.push(`METAR (${localTimeStr})`);
-    }
-    
-    // Check AQI
-    if (isLayerVisible(map, 'airnow-aqi-layer')) parts.push('AQI');
-
-    if (parts.length === 0) return 'LIVE';
-    return parts.join(' + ') + ' | LIVE';
 }
 
 function refreshTimestampLabel() {
@@ -5250,6 +5302,7 @@ function updateSidebarToActivePane() {
             const ch = parseInt(item.getAttribute('data-channel'));
             isActive = isLayerVisible(map, 'satellite-layer') && paneGoesChannels[activePaneId] === ch;
         }
+        else if (layer === 'lightning') isActive = isLayerVisible(map, 'lightning-layer');
         else if (layer === 'hms-smoke') isActive = isLayerVisible(map, 'hms-smoke-fill');
         else if (layer === 'firms-fires') isActive = isLayerVisible(map, 'firms-fires-layer');
         else if (layer === 'nws-warnings-only') isActive = isLayerVisible(map, 'nws-warnings-only-fill');
@@ -5321,6 +5374,9 @@ function updateSidebarToActivePane() {
         const selProd = prodMapInv[prod] || 'N0Q';
         if (prodSelect.value !== selProd) prodSelect.value = selProd;
     }
+
+    // Keep the per-pane legend stack in sync with whatever is toggled (no-op while looping)
+    refreshTimestampLabel();
 }
 
 function initProductSidebar() {
@@ -5521,6 +5577,16 @@ function initProductSidebar() {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', vis);
                 });
                 if (isActive) fetchMETARs();
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Lightning (NLDN strike density) ───
+            if (layer === 'lightning') {
+                const isActive = !item.classList.contains('active');
+                if (isActive && map.getSource('lightning')) map.getSource('lightning').setTiles([cacheBust(lightningUrl())]);
+                map.setLayoutProperty('lightning-layer', 'visibility', isActive ? 'visible' : 'none');
+                if (isActive) updateHealth('lightning');
                 updateSidebarToActivePane();
                 return;
             }
@@ -6453,7 +6519,7 @@ function syncAllPanes(sourcePaneId) {
 
 function clearPane(map, paneId) {
     const allToggleLayers = [
-        'satellite-layer', 'radar-layer',
+        'satellite-layer', 'lightning-layer', 'radar-layer',
         'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer',
         'spc-outlook-fill', 'spc-outlook-line',
         'spc-md-fill', 'spc-md-outline', 'spc-lsr-icons', 'spc-lsr-mag',
@@ -6652,6 +6718,22 @@ function startAutoRefresh() {
             addLiveLog('AUTO: Satellite tiles refreshed', '#444');
         }
     }, 10 * 60 * 1000);
+
+    // Lightning refresh (NLDN nowCOAST updates ~every 5 min; refresh every 5 min when visible)
+    setInterval(() => {
+        if (isPlaying) return;
+        let refreshed = false;
+        Object.values(maps).forEach(m => {
+            if (m.getSource('lightning') && isLayerVisible(m, 'lightning-layer')) {
+                m.getSource('lightning').setTiles([cacheBust(lightningUrl())]);
+                refreshed = true;
+            }
+        });
+        if (refreshed) {
+            updateHealth('lightning');
+            addLiveLog('AUTO: NLDN lightning refreshed', '#444');
+        }
+    }, 5 * 60 * 1000);
 
     // Dedicated Top-of-Hour AirNow AQI Sync (:12, :27, :42 past the hour)
     setInterval(() => {

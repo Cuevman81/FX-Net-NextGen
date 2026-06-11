@@ -12,7 +12,7 @@
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="style.css?v=102">
+    <link rel="stylesheet" href="style.css?v=103">
     <!-- Vercel Speed Insights -->
     <script type="module">
       import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
@@ -102,6 +102,12 @@
                     <div class="product-item" data-layer="goes-ch" data-channel="14"><span>Ch 14 — IR Window (11.2 µm)</span></div>
                     <div class="product-item" data-layer="goes-ch" data-channel="15"><span>Ch 15 — Dirty IR (12.3 µm)</span></div>
                     <div class="product-item" data-layer="goes-ch" data-channel="16"><span>Ch 16 — CO₂ (13.3 µm)</span></div>
+                </div>
+
+                <!-- LIGHTNING -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="zap"></i> LIGHTNING</div>
+                    <div class="product-item" data-layer="lightning"><span>NLDN Strike Density</span> <span class="badge green">LIVE</span></div>
                 </div>
 
                 <!-- SPC PRODUCTS -->
@@ -870,7 +876,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=150"></script>
+    <script src="app.js?v=156"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
