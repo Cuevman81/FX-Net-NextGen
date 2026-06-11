@@ -525,9 +525,9 @@ body {
     position: absolute;
     bottom: 8px;
     left: 8px;
-    background: rgba(0, 0, 0, 0.85);
+    background: rgba(0, 0, 0, 0.82);
     color: var(--accent-cyan);
-    padding: 3px 8px;
+    padding: 4px 5px;
     font-size: 9px;
     font-weight: 800;
     font-family: 'Roboto Mono', monospace;
@@ -535,6 +535,21 @@ body {
     border: 1px solid rgba(0, 229, 255, 0.2);
     border-radius: 2px;
     pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 48%;
+}
+/* AWIPS-style per-pane product legend stack (one color-coded row per active product) */
+.radar-timestamp .legend-row {
+    border-left: 3px solid #39ff5a;
+    padding: 1px 6px;
+    color: #e6f1ff;
+    letter-spacing: 0.4px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .map-container {
