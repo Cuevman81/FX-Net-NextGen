@@ -69,6 +69,7 @@ const HEALTH_THRESHOLDS = {
     wpcIsobars: { label: 'WPC Isobars',   thresholdMs: 4 * 60 * 60 * 1000 },
     wpcFronts:  { label: 'WPC Fronts/HL', thresholdMs: 4 * 60 * 60 * 1000 },
     wpcQpf:     { label: 'WPC QPF',       thresholdMs: 8 * 60 * 60 * 1000 },
+    wpcEro:     { label: 'WPC ERO',       thresholdMs: 12 * 60 * 60 * 1000 },
     nhcStorms:  { label: 'NHC Storms',    thresholdMs: 60 * 60 * 1000 },
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
     spcOutlook: { label: 'SPC Outlooks',   thresholdMs: 60 * 60 * 1000 },
@@ -2572,7 +2573,7 @@ async function fetchERO(day, show, prefetch) {
             if (m.getSource(`wpc-ero-day${day}`)) m.getSource(`wpc-ero-day${day}`).setData(data);
         });
         if (!prefetch) updateSidebarToActivePane();
-        updateHealth('wpcQpf');
+        updateHealth('wpcEro');
         addLiveLog(`WPC: ERO Day ${day} loaded (${data.features?.length || 0} risk areas)`, '#39ff5a');
     } catch (e) {
         addLiveLog(`WPC ERO ERROR: ${e.message}`, '#ff3333');
