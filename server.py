@@ -68,6 +68,22 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(f'ERROR: {str(e)}'.encode())
 
+        elif path == '/api/wpc-ero-discussion':
+            try:
+                req = urllib.request.Request('https://www.wpc.ncep.noaa.gov/discussions/hpcdiscussions.php?disc=qpferd')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f'ERROR: {str(e)}'.encode())
+
         elif path == '/api/nhc-two-atl':
             try:
                 req = urllib.request.Request('https://www.nhc.noaa.gov/text/MIATWOAT.shtml')

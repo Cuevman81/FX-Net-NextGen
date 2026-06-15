@@ -25,6 +25,10 @@
       "destination": "https://www.wpc.ncep.noaa.gov/discussions/codsus"
     },
     {
+      "source": "/api/wpc-ero-discussion",
+      "destination": "https://www.wpc.ncep.noaa.gov/discussions/hpcdiscussions.php?disc=qpferd"
+    },
+    {
       "source": "/api/nhc-two-atl",
       "destination": "https://www.nhc.noaa.gov/text/MIATWOAT.shtml"
     },

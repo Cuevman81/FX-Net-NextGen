@@ -478,6 +478,7 @@ function initMap(paneId) {
         registerWindBarbs(map);
         setupMapLayers(map, paneId);
         createRadarLegend(paneId);
+        createEroLegend(paneId);
         addLiveLog(`PANE ${paneId}: Map ready`, '#00ff88');
         setTimeout(() => map.resize(), 100);
     });
@@ -2444,6 +2445,17 @@ function initFrontalPipIcons(map) {
     map.on('mouseenter', 'spc-lsr-icons', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'spc-lsr-icons', () => { map.getCanvas().style.cursor = ''; });
 
+    // WPC ERO risk-area click → open the Excessive Rainfall Discussion in the text browser
+    ['1', '2', '3'].forEach(day => {
+        const lyr = `wpc-ero-day${day}-fill`;
+        map.on('click', lyr, e => {
+            if (!e.features || !e.features[0]) return;
+            openEroDiscussion(e.features[0].properties.category);
+        });
+        map.on('mouseenter', lyr, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', lyr, () => { map.getCanvas().style.cursor = ''; });
+    });
+
     map.on('click', 'nexrad-sites-layer', e => {
         if (!e.features || e.features.length === 0) return;
         const siteId = e.features[0].properties.id;
@@ -2577,6 +2589,30 @@ async function fetchERO(day, show, prefetch) {
         addLiveLog(`WPC: ERO Day ${day} loaded (${data.features?.length || 0} risk areas)`, '#39ff5a');
     } catch (e) {
         addLiveLog(`WPC ERO ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// Open the WPC Excessive Rainfall Discussion (QPFERD) in the text browser panel.
+// A single discussion product covers Days 1-3; the clicked category is noted on top.
+async function openEroDiscussion(category) {
+    const panel = document.getElementById('text-panel');
+    const contentEl = document.getElementById('text-product-content');
+    if (panel) panel.style.display = 'flex';
+    if (contentEl) contentEl.textContent = 'Loading WPC Excessive Rainfall Discussion...';
+    addLiveLog(`WPC: Opening Excessive Rainfall Discussion${category ? ' (' + category + ')' : ''}...`, '#39ff5a');
+    try {
+        const res = await fetch('/api/wpc-ero-discussion');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const html = await res.text();
+        const pre = new DOMParser().parseFromString(html, 'text/html').querySelector('pre');
+        const text = pre ? pre.textContent.trim() : '';
+        if (!text) throw new Error('discussion text not found');
+        const header = category ? `>>> Clicked area: ${category} <<<\n\n` : '';
+        if (contentEl) contentEl.textContent = header + text;
+        addLiveLog('WPC: Excessive Rainfall Discussion loaded', '#00ff88');
+    } catch (e) {
+        if (contentEl) contentEl.textContent = `Error loading WPC Excessive Rainfall Discussion: ${e.message}`;
+        addLiveLog(`WPC ERO DISC ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -5531,6 +5567,7 @@ function initProductSidebar() {
                     map.setLayoutProperty(`wpc-ero-day${day}-fill`, 'visibility', 'none');
                     map.setLayoutProperty(`wpc-ero-day${day}-line`, 'visibility', 'none');
                 }
+                updateEroLegend(activePaneId);
                 updateSidebarToActivePane();
                 return;
             }
@@ -6470,6 +6507,40 @@ function createRadarLegend(paneId) {
     paneEl.appendChild(legend);
 }
 
+// WPC ERO category legend — matches the polygon colors emitted by /api/wpc-ero
+// (KML-derived). Sits bottom-left so it doesn't collide with the radar legend.
+const ERO_LEGEND_CATS = [
+    { label: 'HIGH (≥70%)',     color: '#ee22ee' },
+    { label: 'MODERATE (≥40%)', color: '#ee2c2c' },
+    { label: 'SLIGHT (≥15%)',   color: '#ffff00' },
+    { label: 'MARGINAL (≥5%)',  color: '#00ff00' }
+];
+
+function createEroLegend(paneId) {
+    const paneEl = document.querySelector(`.pane[data-pane="${paneId}"]`);
+    if (!paneEl || paneEl.querySelector('.ero-legend')) return;
+    const legend = document.createElement('div');
+    legend.className = 'ero-legend';
+    legend.id = `ero-legend-${paneId}`;
+    legend.style.cssText = 'position:absolute;bottom:32px;left:8px;z-index:12;background:rgba(0,0,0,0.82);border:1px solid rgba(57,255,90,0.3);border-radius:3px;padding:6px 8px;pointer-events:none;display:none;font-family:"Roboto Mono",monospace;';
+    paneEl.appendChild(legend);
+}
+
+function updateEroLegend(paneId) {
+    const pid = paneId || activePaneId;
+    const legend = document.getElementById(`ero-legend-${pid}`);
+    const m = maps[pid];
+    if (!legend || !m) return;
+    const days = ['1', '2', '3'].filter(d => isLayerVisible(m, `wpc-ero-day${d}-fill`));
+    if (days.length === 0) { legend.style.display = 'none'; return; }
+    let html = `<div style="font-size:8px;font-weight:700;color:#39ff5a;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">WPC ERO — DAY ${days.join(', ')}</div>`;
+    ERO_LEGEND_CATS.forEach(c => {
+        html += `<div style="display:flex;align-items:center;gap:5px;margin:2px 0;"><span style="width:12px;height:10px;background:${c.color};opacity:0.7;border:1px solid ${c.color};display:inline-block;"></span><span style="font-size:9px;color:#ddd;white-space:nowrap;">${c.label}</span></div>`;
+    });
+    legend.innerHTML = html;
+    legend.style.display = 'block';
+}
+
 function updateRadarLegend(paneId) {
     const legend = document.getElementById(`radar-legend-${paneId || activePaneId}`);
     if (!legend) return;
@@ -6666,6 +6737,7 @@ function clearPane(map, paneId) {
     activeCpcTempLayer = null;
     activeCpcPrecipLayer = null;
     updateRadarLegend(paneId);
+    updateEroLegend(paneId);
     addLiveLog(`PANE ${paneId}: Cleared`, '#ff3333');
 }
 
