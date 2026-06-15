@@ -6,6 +6,9 @@
     },
     "api/drought-monitor.py": {
       "maxDuration": 30
+    },
+    "api/wpc-ero.py": {
+      "maxDuration": 30
     }
   },
   "rewrites": [

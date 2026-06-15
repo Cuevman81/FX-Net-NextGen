@@ -137,6 +137,32 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
 
+        elif path == '/api/wpc-ero':
+            # WPC Excessive Rainfall Outlook (KMZ -> GeoJSON). Reuse the Vercel
+            # function's converter so local and prod behavior stay identical.
+            try:
+                from urllib.parse import urlparse, parse_qs
+                import importlib.util
+                qs = parse_qs(urlparse(self.path).query)
+                day = qs.get('day', ['1'])[0]
+                spec = importlib.util.spec_from_file_location(
+                    'wpc_ero', os.path.join(os.path.dirname(__file__), 'api', 'wpc-ero.py'))
+                ero_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(ero_mod)
+                if day not in ero_mod.ERO_KMZ:
+                    day = '1'
+                geojson = ero_mod.kmz_to_geojson(day)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(geojson).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
+
         else:
             # Fallback to serving regular static files
             super().do_GET()

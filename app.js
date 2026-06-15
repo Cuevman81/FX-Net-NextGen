@@ -734,6 +734,33 @@ function setupMapLayers(map, paneId) {
         });
     });
 
+    // ─── Layer 4b: WPC Excessive Rainfall Outlook (ERO, Days 1-3) ───
+    // Categorical risk polygons (MRGL/SLGT/MDT/HIGH), fed by /api/wpc-ero
+    // (KMZ->GeoJSON proxy). Same fill/line pattern as the SPC outlook.
+    [1, 2, 3].forEach(day => {
+        map.addSource(`wpc-ero-day${day}`, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map.addLayer({
+            id: `wpc-ero-day${day}-fill`,
+            type: 'fill',
+            source: `wpc-ero-day${day}`,
+            layout: { visibility: 'none' },
+            paint: {
+                'fill-color': ['get', 'fill'],
+                'fill-opacity': 0.35
+            }
+        });
+        map.addLayer({
+            id: `wpc-ero-day${day}-line`,
+            type: 'line',
+            source: `wpc-ero-day${day}`,
+            layout: { visibility: 'none' },
+            paint: {
+                'line-color': ['get', 'stroke'],
+                'line-width': 1.6
+            }
+        });
+    });
+
     // ─── Layer 3: Satellite (GOES-East) ───
     map.addSource('satellite', {
         type: 'raster',
@@ -2525,6 +2552,30 @@ async function fetchSPCOutlook(day, show, prefetch) {
         addLiveLog(`SPC: Day ${day} Outlook loaded (${data.features?.length || 0} areas)`, '#ffff00');
     } catch (e) {
         addLiveLog(`SPC ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+async function fetchERO(day, show, prefetch) {
+    if (!show && !prefetch) {
+        updateSidebarToActivePane();
+        return;
+    }
+
+    addLiveLog(`WPC: Fetching Day ${day} Excessive Rainfall Outlook...`, '#39ff5a');
+    try {
+        const res = await fetch(`/api/wpc-ero?day=${day}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        Object.values(maps).forEach(m => {
+            if (m.getSource(`wpc-ero-day${day}`)) m.getSource(`wpc-ero-day${day}`).setData(data);
+        });
+        if (!prefetch) updateSidebarToActivePane();
+        updateHealth('wpcQpf');
+        addLiveLog(`WPC: ERO Day ${day} loaded (${data.features?.length || 0} risk areas)`, '#39ff5a');
+    } catch (e) {
+        addLiveLog(`WPC ERO ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -4843,6 +4894,9 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d');
     add(isLayerVisible(map, 'spc-day2-fill'), 'SPC DAY 2 OUTLOOK', '#ff4d4d');
     add(isLayerVisible(map, 'spc-day3-fill'), 'SPC DAY 3 OUTLOOK', '#ff4d4d');
+    add(isLayerVisible(map, 'wpc-ero-day1-fill'), 'WPC ERO DAY 1', '#39ff5a');
+    add(isLayerVisible(map, 'wpc-ero-day2-fill'), 'WPC ERO DAY 2', '#39ff5a');
+    add(isLayerVisible(map, 'wpc-ero-day3-fill'), 'WPC ERO DAY 3', '#39ff5a');
     add(isLayerVisible(map, 'spc-md-fill'), 'SPC MESO DISCUSSIONS', '#ff6a00');
     add(isLayerVisible(map, 'spc-lsr-icons'), 'LOCAL STORM REPORTS', '#ff8c00');
     add(isLayerVisible(map, 'nws-warnings-only-fill'), 'NWS WARNINGS', '#ff3333');
@@ -4996,63 +5050,6 @@ function initSoundingModal() {
             img.style.filter = img.style.filter === 'invert(1)' ? '' : 'invert(1)';
         });
     }
-}
-
-// ─── WPC Excessive Rainfall Outlook (ERO) image viewer ───
-// WPC publishes the ERO as full-CONUS GIFs for Days 1-3 only (no Day 4-5 product).
-// Day 1 = 94ewbg, Day 2 = 98ewbg, Day 3 = 99ewbg ("wbg" = with background/state lines).
-const ERO_IMAGES = {
-    '1': 'https://www.wpc.ncep.noaa.gov/qpf/94ewbg.gif',
-    '2': 'https://www.wpc.ncep.noaa.gov/qpf/98ewbg.gif',
-    '3': 'https://www.wpc.ncep.noaa.gov/qpf/99ewbg.gif'
-};
-
-function initEroModal() {
-    const modal = document.getElementById('ero-modal');
-    if (!modal) return;
-
-    const closeBtn = document.getElementById('close-ero-modal');
-    const popoutBtn = document.getElementById('popout-ero-btn');
-    const img = document.getElementById('ero-image');
-    const placeholder = document.getElementById('ero-placeholder');
-    const dayBtns = Array.from(modal.querySelectorAll('.ero-day-btn'));
-
-    function showEro(day) {
-        const url = ERO_IMAGES[day];
-        if (!url || !img) return;
-        // Highlight the active day button
-        dayBtns.forEach(b => { b.style.opacity = (b.getAttribute('data-ero') === day) ? '1' : '0.45'; });
-        if (placeholder) placeholder.style.display = 'block';
-        img.style.display = 'none';
-        addLiveLog(`WPC ERO: Loading Day ${day} Excessive Rainfall Outlook...`, '#00e5ff');
-        // Cache-bust so a stale 12Z/00Z update doesn't show
-        img.onload = () => {
-            if (placeholder) placeholder.style.display = 'none';
-            img.style.display = 'block';
-            addLiveLog(`WPC ERO: Day ${day} outlook loaded`, '#00ff88');
-        };
-        img.onerror = () => {
-            if (placeholder) { placeholder.textContent = `WPC ERO Day ${day} image unavailable right now.`; placeholder.style.display = 'block'; }
-            addLiveLog(`WPC ERO: Day ${day} image unavailable`, '#ffb300');
-        };
-        img.src = `${url}?_=${Date.now()}`;
-    }
-
-    function openEro(day) {
-        modal.style.display = 'flex';
-        showEro(String(day || '1'));
-    }
-
-    if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
-    dayBtns.forEach(b => b.addEventListener('click', () => showEro(b.getAttribute('data-ero'))));
-    if (popoutBtn && img) {
-        popoutBtn.addEventListener('click', () => { if (img.src) window.open(img.src, '_blank'); });
-    }
-
-    // Sidebar items: data-ero="1|2|3" open the viewer at that day
-    document.querySelectorAll('.product-item[data-ero]').forEach(item => {
-        item.addEventListener('click', () => openEro(item.getAttribute('data-ero')));
-    });
 }
 
 
@@ -5408,6 +5405,10 @@ function updateSidebarToActivePane() {
             const day = item.getAttribute('data-day');
             isActive = isLayerVisible(map, `spc-day${day}-fill`);
         }
+        else if (layer === 'wpc-ero') {
+            const day = item.getAttribute('data-day');
+            isActive = isLayerVisible(map, `wpc-ero-day${day}-fill`);
+        }
         else if (layer === 'overlay-states') isActive = isLayerVisible(map, 'states-layer');
         else if (layer === 'overlay-counties') isActive = isLayerVisible(map, 'counties-layer');
         else if (layer === 'overlay-roads') isActive = isLayerVisible(map, 'esri-roads-layer');
@@ -5512,6 +5513,22 @@ function initProductSidebar() {
                 } else {
                     map.setLayoutProperty(`spc-day${day}-fill`, 'visibility', 'none');
                     map.setLayoutProperty(`spc-day${day}-line`, 'visibility', 'none');
+                }
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── WPC Excessive Rainfall Outlook (Day 1-3) ───
+            if (layer === 'wpc-ero') {
+                const day = item.getAttribute('data-day');
+                const wasActive = item.classList.contains('active');
+                if (!wasActive) {
+                    await fetchERO(day, true);
+                    map.setLayoutProperty(`wpc-ero-day${day}-fill`, 'visibility', 'visible');
+                    map.setLayoutProperty(`wpc-ero-day${day}-line`, 'visibility', 'visible');
+                } else {
+                    map.setLayoutProperty(`wpc-ero-day${day}-fill`, 'visibility', 'none');
+                    map.setLayoutProperty(`wpc-ero-day${day}-line`, 'visibility', 'none');
                 }
                 updateSidebarToActivePane();
                 return;
@@ -6612,6 +6629,8 @@ function clearPane(map, paneId) {
         'satellite-layer', 'lightning-layer', 'radar-layer',
         'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer',
         'spc-outlook-fill', 'spc-outlook-line',
+        'spc-day1-fill', 'spc-day1-line', 'spc-day2-fill', 'spc-day2-line', 'spc-day3-fill', 'spc-day3-line',
+        'wpc-ero-day1-fill', 'wpc-ero-day1-line', 'wpc-ero-day2-fill', 'wpc-ero-day2-line', 'wpc-ero-day3-fill', 'wpc-ero-day3-line',
         'spc-md-fill', 'spc-md-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
         'nws-enhanced-fill', 'nws-enhanced-outline', 'nws-enhanced-glow', 'nws-enhanced-label',
@@ -6852,6 +6871,12 @@ function startAutoRefresh() {
         [1, 2, 3].forEach(day => {
             const outlookActive = Object.values(maps).some(m => isLayerVisible(m, `spc-day${day}-fill`));
             if (outlookActive) fetchSPCOutlook(day, true);
+        });
+
+        // WPC Excessive Rainfall Outlooks (Day 1-3)
+        [1, 2, 3].forEach(day => {
+            const eroActive = Object.values(maps).some(m => isLayerVisible(m, `wpc-ero-day${day}-fill`));
+            if (eroActive) fetchERO(day, true);
         });
 
         // SPC Local Storm Reports
@@ -7412,7 +7437,6 @@ function init() {
     initDebugToggle();
     initSyncButton();
     initSoundingModal();
-    initEroModal();
     initTextModal();
     initSolarClickHandler();
     initRiverGaugePanel();
