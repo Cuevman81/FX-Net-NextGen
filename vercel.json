@@ -9,6 +9,9 @@
     },
     "api/wpc-ero.py": {
       "maxDuration": 30
+    },
+    "api/wpc-mpd.py": {
+      "maxDuration": 30
     }
   },
   "rewrites": [

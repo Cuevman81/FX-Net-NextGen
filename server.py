@@ -179,6 +179,27 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
 
+        elif path == '/api/wpc-mpd':
+            # WPC Mesoscale Precipitation Discussions (IEM shapefile -> active GeoJSON).
+            # Reuse the Vercel function's converter so local/prod stay identical.
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    'wpc_mpd', os.path.join(os.path.dirname(__file__), 'api', 'wpc-mpd.py'))
+                mpd_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mpd_mod)
+                geojson = mpd_mod.fetch_active_mpds()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(geojson).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
+
         else:
             # Fallback to serving regular static files
             super().do_GET()

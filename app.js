@@ -74,6 +74,7 @@ const HEALTH_THRESHOLDS = {
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
     spcOutlook: { label: 'SPC Outlooks',   thresholdMs: 60 * 60 * 1000 },
     spcMd:      { label: 'SPC MDs',       thresholdMs: 30 * 60 * 1000 },
+    wpcMpd:     { label: 'WPC MPDs',      thresholdMs: 60 * 60 * 1000 },
     spcLsr:     { label: 'SPC LSRs',      thresholdMs: 30 * 60 * 1000 },
     cpcTemp:    { label: 'CPC Temp',      thresholdMs: 24 * 60 * 60 * 1000 },
     cpcPrecip:  { label: 'CPC Precip',    thresholdMs: 24 * 60 * 60 * 1000 },
@@ -900,6 +901,23 @@ function setupMapLayers(map, paneId) {
         id: 'spc-md-outline', type: 'line', source: 'spc-md',
         layout: { visibility: 'none' },
         paint: { 'line-color': '#ff4444', 'line-width': 3, 'line-dasharray': [2, 1] }
+    });
+
+    // ─── Layer 5b-2: WPC Mesoscale Precipitation Discussions (MPD) ───
+    // Behaves like the SPC mesoscale discussions; fed by /api/wpc-mpd.
+    map.addSource('wpc-mpd', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+    });
+    map.addLayer({
+        id: 'wpc-mpd-fill', type: 'fill', source: 'wpc-mpd',
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': ['get', 'fill'], 'fill-opacity': 0.2 }
+    });
+    map.addLayer({
+        id: 'wpc-mpd-outline', type: 'line', source: 'wpc-mpd',
+        layout: { visibility: 'none' },
+        paint: { 'line-color': ['get', 'stroke'], 'line-width': 3, 'line-dasharray': [2, 1] }
     });
 
     // ─── Layer 5b: SPC Local Storm Reports (GeoJSON points with icons) ───
@@ -2339,7 +2357,7 @@ function initFrontalPipIcons(map) {
         if (!warningsActive && !watchesActive) return;
 
         // Ensure we didn't click on a METAR or FIRMS or MD icon
-        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nexrad-sites-layer', 'river-gauges-layer'] });
+        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nexrad-sites-layer', 'river-gauges-layer'] });
         if (otherFeats.length > 0) return;
 
         const lat = e.lngLat.lat.toFixed(4);
@@ -2417,6 +2435,23 @@ function initFrontalPipIcons(map) {
         </div>`;
         new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
+
+    // WPC Mesoscale Precipitation Discussion click → popup w/ details + full discussion link
+    map.on('click', 'wpc-mpd-fill', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties;
+        const fmtZ = s => (s && s.length >= 12) ? `${s.slice(4,6)}/${s.slice(6,8)} ${s.slice(8,10)}:${s.slice(10,12)}Z` : (s || '');
+        const link = p.link || '';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
+            <div style="font-weight:bold;color:#33c27a;font-size:13px;margin-bottom:4px;">WPC Mesoscale Precip Discussion #${p.num || '?'}</div>
+            <div style="color:#cfcfcf;margin-bottom:6px;">${p.concern || ''}</div>
+            <div style="color:#888;margin-bottom:8px;">Valid ${fmtZ(p.issue)} – ${fmtZ(p.expire)}</div>
+            ${link ? `<a href="${link}" target="_blank" style="display:inline-block;background:#333;color:white;padding:4px 8px;border-radius:2px;text-decoration:none;font-size:10px;">VIEW FULL DISCUSSION →</a>` : ''}
+        </div>`;
+        new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'wpc-mpd-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'wpc-mpd-fill', () => { map.getCanvas().style.cursor = ''; });
 
     // SPC LSR click
     map.on('click', 'spc-lsr-icons', e => {
@@ -2646,6 +2681,36 @@ async function fetchMesoscaleDiscussions(show, prefetch) {
         }
     } catch (e) {
         addLiveLog(`SPC MD ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+async function fetchMPDs(show, prefetch) {
+    if (!show && !prefetch) {
+        updateSidebarToActivePane();
+        return;
+    }
+
+    addLiveLog('WPC: Fetching Mesoscale Precipitation Discussions...', '#33c27a');
+    try {
+        const res = await fetch('/api/wpc-mpd');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        Object.values(maps).forEach(m => {
+            if (m.getSource('wpc-mpd')) m.getSource('wpc-mpd').setData(data);
+        });
+        if (!prefetch) updateSidebarToActivePane();
+
+        updateHealth('wpcMpd');
+        const n = data.features?.length || 0;
+        if (n > 0) {
+            addLiveLog(`WPC: ${n} Mesoscale Precipitation Discussion(s) active`, '#33c27a');
+        } else {
+            addLiveLog('WPC: No active Mesoscale Precipitation Discussions', '#888');
+        }
+    } catch (e) {
+        addLiveLog(`WPC MPD ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -4935,6 +5000,7 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'wpc-ero-day2-fill'), 'WPC ERO DAY 2', '#39ff5a');
     add(isLayerVisible(map, 'wpc-ero-day3-fill'), 'WPC ERO DAY 3', '#39ff5a');
     add(isLayerVisible(map, 'spc-md-fill'), 'SPC MESO DISCUSSIONS', '#ff6a00');
+    add(isLayerVisible(map, 'wpc-mpd-fill'), 'WPC MESO PRECIP DISC', '#33c27a');
     add(isLayerVisible(map, 'spc-lsr-icons'), 'LOCAL STORM REPORTS', '#ff8c00');
     add(isLayerVisible(map, 'nws-warnings-only-fill'), 'NWS WARNINGS', '#ff3333');
     add(isLayerVisible(map, 'nws-watches-only-fill'), 'NWS WATCHES', '#ffaa00');
@@ -5437,6 +5503,7 @@ function updateSidebarToActivePane() {
         else if (layer === 'nws-watches-only') isActive = isLayerVisible(map, 'nws-watches-only-fill');
         else if (layer === 'nws-wwa') isActive = isLayerVisible(map, 'nws-wwa-wms-layer');
         else if (layer === 'spc-md') isActive = isLayerVisible(map, 'spc-md-fill');
+        else if (layer === 'wpc-mpd') isActive = isLayerVisible(map, 'wpc-mpd-fill');
         else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-icons');
         else if (layer === 'spc-outlook') {
             const day = item.getAttribute('data-day');
@@ -5578,6 +5645,16 @@ function initProductSidebar() {
                 if (isActive) await fetchMesoscaleDiscussions(true);
                 map.setLayoutProperty('spc-md-fill', 'visibility', isActive ? 'visible' : 'none');
                 map.setLayoutProperty('spc-md-outline', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── WPC Mesoscale Precipitation Discussions ───
+            if (layer === 'wpc-mpd') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchMPDs(true);
+                map.setLayoutProperty('wpc-mpd-fill', 'visibility', isActive ? 'visible' : 'none');
+                map.setLayoutProperty('wpc-mpd-outline', 'visibility', isActive ? 'visible' : 'none');
                 updateSidebarToActivePane();
                 return;
             }
@@ -6703,7 +6780,7 @@ function clearPane(map, paneId) {
         'spc-outlook-fill', 'spc-outlook-line',
         'spc-day1-fill', 'spc-day1-line', 'spc-day2-fill', 'spc-day2-line', 'spc-day3-fill', 'spc-day3-line',
         'wpc-ero-day1-fill', 'wpc-ero-day1-line', 'wpc-ero-day2-fill', 'wpc-ero-day2-line', 'wpc-ero-day3-fill', 'wpc-ero-day3-line',
-        'spc-md-fill', 'spc-md-outline', 'spc-lsr-icons', 'spc-lsr-mag',
+        'spc-md-fill', 'spc-md-outline', 'wpc-mpd-fill', 'wpc-mpd-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
         'nws-enhanced-fill', 'nws-enhanced-outline', 'nws-enhanced-glow', 'nws-enhanced-label',
         'nws-watches-only-fill', 'nws-watches-only-outline',
@@ -6827,6 +6904,9 @@ function startAutoRefresh() {
         // Mesoscale Discussions
         const mcdActive = Object.values(maps).some(m => isLayerVisible(m, 'spc-md-fill'));
         if (mcdActive) fetchMesoscaleDiscussions(true);
+
+        const mpdActive = Object.values(maps).some(m => isLayerVisible(m, 'wpc-mpd-fill'));
+        if (mpdActive) fetchMPDs(true);
     }, 60 * 1000);
 
     // 2. High Frequency (5 minutes)
