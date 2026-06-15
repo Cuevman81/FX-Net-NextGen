@@ -4998,6 +4998,63 @@ function initSoundingModal() {
     }
 }
 
+// ─── WPC Excessive Rainfall Outlook (ERO) image viewer ───
+// WPC publishes the ERO as full-CONUS GIFs for Days 1-3 only (no Day 4-5 product).
+// Day 1 = 94ewbg, Day 2 = 98ewbg, Day 3 = 99ewbg ("wbg" = with background/state lines).
+const ERO_IMAGES = {
+    '1': 'https://www.wpc.ncep.noaa.gov/qpf/94ewbg.gif',
+    '2': 'https://www.wpc.ncep.noaa.gov/qpf/98ewbg.gif',
+    '3': 'https://www.wpc.ncep.noaa.gov/qpf/99ewbg.gif'
+};
+
+function initEroModal() {
+    const modal = document.getElementById('ero-modal');
+    if (!modal) return;
+
+    const closeBtn = document.getElementById('close-ero-modal');
+    const popoutBtn = document.getElementById('popout-ero-btn');
+    const img = document.getElementById('ero-image');
+    const placeholder = document.getElementById('ero-placeholder');
+    const dayBtns = Array.from(modal.querySelectorAll('.ero-day-btn'));
+
+    function showEro(day) {
+        const url = ERO_IMAGES[day];
+        if (!url || !img) return;
+        // Highlight the active day button
+        dayBtns.forEach(b => { b.style.opacity = (b.getAttribute('data-ero') === day) ? '1' : '0.45'; });
+        if (placeholder) placeholder.style.display = 'block';
+        img.style.display = 'none';
+        addLiveLog(`WPC ERO: Loading Day ${day} Excessive Rainfall Outlook...`, '#00e5ff');
+        // Cache-bust so a stale 12Z/00Z update doesn't show
+        img.onload = () => {
+            if (placeholder) placeholder.style.display = 'none';
+            img.style.display = 'block';
+            addLiveLog(`WPC ERO: Day ${day} outlook loaded`, '#00ff88');
+        };
+        img.onerror = () => {
+            if (placeholder) { placeholder.textContent = `WPC ERO Day ${day} image unavailable right now.`; placeholder.style.display = 'block'; }
+            addLiveLog(`WPC ERO: Day ${day} image unavailable`, '#ffb300');
+        };
+        img.src = `${url}?_=${Date.now()}`;
+    }
+
+    function openEro(day) {
+        modal.style.display = 'flex';
+        showEro(String(day || '1'));
+    }
+
+    if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
+    dayBtns.forEach(b => b.addEventListener('click', () => showEro(b.getAttribute('data-ero'))));
+    if (popoutBtn && img) {
+        popoutBtn.addEventListener('click', () => { if (img.src) window.open(img.src, '_blank'); });
+    }
+
+    // Sidebar items: data-ero="1|2|3" open the viewer at that day
+    document.querySelectorAll('.product-item[data-ero]').forEach(item => {
+        item.addEventListener('click', () => openEro(item.getAttribute('data-ero')));
+    });
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 14: TEXT PRODUCT BROWSER
@@ -7355,6 +7412,7 @@ function init() {
     initDebugToggle();
     initSyncButton();
     initSoundingModal();
+    initEroModal();
     initTextModal();
     initSolarClickHandler();
     initRiverGaugePanel();
