@@ -29,6 +29,8 @@ let paneRadarSites = { '1': 'nexrad-n0q-900913', '2': 'nexrad-n0q-900913', '3': 
 let paneRadarProducts = { '1': 'sr_bref', '2': 'sr_bref', '3': 'sr_bref', '4': 'sr_bref', '5': 'sr_bref', '6': 'sr_bref', '7': 'sr_bref', '8': 'sr_bref' };
 // NEXRAD Level III (NODD) overlay state, per pane: { station, product, meta }
 let paneL3 = {};
+// NASA GIBS satellite product active per pane (product key) or undefined
+let paneGibs = {};
 let activeGoesChannel = null; // Convenience: always mirrors paneGoesChannels[activePaneId]
 let paneGoesChannels = { '1': null, '2': null, '3': null, '4': null, '5': null, '6': null, '7': null, '8': null };
 let activeRadarNational = false;
@@ -72,6 +74,7 @@ const HEALTH_THRESHOLDS = {
     wpcFronts:  { label: 'WPC Fronts/HL', thresholdMs: 4 * 60 * 60 * 1000 },
     wpcQpf:     { label: 'WPC QPF',       thresholdMs: 8 * 60 * 60 * 1000 },
     radarL3:    { label: 'NODD Dual-Pol', thresholdMs: 15 * 60 * 1000 },
+    gibsSat:    { label: 'GIBS Satellite', thresholdMs: 60 * 60 * 1000 },
     wpcEro:     { label: 'WPC ERO',       thresholdMs: 12 * 60 * 60 * 1000 },
     nhcStorms:  { label: 'NHC Storms',    thresholdMs: 60 * 60 * 1000 },
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
@@ -260,6 +263,39 @@ function snapToNowCoastTime(date) {
 
 function nationalRadarUrl() {
     return 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q/{z}/{x}/{y}.png';
+}
+
+// ─── NASA GIBS GOES-East (web-mercator WMTS tiles, real time-stamped frames) ───
+// Browser-direct (CORS *), no proxy/render. Gives clean looping (real 10-min
+// frames) AND smooth panning (tiles), incl. the GeoColor/composite products that
+// the per-channel IEM tiles + category-based nowCOAST loop never animated cleanly.
+const GIBS_PRODUCTS = {
+    GeoColor: { layer: 'GOES-East_ABI_GeoColor',            tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'GeoColor' },
+    CleanIR:  { layer: 'GOES-East_ABI_Band13_Clean_Infrared', tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Clean IR (Band 13)' },
+    RedVis:   { layer: 'GOES-East_ABI_Band2_Red_Visible_1km', tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Red Visible' },
+    AirMass:  { layer: 'GOES-East_ABI_Air_Mass',            tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Air Mass RGB' },
+    Dust:     { layer: 'GOES-East_ABI_Dust',                tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Dust RGB' },
+    FireTemp: { layer: 'GOES-East_ABI_FireTemp',            tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Fire Temp RGB' }
+};
+
+function gibsTileUrl(prodKey, isoTime) {
+    const p = GIBS_PRODUCTS[prodKey];
+    // WMTS REST: .../{layer}/default/{time}/{TileMatrixSet}/{z}/{y}/{x}.png
+    return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${p.layer}/default/${isoTime || 'default'}/${p.tms}/{z}/{y}/{x}.png`;
+}
+
+// Cache of recent real frame times per product (filled from /api/gibs-times)
+const gibsTimesCache = {};
+async function fetchGibsTimes(prodKey) {
+    const p = GIBS_PRODUCTS[prodKey];
+    try {
+        const res = await fetch(`/api/gibs-times?layer=${p.layer}&tms=${p.tms}&n=40`);
+        const data = await res.json();
+        if (data.times && data.times.length) gibsTimesCache[prodKey] = data.times;
+        return gibsTimesCache[prodKey] || [];
+    } catch (e) {
+        return gibsTimesCache[prodKey] || [];
+    }
 }
 
 // ─── Lightning — NOAA nowCOAST NLDN (cloud-to-ground strike density) ───
@@ -4541,6 +4577,7 @@ function startAnimation() {
 
     // Check what is visible across ALL panes (not just active)
     const showSat = Object.entries(maps).some(([pid, m]) => isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] !== null);
+    const showGibs = Object.entries(maps).some(([pid, m]) => isLayerVisible(m, 'gibs-sat-layer') && paneGibs[pid]);
     const showRad = Object.values(maps).some(m =>
         isLayerVisible(m, 'radar-layer') || isLayerVisible(m, 'site-bref-layer') ||
         isLayerVisible(m, 'site-bvel-layer') || isLayerVisible(m, 'site-bdhc-layer') ||
@@ -4560,7 +4597,7 @@ function startAnimation() {
     // ── Capture Visibility Snapshot (for restoration later) ──
     preAnimVisibility = {};
     const layersToSnapshot = [
-        'satellite-layer', 'radar-layer',
+        'satellite-layer', 'gibs-sat-layer', 'radar-layer',
         'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'
     ];
     Object.entries(maps).forEach(([id, map]) => {
@@ -4580,7 +4617,21 @@ function startAnimation() {
     // ─── Satellite frames (nowCOAST WMS, 5-min cadence via TIME parameter) ───
     // Find any active channel as reference for timing; per-pane URLs built later
     const refSatChannel = activeGoesChannel || Object.values(paneGoesChannels).find(ch => ch !== null);
-    if (showSat && refSatChannel !== null) {
+    // GIBS satellite loop: use the product's REAL available frame times (no gaps/glitches)
+    const gibsProdForLoop = paneGibs[activePaneId] || Object.values(paneGibs).find(Boolean);
+    if (showGibs && gibsProdForLoop) {
+        const allTimes = gibsTimesCache[gibsProdForLoop] || [];
+        const gStep = Math.max(stepMin, 10); // GIBS GOES cadence is 10 min
+        let want = Math.min(Math.floor(durationMin / gStep) || 1, 24);
+        // take every (gStep/10)-th real frame from the newest `want*stride` window
+        const stride = Math.max(1, Math.round(gStep / 10));
+        const picked = [];
+        for (let i = allTimes.length - 1; i >= 0 && picked.length < want; i -= stride) picked.unshift(allTimes[i]);
+        picked.forEach(iso => satFrames.push({
+            isoTime: iso, gibs: true, time: new Date(iso),
+            label: `SAT ${iso.substring(11, 16)}Z`
+        }));
+    } else if (showSat && refSatChannel !== null) {
         let satStep = Math.max(stepMin, 5); // minimum 5-min steps (nowCOAST cadence)
         // Offset "now" by 7 min to avoid requesting future timestamps that lack data
         const satNow = new Date(now.getTime() - 7 * 60000);
@@ -4662,6 +4713,8 @@ function startAnimation() {
     Object.entries(maps).forEach(([paneId, map]) => {
         const paneCh = paneGoesChannels[paneId];
         const hadSatVisible = preAnimVisibility[paneId]?.['satellite-layer'] === 'visible' && paneCh !== null;
+        const gibsProd = paneGibs[paneId];
+        const hadGibsVisible = preAnimVisibility[paneId]?.['gibs-sat-layer'] === 'visible' && gibsProd;
 
         // Determine what radar this pane had visible
         const snap = preAnimVisibility[paneId];
@@ -4677,20 +4730,28 @@ function startAnimation() {
         if (hadSatVisible && map.getLayer('satellite-layer')) {
             map.setLayoutProperty('satellite-layer', 'visibility', 'none');
         }
+        if (hadGibsVisible && map.getLayer('gibs-sat-layer')) {
+            map.setLayoutProperty('gibs-sat-layer', 'visibility', 'none');
+        }
         if (hadAnyRad) {
             ['radar-layer', 'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].forEach(l => {
                 if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
             });
         }
 
-        // Create satellite animation layers ONLY on panes that had satellite visible
-        if (hadSatVisible && satFrames.length > 0) {
+        // Create satellite animation layers per pane — GIBS (real frames) or nowCOAST
+        if ((hadSatVisible || hadGibsVisible) && satFrames.length > 0) {
+            const gp = hadGibsVisible ? GIBS_PRODUCTS[gibsProd] : null;
             for (let i = 0; i < satFrames.length; i++) {
                 const srcId = `anim-sat-src-${i}`;
                 const lyrId = `anim-sat-lyr-${i}`;
                 if (!map.getSource(srcId)) {
-                    const satUrl = nowCoastSatUrl(paneCh, satFrames[i].isoTime);
-                    map.addSource(srcId, { type: 'raster', tiles: [satUrl], tileSize: 256 });
+                    const satUrl = hadGibsVisible
+                        ? gibsTileUrl(gibsProd, satFrames[i].isoTime)
+                        : nowCoastSatUrl(paneCh, satFrames[i].isoTime);
+                    const srcOpts = { type: 'raster', tiles: [satUrl], tileSize: 256 };
+                    if (gp) srcOpts.maxzoom = gp.max;
+                    map.addSource(srcId, srcOpts);
                     map.addLayer({ id: lyrId, type: 'raster', source: srcId,
                         layout: { visibility: 'visible' },
                         paint: {
@@ -4698,7 +4759,7 @@ function startAnimation() {
                             'raster-resampling': 'nearest',
                             'raster-fade-duration': 0
                         }
-                    }, 'radar-layer');
+                    }, map.getLayer('radar-layer') ? 'radar-layer' : undefined);
                 }
             }
         }
@@ -4984,6 +5045,9 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'site-bdsa-layer'), `${site} STORM TOTAL PRECIP`, '#3cff9a');
     add(isLayerVisible(map, 'site-boha-layer'), `${site} ONE-HOUR PRECIP`, '#3cff9a');
     add(isLayerVisible(map, 'satellite-layer') && ch !== null, `GOES-E CH${ch} SATELLITE`, '#cfd8e3');
+    if (isLayerVisible(map, 'gibs-sat-layer') && paneGibs[paneId]) {
+        rows.push({ label: `GOES-E ${GIBS_PRODUCTS[paneGibs[paneId]]?.label || paneGibs[paneId]} (GIBS)`, color: '#9fd0ff' });
+    }
     add(isLayerVisible(map, 'lightning-layer'), 'NLDN LIGHTNING', '#ffd23c');
     add(isLayerVisible(map, 'mrms-echotops-layer'), 'MRMS ECHO TOPS', '#9b59ff');
     add(isLayerVisible(map, 'mrms-qpe-layer'), 'MRMS QPE', '#39ff5a');
@@ -5503,6 +5567,7 @@ function updateSidebarToActivePane() {
             const ch = parseInt(item.getAttribute('data-channel'));
             isActive = isLayerVisible(map, 'satellite-layer') && paneGoesChannels[activePaneId] === ch;
         }
+        else if (layer === 'gibs-sat') isActive = isLayerVisible(map, 'gibs-sat-layer') && paneGibs[activePaneId] === item.getAttribute('data-gibs');
         else if (layer === 'lightning') isActive = isLayerVisible(map, 'lightning-layer');
         else if (layer === 'hms-smoke') isActive = isLayerVisible(map, 'hms-smoke-fill');
         else if (layer === 'firms-fires') isActive = isLayerVisible(map, 'firms-fires-layer');
@@ -5693,6 +5758,19 @@ function initProductSidebar() {
                 }
                 updateSidebarToActivePane();
                 refreshTimestampLabel();
+                return;
+            }
+
+            // ─── GIBS Satellite (per-pane product: GeoColor / IR / RGB composites) ───
+            if (layer === 'gibs-sat') {
+                const prodKey = item.getAttribute('data-gibs');
+                const wasActive = item.classList.contains('active');
+                if (wasActive) {
+                    clearGibs(activePaneId);
+                } else {
+                    await loadGibsLive(activePaneId, prodKey);
+                }
+                updateSidebarToActivePane();
                 return;
             }
 
@@ -6647,6 +6725,45 @@ function clearL3Radar(paneId) {
     if (paneId === activePaneId) refreshTimestampLabel();
 }
 
+// ─── GIBS live satellite (newest available frame; tiles, browser-direct) ───
+async function loadGibsLive(paneId, prodKey) {
+    const map = maps[paneId];
+    if (!map || !GIBS_PRODUCTS[prodKey]) return;
+    const p = GIBS_PRODUCTS[prodKey];
+    const prev = paneGibs[paneId];
+    paneGibs[paneId] = prodKey;
+    // Use newest real timestamp if known, else the 'default' keyword (auto-latest)
+    const times = gibsTimesCache[prodKey] || [];
+    const url = gibsTileUrl(prodKey, times.length ? times[times.length - 1] : 'default');
+    // Recreate the source when switching products (maxzoom differs); else just retile
+    if (map.getSource('gibs-sat') && prev === prodKey) {
+        map.getSource('gibs-sat').setTiles([url]);
+    } else {
+        if (map.getLayer('gibs-sat-layer')) map.removeLayer('gibs-sat-layer');
+        if (map.getSource('gibs-sat')) map.removeSource('gibs-sat');
+        map.addSource('gibs-sat', { type: 'raster', tiles: [url], tileSize: 256, maxzoom: p.max });
+        map.addLayer({ id: 'gibs-sat-layer', type: 'raster', source: 'gibs-sat',
+            layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85, 'raster-fade-duration': 0 } });
+    }
+    map.setLayoutProperty('gibs-sat-layer', 'visibility', 'visible');
+    updateHealth('gibsSat');
+    if (paneId === activePaneId) refreshTimestampLabel();
+    addLiveLog(`GIBS: ${p.label} (GOES-East) loaded`, '#00e5ff');
+    // Always (re)warm the real-frame time list so looping is ready + live stays current
+    fetchGibsTimes(prodKey).then(t => {
+        if (t.length && paneGibs[paneId] === prodKey && map.getSource('gibs-sat')) {
+            map.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, t[t.length - 1])]);
+        }
+    });
+}
+
+function clearGibs(paneId) {
+    const map = maps[paneId];
+    if (map && map.getLayer('gibs-sat-layer')) map.setLayoutProperty('gibs-sat-layer', 'visibility', 'none');
+    delete paneGibs[paneId];
+    if (paneId === activePaneId) refreshTimestampLabel();
+}
+
 // WPC ERO category legend — matches the polygon colors emitted by /api/wpc-ero
 // (KML-derived). Sits bottom-left so it doesn't collide with the radar legend.
 const ERO_LEGEND_CATS = [
@@ -6838,7 +6955,7 @@ function syncAllPanes(sourcePaneId) {
 
 function clearPane(map, paneId) {
     const allToggleLayers = [
-        'satellite-layer', 'lightning-layer', 'radar-layer',
+        'satellite-layer', 'gibs-sat-layer', 'lightning-layer', 'radar-layer',
         'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer',
         'radar-l3-layer',
         'spc-outlook-fill', 'spc-outlook-line',
@@ -6878,6 +6995,7 @@ function clearPane(map, paneId) {
     activeCpcTempLayer = null;
     activeCpcPrecipLayer = null;
     delete paneL3[paneId];
+    delete paneGibs[paneId];
     updateRadarLegend(paneId);
     updateEroLegend(paneId);
     addLiveLog(`PANE ${paneId}: Cleared`, '#ff3333');
@@ -7674,6 +7792,17 @@ function init() {
             }
         });
     }, 120 * 1000);
+
+    // GIBS satellite — refresh latest frame + warm loop time-list (skip while looping)
+    setInterval(() => {
+        if (isPlaying) return;
+        Object.keys(paneGibs).forEach(pid => {
+            const prod = paneGibs[pid];
+            if (prod && maps[pid] && isLayerVisible(maps[pid], 'gibs-sat-layer')) {
+                loadGibsLive(pid, prod);
+            }
+        });
+    }, 150 * 1000);
 
     // ─── Enhanced Warning Pulse Animation ───
     // Smoothly oscillates opacity of IBW (Impact-Based Warning) overlay layers

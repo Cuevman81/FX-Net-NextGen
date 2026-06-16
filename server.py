@@ -205,6 +205,29 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
 
+        elif path == '/api/gibs-times':
+            try:
+                from urllib.parse import urlparse, parse_qs
+                import importlib.util
+                qs = parse_qs(urlparse(self.path).query)
+                layer = qs.get('layer', ['GOES-East_ABI_GeoColor'])[0]
+                tms = qs.get('tms', ['GoogleMapsCompatible_Level7'])[0]
+                n = max(1, min(int(qs.get('n', ['30'])[0]), 60))
+                spec = importlib.util.spec_from_file_location(
+                    'gibs_times', os.path.join(os.path.dirname(__file__), 'api', 'gibs-times.py'))
+                gt = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(gt)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'times': gt.recent_times(layer, tms, n)}).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': str(e), 'times': []}).encode())
+
         elif path == '/api/wpc-mpd':
             # WPC Mesoscale Precipitation Discussions (IEM shapefile -> active GeoJSON).
             # Reuse the Vercel function's converter so local/prod stay identical.

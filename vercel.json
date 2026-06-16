@@ -16,6 +16,9 @@
     "api/radar-l3.py": {
       "maxDuration": 30,
       "memory": 2048
+    },
+    "api/gibs-times.py": {
+      "maxDuration": 20
     }
   },
   "rewrites": [
