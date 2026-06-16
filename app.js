@@ -8,7 +8,23 @@
 
 // ═══ GLOBAL STATE ═══
 const maps = {};
-let activePaneId = '1';
+let activePaneId = 't1-1';
+
+// ═══ WORKSPACE TABS ═══
+// Each tab is an independent multi-pane workspace with its OWN grid + maps that
+// stay alive in the background. Pane ids are namespaced as `<tabId>-<n>` (e.g.
+// 't1-1'..'t1-8', 't2-1'...), so the existing per-pane state objects (maps,
+// paneRadarSites, paneGibs, …) and activePaneId keep working with these opaque
+// string keys. `tabOfPane()` recovers the tab from a pane id so per-tab actions
+// (pan/zoom sync, looping, layout) can be scoped to one workspace.
+const TAB_PANE_COUNT = 8;
+const tabs = {};            // tabId -> { id, name, layout }
+let activeTabId = 't1';
+let tabSeq = 1;             // monotonic counter for unique tab ids
+const tabOfPane = paneId => String(paneId).split('-')[0];
+const paneIdsForTab = tabId => Array.from({ length: TAB_PANE_COUNT }, (_, i) => `${tabId}-${i + 1}`);
+const isPaneInActiveTab = paneId => tabOfPane(paneId) === activeTabId;
+const activeTabMapEntries = () => Object.entries(maps).filter(([id]) => tabOfPane(id) === activeTabId);
 let isPlaying = false;
 let isPaused = false;
 let animationTimer = null;
@@ -519,6 +535,7 @@ function initMap(paneId) {
         setupMapLayers(map, paneId);
         createRadarLegend(paneId);
         createEroLegend(paneId);
+        applyPaneRestore(paneId);   // re-apply any persisted product setup for this pane
         addLiveLog(`PANE ${paneId}: Map ready`, '#00ff88');
         setTimeout(() => map.resize(), 100);
     });
@@ -599,8 +616,10 @@ function initMap(paneId) {
         const zoom = map.getZoom();
         const bearing = map.getBearing();
         const pitch = map.getPitch();
+        const myTab = tabOfPane(paneId);
         Object.entries(maps).forEach(([id, m]) => {
-            if (String(id) !== String(paneId) && m) {
+            // Only sync panes within the SAME tab — other tabs keep their own view.
+            if (String(id) !== String(paneId) && m && tabOfPane(id) === myTab) {
                 m.jumpTo({ center, zoom, bearing, pitch });
             }
         });
@@ -4585,10 +4604,12 @@ function startAnimation() {
     const activeMap = maps[activePaneId];
     if (!activeMap) { stopAnimation(); return; }
 
-    // Check what is visible across ALL panes (not just active)
-    const showSat = Object.entries(maps).some(([pid, m]) => isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] !== null);
-    const showGibs = Object.entries(maps).some(([pid, m]) => isLayerVisible(m, 'gibs-sat-layer') && paneGibs[pid]);
-    const showRad = Object.values(maps).some(m =>
+    // Check what is visible across the ACTIVE tab's panes (other tabs keep
+    // running live in the background and must not be drawn into this loop).
+    const loopMaps = activeTabMapEntries();
+    const showSat = loopMaps.some(([pid, m]) => isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] !== null);
+    const showGibs = loopMaps.some(([pid, m]) => isLayerVisible(m, 'gibs-sat-layer') && paneGibs[pid]);
+    const showRad = loopMaps.some(([, m]) =>
         isLayerVisible(m, 'radar-layer') || isLayerVisible(m, 'site-bref-layer') ||
         isLayerVisible(m, 'site-bvel-layer') || isLayerVisible(m, 'site-bdhc-layer') ||
         isLayerVisible(m, 'site-bdsa-layer') || isLayerVisible(m, 'site-boha-layer')
@@ -4610,7 +4631,7 @@ function startAnimation() {
         'satellite-layer', 'gibs-sat-layer', 'radar-layer',
         'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'
     ];
-    Object.entries(maps).forEach(([id, map]) => {
+    loopMaps.forEach(([id, map]) => {
         preAnimVisibility[id] = {};
         layersToSnapshot.forEach(lyr => {
             if (map.getLayer(lyr)) {
@@ -4719,8 +4740,9 @@ function startAnimation() {
     }
 
     // ── Pre-create ALL frame layers (multi-layer preload approach) ──
-    // Each frame gets its own source+layer pair per-pane with the pane's own GOES channel
-    Object.entries(maps).forEach(([paneId, map]) => {
+    // Each frame gets its own source+layer pair per-pane with the pane's own GOES channel.
+    // Scoped to the active tab so background tabs aren't loaded with anim layers.
+    loopMaps.forEach(([paneId, map]) => {
         const paneCh = paneGoesChannels[paneId];
         const hadSatVisible = preAnimVisibility[paneId]?.['satellite-layer'] === 'visible' && paneCh !== null;
         const gibsProd = paneGibs[paneId];
@@ -6273,8 +6295,8 @@ function initRadarSiteSelector() {
             const hcBtn = document.querySelector('[data-layer="radar-hc"]');
             const radarActive = refBtn?.classList.contains('active') || velBtn?.classList.contains('active') || hcBtn?.classList.contains('active');
 
-            // Sync radar site across all active map panes
-            Object.entries(maps).forEach(([id, m]) => {
+            // Sync radar site across the active tab's map panes (not other tabs)
+            activeTabMapEntries().forEach(([id, m]) => {
                 if (m) {
                     paneRadarSites[id] = site;
                     if (!isNational) {
@@ -6960,12 +6982,13 @@ function syncAllPanes(sourcePaneId) {
     const bearing = sourceMap.getBearing();
     const pitch = sourceMap.getPitch();
 
+    const myTab = tabOfPane(sourcePaneId);
     Object.entries(maps).forEach(([id, m]) => {
-        if (id !== sourcePaneId) {
+        if (id !== sourcePaneId && tabOfPane(id) === myTab) {
             m.jumpTo({ center, zoom, bearing, pitch });
         }
     });
-    addLiveLog(`SYNC: All panes synced to Pane ${sourcePaneId}`, '#00e5ff');
+    addLiveLog(`SYNC: Tab panes synced to Pane ${sourcePaneId}`, '#00e5ff');
 }
 
 function clearPane(map, paneId) {
@@ -7021,55 +7044,306 @@ function clearPane(map, paneId) {
 // SECTION 18: LAYOUT CONTROLS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function syncLayoutButtons(layout) {
+    document.querySelectorAll('.btn-view').forEach(b =>
+        b.classList.toggle('active', parseInt(b.getAttribute('data-layout')) === layout));
+}
+
+// Reveal `layout` panes within a tab's grid, lazily creating their maps. When
+// `sync` is true (layout-button click) the newly revealed panes inherit the
+// active pane's radar site/product, matching the original single-grid behavior.
+// On a tab switch we pass sync=false so each tab keeps its own per-pane setup.
+function applyLayout(tabId, layout, sync) {
+    const tab = tabs[tabId];
+    if (!tab) return;
+    tab.layout = layout;
+    const grid = document.getElementById(`pane-grid-${tabId}`);
+    if (grid) grid.className = `pane-grid layout-${layout}`;
+    if (tabId === activeTabId) syncLayoutButtons(layout);
+
+    const primarySite = paneRadarSites[activePaneId] || 'DGX';
+    const primaryProduct = paneRadarProducts[activePaneId] || 'sr_bref';
+
+    (grid ? grid.querySelectorAll('.pane') : []).forEach((p, idx) => {
+        const id = p.getAttribute('data-pane');
+        if (idx < layout) {
+            p.style.display = 'block';
+            if (sync && id !== activePaneId) {
+                paneRadarSites[id] = primarySite;
+                paneRadarProducts[id] = primaryProduct;
+                const m = maps[id];
+                if (m && m.getSource('site-bref')) {
+                    m.getSource('site-bref').setTiles([siteRadarUrl(primarySite, 'sr_bref')]);
+                    m.getSource('site-bvel').setTiles([siteRadarUrl(primarySite, 'sr_bvel')]);
+                    m.getSource('site-bdhc').setTiles([siteRadarUrl(primarySite, 'bdhc')]);
+                }
+            }
+            if (!maps[id]) initMap(id);
+            else setTimeout(() => maps[id].resize(), 50);
+        } else {
+            p.style.display = 'none';
+        }
+    });
+
+    setTimeout(() => paneIdsForTab(tabId).forEach(id => maps[id] && maps[id].resize()), 300);
+    saveTabs();
+}
+
 function initLayoutControls() {
     document.querySelectorAll('.btn-view').forEach(btn => {
         btn.addEventListener('click', () => {
             const layout = parseInt(btn.getAttribute('data-layout'));
-            document.querySelectorAll('.btn-view').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-
-            const grid = document.getElementById('pane-grid');
-            if (grid) grid.className = `pane-grid layout-${layout}`;
-
-            const primarySite = paneRadarSites[activePaneId] || 'DGX';
-            const primaryProduct = paneRadarProducts[activePaneId] || 'sr_bref';
-
-            document.querySelectorAll('.pane').forEach((p, idx) => {
-                const id = p.getAttribute('data-pane');
-                if (idx < layout) {
-                    p.style.display = 'block';
-
-                    // Synchronize radar site and product across all revealed panes to match active pane
-                    if (id !== activePaneId) {
-                        paneRadarSites[id] = primarySite;
-                        paneRadarProducts[id] = primaryProduct;
-                        const m = maps[id];
-                        if (m && m.getSource('site-bref')) {
-                            m.getSource('site-bref').setTiles([siteRadarUrl(primarySite, 'sr_bref')]);
-                            m.getSource('site-bvel').setTiles([siteRadarUrl(primarySite, 'sr_bvel')]);
-                            m.getSource('site-bdhc').setTiles([siteRadarUrl(primarySite, 'bdhc')]);
-                        }
-                    }
-
-                    if (!maps[id]) {
-                        initMap(id);
-                    } else {
-                        // Ensure existing maps resize to new grid dimensions
-                        setTimeout(() => maps[id].resize(), 50);
-                    }
-                } else {
-                    p.style.display = 'none';
-                }
-            });
-
-            // Global final resize pass
-            setTimeout(() => {
-                Object.values(maps).forEach(m => m.resize());
-            }, 300);
-
+            applyLayout(activeTabId, layout, true);
             addLiveLog(`LAYOUT: ${layout}-pane view active`, '#888');
         });
     });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 18b: WORKSPACE TABS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TABS_STORAGE_KEY = 'fxnet_tabs_v1';
+// Per-pane product setup waiting to be re-applied once that pane's map loads
+// (used to restore live layers after a page reload). Keyed by pane id.
+const pendingRestore = {};
+
+// Build a tab's pane grid in the DOM (8 panes, namespaced ids `<tabId>-<n>`).
+function buildTabGrid(tabId, layout) {
+    const container = document.getElementById('tab-grids');
+    if (!container || document.getElementById(`pane-grid-${tabId}`)) return;
+    const grid = document.createElement('div');
+    grid.className = `pane-grid layout-${layout || 1}`;
+    grid.id = `pane-grid-${tabId}`;
+    grid.dataset.tab = tabId;
+    for (let i = 1; i <= TAB_PANE_COUNT; i++) {
+        const pid = `${tabId}-${i}`;
+        const pane = document.createElement('div');
+        pane.className = 'pane' + (i === 1 ? ' active-pane' : '');
+        pane.dataset.pane = pid;
+        pane.innerHTML =
+            `<div class="pane-label">PANE ${i}</div>` +
+            `<div class="radar-timestamp" id="radar-ts-${pid}">LIVE</div>` +
+            `<div id="map-${pid}" class="map-container"></div>`;
+        grid.appendChild(pane);
+    }
+    container.appendChild(grid);
+}
+
+function renderTabBar() {
+    const bar = document.getElementById('tab-bar');
+    const add = document.getElementById('tab-add');
+    if (!bar || !add) return;
+    bar.querySelectorAll('.tab-btn').forEach(b => b.remove());
+    const multi = Object.keys(tabs).length > 1;
+    Object.values(tabs).forEach(t => {
+        const btn = document.createElement('div');
+        btn.className = 'tab-btn' + (t.id === activeTabId ? ' active' : '');
+        btn.dataset.tab = t.id;
+        btn.title = 'Double-click to rename';
+        btn.innerHTML = `<span class="tab-name"></span>` +
+            (multi ? ` <span class="tab-close" data-close="${t.id}" title="Close tab">×</span>` : '');
+        btn.querySelector('.tab-name').textContent = t.name;   // textContent = XSS-safe
+        bar.insertBefore(btn, add);
+    });
+}
+
+function switchTab(tabId) {
+    if (!tabs[tabId]) return;
+    activeTabId = tabId;
+    // Show only this tab's grid (revert inline display to the stylesheet's grid)
+    document.querySelectorAll('#tab-grids .pane-grid').forEach(g => {
+        g.style.display = (g.dataset.tab === tabId) ? '' : 'none';
+    });
+    // Default the active pane to this tab's first pane
+    activePaneId = `${tabId}-1`;
+    activeGoesChannel = paneGoesChannels[activePaneId] || null;
+    document.querySelectorAll('.pane').forEach(p => p.classList.remove('active-pane'));
+    const firstPane = document.querySelector(`.pane[data-pane="${activePaneId}"]`);
+    if (firstPane) firstPane.classList.add('active-pane');
+    // Reveal the tab's layout (no radar sync) + ensure its maps exist + resize
+    applyLayout(tabId, tabs[tabId].layout, false);
+    renderTabBar();
+    if (typeof updateSidebarToActivePane === 'function') updateSidebarToActivePane();
+    if (typeof refreshTimestampLabel === 'function') refreshTimestampLabel();
+    saveTabs();
+}
+
+function createTab(opts) {
+    tabSeq++;
+    const id = `t${tabSeq}`;
+    tabs[id] = { id, name: (opts && opts.name) || `Tab ${Object.keys(tabs).length + 1}`, layout: 1 };
+    buildTabGrid(id, 1);
+    switchTab(id);   // inits this tab's pane-1 map via applyLayout
+    addLiveLog(`TAB: New workspace "${tabs[id].name}"`, '#00e5ff');
+    return id;
+}
+
+function closeTab(tabId) {
+    if (!tabs[tabId] || Object.keys(tabs).length <= 1) return;   // never close the last tab
+    paneIdsForTab(tabId).forEach(pid => {
+        if (maps[pid]) { try { maps[pid].remove(); } catch (_) {} delete maps[pid]; }
+        delete cursorMarkers[pid];
+        delete paneRadarSites[pid];
+        delete paneRadarProducts[pid];
+        delete paneGoesChannels[pid];
+        delete paneGibs[pid];
+        delete paneL3[pid];
+        delete pendingRestore[pid];
+    });
+    document.getElementById(`pane-grid-${tabId}`)?.remove();
+    delete tabs[tabId];
+    if (activeTabId === tabId) switchTab(Object.keys(tabs)[0]);
+    else renderTabBar();
+    saveTabs();
+    addLiveLog('TAB: Workspace closed', '#888');
+}
+
+function startTabRename(tabId) {
+    const t = tabs[tabId];
+    if (!t) return;
+    const nameEl = document.querySelector(`.tab-btn[data-tab="${tabId}"] .tab-name`);
+    if (!nameEl) return;
+    const input = document.createElement('input');
+    input.className = 'tab-rename-input';
+    input.value = t.name;
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const commit = () => {
+        if (done) return;
+        done = true;
+        t.name = input.value.trim() || t.name;
+        renderTabBar();
+        saveTabs();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+        else if (ev.key === 'Escape') { input.value = t.name; commit(); }
+    });
+}
+
+// Re-apply a pane's saved product setup once its map has loaded (called from
+// initMap's load handler). Self-contained loaders (GIBS, L3) and the site-radar
+// layers are restored directly; the per-pane radar site/product state is already
+// set from loadTabs() so the sidebar reflects it.
+function applyPaneRestore(paneId) {
+    const conf = pendingRestore[paneId];
+    if (!conf) return;
+    delete pendingRestore[paneId];
+    const map = maps[paneId];
+    if (!map) return;
+    try {
+        if (conf.gibs) {
+            loadGibsLive(paneId, conf.gibs);
+        } else if (conf.l3 && conf.l3.station && conf.l3.product) {
+            loadL3Radar(paneId, conf.l3.station, conf.l3.product);
+        } else if (conf.radarVisible && conf.radarProduct) {
+            // NEXRAD site radar: show the product's layer + (re)point its tiles
+            const layerByProduct = {
+                sr_bref: 'site-bref-layer', sr_bvel: 'site-bvel-layer',
+                bdhc: 'site-bdhc-layer', bdsa: 'site-bdsa-layer', boha: 'site-boha-layer'
+            };
+            const lyr = layerByProduct[conf.radarProduct];
+            const site = conf.radarSite || 'DGX';
+            if (lyr && map.getLayer(lyr)) {
+                const srcId = lyr.replace('-layer', '');
+                if (map.getSource(srcId)) map.getSource(srcId).setTiles([siteRadarUrl(site, conf.radarProduct)]);
+                map.setLayoutProperty(lyr, 'visibility', 'visible');
+            }
+        } else if (conf.satVisible && conf.goesChannel != null) {
+            // IEM single-channel GOES: repoint the satellite source + show it
+            if (map.getSource('satellite')) map.getSource('satellite').setTiles([goesChannelUrl(conf.goesChannel)]);
+            if (map.getLayer('satellite-layer')) map.setLayoutProperty('satellite-layer', 'visibility', 'visible');
+            if (paneId === activePaneId) activeGoesChannel = conf.goesChannel;
+        }
+    } catch (_) {}
+    if (paneId === activePaneId && typeof updateSidebarToActivePane === 'function') {
+        updateSidebarToActivePane();
+    }
+}
+
+function saveTabs() {
+    try {
+        const data = {
+            activeTabId,
+            tabSeq,
+            tabs: Object.values(tabs).map(t => ({
+                id: t.id,
+                name: t.name,
+                layout: t.layout,
+                panes: paneIdsForTab(t.id).reduce((acc, pid) => {
+                    const conf = {};
+                    const m = maps[pid];
+                    if (paneRadarSites[pid]) conf.radarSite = paneRadarSites[pid];
+                    if (paneRadarProducts[pid]) conf.radarProduct = paneRadarProducts[pid];
+                    if (paneGoesChannels[pid] != null) conf.goesChannel = paneGoesChannels[pid];
+                    if (paneGibs[pid]) conf.gibs = paneGibs[pid];
+                    if (paneL3[pid]) conf.l3 = paneL3[pid];
+                    // Record whether the imagery layers are actually showing, so
+                    // we only auto-restore what was visible (not merely selected).
+                    if (m) {
+                        conf.radarVisible = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer',
+                            'site-bdsa-layer', 'site-boha-layer'].some(l => isLayerVisible(m, l));
+                        conf.satVisible = isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] != null;
+                    }
+                    return Object.keys(conf).length ? (acc[pid] = conf, acc) : acc;
+                }, {})
+            }))
+        };
+        localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify(data));
+    } catch (_) {}
+}
+
+function loadTabs() {
+    try {
+        const raw = localStorage.getItem(TABS_STORAGE_KEY);
+        if (!raw) return false;
+        const data = JSON.parse(raw);
+        if (!data || !Array.isArray(data.tabs) || !data.tabs.length) return false;
+        tabSeq = data.tabSeq || data.tabs.length;
+        data.tabs.forEach(t => {
+            tabs[t.id] = { id: t.id, name: t.name || t.id, layout: t.layout || 1 };
+            buildTabGrid(t.id, t.layout || 1);
+            Object.entries(t.panes || {}).forEach(([pid, conf]) => {
+                if (conf.radarSite) paneRadarSites[pid] = conf.radarSite;
+                if (conf.radarProduct) paneRadarProducts[pid] = conf.radarProduct;
+                if (conf.goesChannel != null) paneGoesChannels[pid] = conf.goesChannel;
+                // Defer live-layer restore until the pane's map loads
+                if (conf.gibs || conf.l3 || conf.radarVisible || conf.satVisible) pendingRestore[pid] = conf;
+            });
+        });
+        activeTabId = (data.activeTabId && tabs[data.activeTabId]) ? data.activeTabId : Object.keys(tabs)[0];
+        return true;
+    } catch (_) { return false; }
+}
+
+function initTabs() {
+    // Restore persisted tabs, or seed the default first tab
+    if (!loadTabs()) {
+        tabs['t1'] = { id: 't1', name: 'Tab 1', layout: 1 };
+        buildTabGrid('t1', 1);
+        activeTabId = 't1';
+    }
+    renderTabBar();
+
+    document.getElementById('tab-add')?.addEventListener('click', () => createTab());
+    const bar = document.getElementById('tab-bar');
+    bar?.addEventListener('click', e => {
+        const close = e.target.closest('.tab-close');
+        if (close) { e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
+        const btn = e.target.closest('.tab-btn');
+        if (btn) switchTab(btn.getAttribute('data-tab'));
+    });
+    bar?.addEventListener('dblclick', e => {
+        const btn = e.target.closest('.tab-btn');
+        if (btn) startTabRename(btn.getAttribute('data-tab'));
+    });
+
+    // Activate the saved/active tab (creates its first pane's map)
+    switchTab(tabs[activeTabId] ? activeTabId : Object.keys(tabs)[0]);
 }
 
 
@@ -7773,8 +8047,13 @@ function init() {
     // Health status check every 10 seconds
     setInterval(checkHealthStatus, 10000);
 
-    // Initialize primary map (Pane 1)
-    initMap('1');
+    // Initialize workspace tabs (restores saved tabs or seeds the first one,
+    // and creates the active tab's primary map). Replaces the old initMap('1').
+    initLayoutControls();
+    initTabs();
+    // Persist tab + product setup periodically and on unload
+    setInterval(saveTabs, 15000);
+    window.addEventListener('beforeunload', saveTabs);
 
     // Start UTC clock
     startUTCClock();
@@ -7783,7 +8062,6 @@ function init() {
     initProductSidebar();
     initRadarSiteSelector();
     initPlayButton();
-    initLayoutControls();
     initContextMenu();
     initHealthToggle();
     initDebugToggle();
