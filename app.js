@@ -533,6 +533,7 @@ function initMap(paneId) {
     map.on('load', () => {
         registerWindBarbs(map);
         setupMapLayers(map, paneId);
+        liftBoundaries(map);        // boundaries above imagery, below features/labels
         createRadarLegend(paneId);
         createEroLegend(paneId);
         applyPaneRestore(paneId);   // re-apply any persisted product setup for this pane
@@ -679,6 +680,35 @@ function getEventColor(event) {
     return '#ff3333';
 }
 
+// Geopolitical boundary lines, bottom→top. They must render ABOVE the imagery
+// (radar/satellite/GIBS) so they're legible — otherwise they sit under the
+// semi-transparent imagery and wash out. Casing layers come before their core
+// so the dark halo stays beneath the white line.
+const GEO_BOUNDARY_LAYERS = [
+    'counties-layer',
+    'states-layer',
+    'great-lakes-outline',
+    'international-borders-casing-layer', 'international-borders-layer',
+    'coastlines-casing-layer', 'coastlines-layer'
+];
+
+// The lowest boundary layer present — used as the insert anchor so runtime
+// imagery (GIBS, L3, loop frames) lands BELOW the boundary block.
+function firstBoundaryLayer(map) {
+    return GEO_BOUNDARY_LAYERS.find(id => map.getLayer && map.getLayer(id));
+}
+
+// Lift boundary lines to sit just below the first feature overlay (smoke) — i.e.
+// ABOVE all imagery but BELOW weather features + labels (the AWIPS z-order).
+// Cheap and idempotent; called once after all static layers are added.
+function liftBoundaries(map) {
+    if (!map || !map.getStyle) return;
+    const anchor = map.getLayer('hms-smoke-fill') ? 'hms-smoke-fill' : undefined;
+    GEO_BOUNDARY_LAYERS.forEach(id => {
+        if (map.getLayer(id)) { try { map.moveLayer(id, anchor); } catch (_) {} }
+    });
+}
+
 function setupMapLayers(map, paneId) {
     // ─── Layer 0: Great Lakes Boundaries (High-fidelity vector polygons) ───
     map.addSource('great-lakes', {
@@ -698,20 +728,25 @@ function setupMapLayers(map, paneId) {
     });
 
     // ─── Layer 0.5: Coastlines and International Borders ───
+    // White cores with a dark casing (halo) so they stay legible over BOTH
+    // bright cloud tops and dark land/ocean on grayscale satellite and radar.
     map.addSource('coastlines', {
         type: 'geojson',
         data: 'https://d2ad6b4ur7yvpq.cloudfront.net/naturalearth-3.3.0/ne_50m_coastline.geojson'
+    });
+    map.addLayer({
+        id: 'coastlines-casing-layer',
+        type: 'line',
+        source: 'coastlines',
+        layout: { visibility: 'visible' },
+        paint: { 'line-color': '#000000', 'line-width': 3.0, 'line-opacity': 0.55, 'line-blur': 0.4 }
     });
     map.addLayer({
         id: 'coastlines-layer',
         type: 'line',
         source: 'coastlines',
         layout: { visibility: 'visible' },
-        paint: {
-            'line-color': '#888888',
-            'line-width': 1.2,
-            'line-opacity': 0.8
-        }
+        paint: { 'line-color': '#ffffff', 'line-width': 1.3, 'line-opacity': 0.95 }
     });
 
     map.addSource('international-borders', {
@@ -719,16 +754,18 @@ function setupMapLayers(map, paneId) {
         data: 'https://d2ad6b4ur7yvpq.cloudfront.net/naturalearth-3.3.0/ne_50m_admin_0_boundary_lines_land.geojson'
     });
     map.addLayer({
+        id: 'international-borders-casing-layer',
+        type: 'line',
+        source: 'international-borders',
+        layout: { visibility: 'visible' },
+        paint: { 'line-color': '#000000', 'line-width': 3.0, 'line-opacity': 0.5, 'line-blur': 0.4 }
+    });
+    map.addLayer({
         id: 'international-borders-layer',
         type: 'line',
         source: 'international-borders',
         layout: { visibility: 'visible' },
-        paint: {
-            'line-color': '#888888',
-            'line-width': 1.2,
-            'line-dasharray': [2, 2],
-            'line-opacity': 0.8
-        }
+        paint: { 'line-color': '#ffffff', 'line-width': 1.2, 'line-dasharray': [2, 2], 'line-opacity': 0.9 }
     });
 
     // ─── Layer 1: State Boundaries (visible by default) ───
@@ -737,7 +774,19 @@ function setupMapLayers(map, paneId) {
         tiles: ['https://mesonet.agron.iastate.edu/cgi-bin/wms/us/states.cgi?VERSION=1.1.1&SERVICE=WMS&REQUEST=GetMap&LAYERS=usstates&FORMAT=image/png&TRANSPARENT=true&STYLES=&SRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}'],
         tileSize: 256
     });
-    map.addLayer({ id: 'states-layer', type: 'raster', source: 'states', layout: { visibility: 'visible' }, paint: { 'raster-opacity': 0.9 } });
+    // IEM renders these lines in pure black; raster-brightness-min:1 lifts the
+    // darkest pixels to white so state lines read on dark radar + grayscale sat.
+    map.addLayer({ id: 'states-layer', type: 'raster', source: 'states', layout: { visibility: 'visible' }, paint: { 'raster-opacity': 0.95, 'raster-brightness-min': 1 } });
+
+    // ─── Layer 1a: County Boundaries (IEM raster, off by default) ───
+    // Same black-line WMS as states; whitened via raster-brightness-min. Stays
+    // crisp at every zoom (re-rendered per bbox), unlike a coarse vector file.
+    map.addSource('counties', {
+        type: 'raster',
+        tiles: ['https://mesonet.agron.iastate.edu/cgi-bin/wms/us/counties.cgi?VERSION=1.1.1&SERVICE=WMS&REQUEST=GetMap&LAYERS=uscounties&FORMAT=image/png&TRANSPARENT=true&STYLES=&SRS=EPSG:3857&WIDTH=256&HEIGHT=256&BBOX={bbox-epsg-3857}'],
+        tileSize: 256
+    });
+    map.addLayer({ id: 'counties-layer', type: 'raster', source: 'counties', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.7, 'raster-brightness-min': 1 } });
 
     // ─── Layer 1b: NWS CWA Boundaries (County Warning Areas / WFO Zones) ───
     map.addSource('nws-cwa-wms', {
@@ -4791,7 +4840,7 @@ function startAnimation() {
                             'raster-resampling': 'nearest',
                             'raster-fade-duration': 0
                         }
-                    }, map.getLayer('radar-layer') ? 'radar-layer' : undefined);
+                    }, map.getLayer('radar-layer') ? 'radar-layer' : firstBoundaryLayer(map));
                 }
             }
         }
@@ -4821,7 +4870,7 @@ function startAnimation() {
                             'raster-resampling': 'nearest',
                             'raster-fade-duration': 0
                         }
-                    });
+                    }, firstBoundaryLayer(map));   // keep boundaries above loop frames
                 }
             }
         }
@@ -6738,7 +6787,7 @@ async function loadL3Radar(paneId, station, product) {
         } else {
             map.addSource('radar-l3', { type: 'image', url: data.image, coordinates: data.coordinates });
             map.addLayer({ id: 'radar-l3-layer', type: 'raster', source: 'radar-l3',
-                paint: { 'raster-opacity': 0.85, 'raster-fade-duration': 0 } });
+                paint: { 'raster-opacity': 0.85, 'raster-fade-duration': 0 } }, firstBoundaryLayer(map));
         }
         map.setLayoutProperty('radar-l3-layer', 'visibility', 'visible');
         paneL3[paneId] = { station, product, meta: data.meta };
@@ -6779,7 +6828,8 @@ async function loadGibsLive(paneId, prodKey) {
         if (map.getSource('gibs-sat')) map.removeSource('gibs-sat');
         map.addSource('gibs-sat', { type: 'raster', tiles: [url], tileSize: 256, maxzoom: p.max });
         map.addLayer({ id: 'gibs-sat-layer', type: 'raster', source: 'gibs-sat',
-            layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85, 'raster-fade-duration': 0 } });
+            layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85, 'raster-fade-duration': 0 } },
+            firstBoundaryLayer(map));   // keep boundaries above the GIBS imagery
     }
     map.setLayoutProperty('gibs-sat-layer', 'visibility', 'visible');
     updateHealth('gibsSat');
