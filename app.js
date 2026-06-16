@@ -71,7 +71,7 @@ const HEALTH_THRESHOLDS = {
     wpcIsobars: { label: 'WPC Isobars',   thresholdMs: 4 * 60 * 60 * 1000 },
     wpcFronts:  { label: 'WPC Fronts/HL', thresholdMs: 4 * 60 * 60 * 1000 },
     wpcQpf:     { label: 'WPC QPF',       thresholdMs: 8 * 60 * 60 * 1000 },
-    radarL3:    { label: 'NODD L3 Radar', thresholdMs: 15 * 60 * 1000 },
+    radarL3:    { label: 'NODD Dual-Pol', thresholdMs: 15 * 60 * 1000 },
     wpcEro:     { label: 'WPC ERO',       thresholdMs: 12 * 60 * 60 * 1000 },
     nhcStorms:  { label: 'NHC Storms',    thresholdMs: 60 * 60 * 1000 },
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
