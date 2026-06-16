@@ -128,42 +128,52 @@ def _read_prod_time(raw, pdb):
         return ''
 
 
-def _colorize(vals, stops, size):
-    thr = np.array([s[0] for s in stops], dtype=np.float32)
-    cols = np.array([s[1] for s in stops], dtype=np.uint8)
-    rgba = np.zeros(vals.shape + (4,), np.uint8)
-    idx = np.clip(np.digitize(vals, thr) - 1, 0, len(stops) - 1)
-    valid = ~np.isnan(vals) & (vals >= thr[0])
-    rgba[..., 0] = cols[idx, 0]
-    rgba[..., 1] = cols[idx, 1]
-    rgba[..., 2] = cols[idx, 2]
-    rgba[..., 3] = np.where(valid, 220, 0)
-    return rgba
+# Render near the radar's native gate resolution so it stays crisp when zoomed,
+# capped so render time / payload stay reasonable. Output is a palette-mode PNG
+# (index 0 = transparent) — exact discrete colors at ~half the size of RGBA.
+RENDER_CAP = 3400
 
 
-def render(dec, product, size=900):
+def render(dec, product):
     rlat, rlon, maxr = dec['lat'], dec['lon'], dec['max_range']
+    coslat = math.cos(math.radians(rlat))
+    # pixel size ~ gate size (native); capped
+    size = int(min(round(2 * maxr / dec['gate_km']), RENDER_CAP))
     dlat = maxr / 111.32
-    dlon = maxr / (111.32 * math.cos(math.radians(rlat)))
-    lats = np.linspace(rlat + dlat, rlat - dlat, size)   # north(top) -> south(bottom)
-    lons = np.linspace(rlon - dlon, rlon + dlon, size)   # west(left) -> east(right)
-    LON, LAT = np.meshgrid(lons, lats)
-    xkm = (LON - rlon) * 111.32 * math.cos(math.radians(rlat))
-    ykm = (LAT - rlat) * 111.32
-    rng = np.sqrt(xkm * xkm + ykm * ykm)
-    azp = np.degrees(np.arctan2(xkm, ykm)) % 360.0
-    az = dec['az']
+    dlon = maxr / (111.32 * coslat)
+
+    # 1-D axes -> 2-D range/azimuth via broadcasting (avoids full lon/lat meshgrids)
+    ykm = ((np.linspace(rlat + dlat, rlat - dlat, size, dtype=np.float32) - rlat) * 111.32).reshape(size, 1)
+    xkm = ((np.linspace(rlon - dlon, rlon + dlon, size, dtype=np.float32) - rlon) * (111.32 * coslat)).reshape(1, size)
+    rng = np.sqrt(xkm * xkm + ykm * ykm)                       # (size,size) f32
+    azp = (np.degrees(np.arctan2(np.broadcast_to(xkm, rng.shape),
+                                 np.broadcast_to(ykm, rng.shape))) % 360.0)
     nrad = dec['num_rad']
-    az0 = az[0]
-    ares = 360.0 / nrad
-    ri = np.round((azp - az0) / ares).astype(int) % nrad
-    gi = (rng / dec['gate_km']).astype(int)
+    ri = np.round((azp - dec['az'][0]) * (nrad / 360.0)).astype(np.int32) % nrad
+    del azp
+    gi = (rng / dec['gate_km']).astype(np.int32)
     inside = (gi < dec['num_bins']) & (rng <= maxr)
+    del rng
     grid = np.full((size, size), np.nan, np.float32)
     grid[inside] = dec['data'][ri[inside], gi[inside]]
-    rgba = _colorize(grid, STOPS[product], size)
+    del ri, gi, inside
+
+    # palette indices: 0 = transparent, 1..N = color buckets
+    stops = STOPS[product]
+    thr = np.array([s[0] for s in stops], dtype=np.float32)
+    bucket = np.clip(np.digitize(grid, thr), 0, len(stops))   # 0 below first threshold
+    valid = ~np.isnan(grid) & (grid >= thr[0])
+    idx = np.where(valid, bucket, 0).astype(np.uint8)
+    del grid, bucket, valid
+
+    palette = [0, 0, 0]
+    for _, (r, g, b) in stops:
+        palette += [r, g, b]
+    img = Image.fromarray(idx, 'P')
+    img.putpalette(palette)
     buf = io.BytesIO()
-    Image.fromarray(rgba, 'RGBA').save(buf, format='PNG', optimize=True)
+    img.save(buf, format='PNG', optimize=True, transparency=0)
+
     coords = [[rlon - dlon, rlat + dlat], [rlon + dlon, rlat + dlat],
               [rlon + dlon, rlat - dlat], [rlon - dlon, rlat - dlat]]
     return buf.getvalue(), coords

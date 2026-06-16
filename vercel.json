@@ -15,7 +15,7 @@
     },
     "api/radar-l3.py": {
       "maxDuration": 30,
-      "memory": 1024
+      "memory": 2048
     }
   },
   "rewrites": [
