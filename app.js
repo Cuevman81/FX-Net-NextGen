@@ -27,6 +27,8 @@ let preAnimVisibility = {}; // Stores layer visibility before loop starts
 // (A real site code here switches that pane to single-site products via the SITE selector.)
 let paneRadarSites = { '1': 'nexrad-n0q-900913', '2': 'nexrad-n0q-900913', '3': 'nexrad-n0q-900913', '4': 'nexrad-n0q-900913', '5': 'nexrad-n0q-900913', '6': 'nexrad-n0q-900913', '7': 'nexrad-n0q-900913', '8': 'nexrad-n0q-900913' };
 let paneRadarProducts = { '1': 'sr_bref', '2': 'sr_bref', '3': 'sr_bref', '4': 'sr_bref', '5': 'sr_bref', '6': 'sr_bref', '7': 'sr_bref', '8': 'sr_bref' };
+// NEXRAD Level III (NODD) overlay state, per pane: { station, product, meta }
+let paneL3 = {};
 let activeGoesChannel = null; // Convenience: always mirrors paneGoesChannels[activePaneId]
 let paneGoesChannels = { '1': null, '2': null, '3': null, '4': null, '5': null, '6': null, '7': null, '8': null };
 let activeRadarNational = false;
@@ -69,6 +71,7 @@ const HEALTH_THRESHOLDS = {
     wpcIsobars: { label: 'WPC Isobars',   thresholdMs: 4 * 60 * 60 * 1000 },
     wpcFronts:  { label: 'WPC Fronts/HL', thresholdMs: 4 * 60 * 60 * 1000 },
     wpcQpf:     { label: 'WPC QPF',       thresholdMs: 8 * 60 * 60 * 1000 },
+    radarL3:    { label: 'NODD L3 Radar', thresholdMs: 15 * 60 * 1000 },
     wpcEro:     { label: 'WPC ERO',       thresholdMs: 12 * 60 * 60 * 1000 },
     nhcStorms:  { label: 'NHC Storms',    thresholdMs: 60 * 60 * 1000 },
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
@@ -4992,6 +4995,9 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'wpc-isobars-line'), 'WPC ISOBARS 4mb', '#d0d0d0');
     add(isLayerVisible(map, 'wpc-fronts-solid'), 'WPC FRONTS', '#4488ff');
     add(isLayerVisible(map, 'wpc-qpf-layer'), 'WPC QPF', '#39ff5a');
+    if (isLayerVisible(map, 'radar-l3-layer') && paneL3[paneId]) {
+        rows.push({ label: `L3 ${paneL3[paneId].meta?.name || paneL3[paneId].product} · ${paneL3[paneId].station}`, color: '#33c27a' });
+    }
     // Hazards
     add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d');
     add(isLayerVisible(map, 'spc-day2-fill'), 'SPC DAY 2 OUTLOOK', '#ff4d4d');
@@ -5487,6 +5493,7 @@ function updateSidebarToActivePane() {
         let isActive = false;
         if (layer === 'airnow-aqi') isActive = isLayerVisible(map, 'airnow-aqi-layer');
         else if (layer === 'metars') isActive = isLayerVisible(map, 'metars-temp');
+        else if (layer === 'radar-l3') isActive = isLayerVisible(map, 'radar-l3-layer') && paneL3[activePaneId] && paneL3[activePaneId].product === item.getAttribute('data-l3');
         else if (layer === 'radar-ref') isActive = isLayerVisible(map, 'radar-layer') || isLayerVisible(map, 'site-bref-layer');
         else if (layer === 'radar-vel') isActive = isLayerVisible(map, 'site-bvel-layer');
         else if (layer === 'radar-hc') isActive = isLayerVisible(map, 'site-bdhc-layer');
@@ -5690,6 +5697,26 @@ function initProductSidebar() {
             }
 
             // ─── Radar ───
+            if (layer === 'radar-l3') {
+                const product = item.getAttribute('data-l3');
+                const wasActive = item.classList.contains('active');
+                if (wasActive) {
+                    clearL3Radar(activePaneId);
+                } else {
+                    let station = (paneRadarSites[activePaneId] || '').toUpperCase();
+                    if (!station || station.includes('NEXRAD')) {
+                        station = 'DGX';
+                        paneRadarSites[activePaneId] = 'DGX';
+                        const sel = document.getElementById('radar-site-select');
+                        if (sel) sel.value = 'DGX';
+                        addLiveLog('L3 NODD: no SITE selected — defaulting to DGX (Jackson MS)', '#ffb300');
+                    }
+                    await loadL3Radar(activePaneId, station, product);
+                }
+                updateSidebarToActivePane();
+                return;
+            }
+
             if (layer === 'radar-ref') {
                 const isActive = !item.classList.contains('active');
                 const siteVal = paneRadarSites[activePaneId] || 'DGX';
@@ -6584,6 +6611,42 @@ function createRadarLegend(paneId) {
     paneEl.appendChild(legend);
 }
 
+// ─── NEXRAD Level III (NODD) overlay ───
+// Decoded + rendered server-side (/api/radar-l3) into a transparent, georeferenced
+// PNG, dropped onto the pane's map as an image source. Per-pane; keeps the legacy
+// IEM/OpenGeo radar fully intact (this is an independent overlay behind its own items).
+async function loadL3Radar(paneId, station, product) {
+    const map = maps[paneId];
+    if (!map) return;
+    addLiveLog(`L3 NODD: Loading ${station} ${product}...`, '#33c27a');
+    try {
+        const res = await fetch(`/api/radar-l3?station=${station}&product=${product}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'render failed');
+        if (map.getSource('radar-l3')) {
+            map.getSource('radar-l3').updateImage({ url: data.image, coordinates: data.coordinates });
+        } else {
+            map.addSource('radar-l3', { type: 'image', url: data.image, coordinates: data.coordinates });
+            map.addLayer({ id: 'radar-l3-layer', type: 'raster', source: 'radar-l3',
+                paint: { 'raster-opacity': 0.85, 'raster-fade-duration': 0 } });
+        }
+        map.setLayoutProperty('radar-l3-layer', 'visibility', 'visible');
+        paneL3[paneId] = { station, product, meta: data.meta };
+        updateHealth('radarL3');
+        if (paneId === activePaneId) refreshTimestampLabel();
+        addLiveLog(`L3 NODD: ${station} ${data.meta.name} @ ${data.meta.time} (el ${data.meta.elevation}°)`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`L3 NODD ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+function clearL3Radar(paneId) {
+    const map = maps[paneId];
+    if (map && map.getLayer('radar-l3-layer')) map.setLayoutProperty('radar-l3-layer', 'visibility', 'none');
+    delete paneL3[paneId];
+    if (paneId === activePaneId) refreshTimestampLabel();
+}
+
 // WPC ERO category legend — matches the polygon colors emitted by /api/wpc-ero
 // (KML-derived). Sits bottom-left so it doesn't collide with the radar legend.
 const ERO_LEGEND_CATS = [
@@ -6777,6 +6840,7 @@ function clearPane(map, paneId) {
     const allToggleLayers = [
         'satellite-layer', 'lightning-layer', 'radar-layer',
         'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer',
+        'radar-l3-layer',
         'spc-outlook-fill', 'spc-outlook-line',
         'spc-day1-fill', 'spc-day1-line', 'spc-day2-fill', 'spc-day2-line', 'spc-day3-fill', 'spc-day3-line',
         'wpc-ero-day1-fill', 'wpc-ero-day1-line', 'wpc-ero-day2-fill', 'wpc-ero-day2-line', 'wpc-ero-day3-fill', 'wpc-ero-day3-line',
@@ -6813,6 +6877,7 @@ function clearPane(map, paneId) {
     activeMrmsQpe = null;
     activeCpcTempLayer = null;
     activeCpcPrecipLayer = null;
+    delete paneL3[paneId];
     updateRadarLegend(paneId);
     updateEroLegend(paneId);
     addLiveLog(`PANE ${paneId}: Cleared`, '#ff3333');
@@ -7031,6 +7096,7 @@ function startAutoRefresh() {
             const eroActive = Object.values(maps).some(m => isLayerVisible(m, `wpc-ero-day${day}-fill`));
             if (eroActive) fetchERO(day, true);
         });
+
 
         // SPC Local Storm Reports
         const lsrActive = Object.values(maps).some(m => isLayerVisible(m, 'spc-lsr-icons'));
@@ -7598,6 +7664,16 @@ function init() {
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');
     checkNewWarnings();
     setInterval(checkNewWarnings, 15 * 1000);
+
+    // NEXRAD Level III (NODD) — poll for new scans on any pane showing an L3 overlay
+    setInterval(() => {
+        Object.keys(paneL3).forEach(pid => {
+            const st = paneL3[pid];
+            if (st && maps[pid] && isLayerVisible(maps[pid], 'radar-l3-layer')) {
+                loadL3Radar(pid, st.station, st.product);
+            }
+        });
+    }, 120 * 1000);
 
     // ─── Enhanced Warning Pulse Animation ───
     // Smoothly oscillates opacity of IBW (Impact-Based Warning) overlay layers

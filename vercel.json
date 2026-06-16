@@ -12,6 +12,10 @@
     },
     "api/wpc-mpd.py": {
       "maxDuration": 30
+    },
+    "api/radar-l3.py": {
+      "maxDuration": 30,
+      "memory": 1024
     }
   },
   "rewrites": [
