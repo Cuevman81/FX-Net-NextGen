@@ -179,6 +179,32 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
 
+        elif path == '/api/radar-l3':
+            # NEXRAD Level III (NODD) -> transparent georeferenced radar overlay.
+            # Reuse the Vercel function's decode/render so local/prod stay identical.
+            try:
+                from urllib.parse import urlparse, parse_qs
+                import importlib.util
+                qs = parse_qs(urlparse(self.path).query)
+                station = qs.get('station', ['KDGX'])[0].upper()
+                product = qs.get('product', ['N0B'])[0].upper()
+                spec = importlib.util.spec_from_file_location(
+                    'radar_l3', os.path.join(os.path.dirname(__file__), 'api', 'radar-l3.py'))
+                rl3 = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(rl3)
+                result = rl3.build_radar(station, product)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+
         elif path == '/api/wpc-mpd':
             # WPC Mesoscale Precipitation Discussions (IEM shapefile -> active GeoJSON).
             # Reuse the Vercel function's converter so local/prod stay identical.
