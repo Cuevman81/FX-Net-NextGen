@@ -12,7 +12,7 @@
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="style.css?v=103">
+    <link rel="stylesheet" href="style.css?v=104">
     <!-- Vercel Speed Insights -->
     <script type="module">
       import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
@@ -421,48 +421,14 @@
                 </div>
             </div>
 
-            <div class="pane-grid layout-1" id="pane-grid">
-                <div class="pane active-pane" data-pane="1">
-                    <div class="pane-label">PANE 1</div>
-                    <div class="radar-timestamp" id="radar-ts-1">LIVE</div>
-                    <div id="map-1" class="map-container"></div>
-                </div>
-                <div class="pane" data-pane="2">
-                    <div class="pane-label">PANE 2</div>
-                    <div class="radar-timestamp" id="radar-ts-2">LIVE</div>
-                    <div id="map-2" class="map-container"></div>
-                </div>
-                <div class="pane" data-pane="3">
-                    <div class="pane-label">PANE 3</div>
-                    <div class="radar-timestamp" id="radar-ts-3">LIVE</div>
-                    <div id="map-3" class="map-container"></div>
-                </div>
-                <div class="pane" data-pane="4">
-                    <div class="pane-label">PANE 4</div>
-                    <div class="radar-timestamp" id="radar-ts-4">LIVE</div>
-                    <div id="map-4" class="map-container"></div>
-                </div>
-                <div class="pane" data-pane="5">
-                    <div class="pane-label">PANE 5</div>
-                    <div class="radar-timestamp" id="radar-ts-5">LIVE</div>
-                    <div id="map-5" class="map-container"></div>
-                </div>
-                <div class="pane" data-pane="6">
-                    <div class="pane-label">PANE 6</div>
-                    <div class="radar-timestamp" id="radar-ts-6">LIVE</div>
-                    <div id="map-6" class="map-container"></div>
-                </div>
-                <div class="pane" data-pane="7">
-                    <div class="pane-label">PANE 7</div>
-                    <div class="radar-timestamp" id="radar-ts-7">LIVE</div>
-                    <div id="map-7" class="map-container"></div>
-                </div>
-                <div class="pane" data-pane="8">
-                    <div class="pane-label">PANE 8</div>
-                    <div class="radar-timestamp" id="radar-ts-8">LIVE</div>
-                    <div id="map-8" class="map-container"></div>
-                </div>
+            <!-- Workspace tabs: each tab is an independent multi-pane grid.
+                 The tab buttons and the per-tab .pane-grid elements are built in
+                 JS (initTabs) so each can keep its own panes/maps alive. -->
+            <div class="tab-bar" id="tab-bar">
+                <button class="tab-add" id="tab-add" title="New workspace tab"><i data-lucide="plus"></i></button>
             </div>
+
+            <div class="tab-grids" id="tab-grids"></div>
 
             <div class="hud-bottom">
                 <div class="control-group">
@@ -893,7 +859,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=167"></script>
+    <script src="app.js?v=168"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
