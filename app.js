@@ -1763,13 +1763,13 @@ function initFrontalPipIcons(map) {
         id: 'nhc-cone-outline', type: 'line', source: 'nhc-storms',
         filter: ['==', ['get', 'layerType'], 'cone'],
         layout: { visibility: 'none' },
-        paint: { 'line-color': '#ff6600', 'line-width': 1.5 }
+        paint: { 'line-color': ['case', ['==', ['get', 'isPTC'], 1], '#b388ff', '#ff6600'], 'line-width': 1.5 }
     });
     map.addLayer({
         id: 'nhc-track-line', type: 'line', source: 'nhc-storms',
         filter: ['==', ['get', 'layerType'], 'track'],
         layout: { visibility: 'none' },
-        paint: { 'line-color': '#ffcc00', 'line-width': 2, 'line-dasharray': [4, 2] }
+        paint: { 'line-color': ['case', ['==', ['get', 'isPTC'], 1], '#b388ff', '#ffcc00'], 'line-width': 2, 'line-dasharray': [4, 2] }
     });
     map.addLayer({
         id: 'nhc-track-pts', type: 'circle', source: 'nhc-storms',
@@ -1790,7 +1790,7 @@ function initFrontalPipIcons(map) {
             visibility: 'none',
             'text-field': ['case',
                 ['==', ['get', 'tau'], 0],
-                ['concat', ['get', 'stormname'], '\n', ['to-string', ['get', 'maxwind']], ' kt'],
+                ['concat', ['coalesce', ['get', 'displayname'], ['get', 'stormname']], '\n', ['to-string', ['get', 'maxwind']], ' kt'],
                 ['concat', '+', ['to-string', ['round', ['get', 'tau']]], 'h ', ['to-string', ['get', 'maxwind']], ' kt']
             ],
             'text-font': ['Noto Sans Bold'],
@@ -1798,7 +1798,7 @@ function initFrontalPipIcons(map) {
             'text-offset': [0, 1.5],
             'text-allow-overlap': false
         },
-        paint: { 'text-color': '#ffcc00', 'text-halo-color': '#000', 'text-halo-width': 1.5 }
+        paint: { 'text-color': ['case', ['==', ['get', 'isPTC'], 1], '#b388ff', '#ffcc00'], 'text-halo-color': '#000', 'text-halo-width': 1.5 }
     });
     map.addLayer({
         id: 'nhc-warn-fill', type: 'fill', source: 'nhc-storms',
@@ -2256,7 +2256,8 @@ function initFrontalPipIcons(map) {
         if (!e.features || !e.features[0]) return;
         const feat = e.features[0];
         const p = feat.properties;
-        const name = p.stormname || p.STORMNAME || 'Unknown';
+        const name = p.displayname || p.stormname || p.STORMNAME || 'Unknown';
+        const ptcTag = p.isPTC == 1 ? ' <span style="background:#b388ff;color:#1a1030;font-size:9px;font-weight:bold;padding:1px 5px;border-radius:3px;vertical-align:middle;">PTC</span>' : '';
         const wind = p.maxwind || p.MAXWIND || 0;
         const gust = p.gust || p.GUST || 0;
         const rawMslp = p.MSLP || p.mslp || 9999;
@@ -2314,7 +2315,7 @@ function initFrontalPipIcons(map) {
 
         const validTime = p.fldatelbl || p.FLDATELBL || p.datelbl || p.DATELBL || '';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:300px;">
-            <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:2px;">${name}</div>
+            <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:2px;">${name}${ptcTag}</div>
             <div style="color:#888;font-size:10px;margin-bottom:6px;">${tauLabel}${validTime ? ' — ' + validTime : ''}</div>
             <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;">
                 <span style="color:#888;">Classification:</span><span style="color:#ffcc00;">${cat}</span>
@@ -3544,22 +3545,31 @@ async function fetchNHCStorms(show) {
             coneRes.json(), trackRes.json(), pointsRes.json(), warnRes.json()
         ]);
 
+        // Flag Potential Tropical Cyclones so they can be labeled/styled distinctly
+        const isPTCName = n => /potential tropical cyclone/i.test(n || '');
+        const shortName = n => (n || '').replace(/^Potential Tropical Cyclone\s*/i, 'PTC ');
+
         (coneData.features || []).forEach(f => {
             f.properties.layerType = 'cone';
+            f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
             combined.features.push(f);
         });
         (trackData.features || []).forEach(f => {
             f.properties.layerType = 'track';
+            f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
             combined.features.push(f);
         });
         (pointsData.features || []).forEach(f => {
             f.properties.layerType = 'point';
             f.properties.maxwind = f.properties.MAXWIND || f.properties.maxwind || 0;
             f.properties.stormname = f.properties.STORMNAME || f.properties.stormname || 'UNKNOWN';
+            f.properties.isPTC = isPTCName(f.properties.stormname) ? 1 : 0;
+            f.properties.displayname = shortName(f.properties.stormname);
             combined.features.push(f);
         });
         (warnData.features || []).forEach(f => {
             f.properties.layerType = 'warning';
+            f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
             combined.features.push(f);
         });
 
