@@ -13,13 +13,58 @@ GET /api/gibs-times?layer=GOES-East_ABI_GeoColor&tms=GoogleMapsCompatible_Level7
 """
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+from concurrent.futures import ThreadPoolExecutor
 import urllib.request
 import datetime
 import json
 import re
 
 GIBS = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0'
+GIBS_TILES = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best'
 _LAYER_RE = re.compile(r'^[A-Za-z0-9_\-]+$')   # guard against path injection
+
+# GIBS lists a timestamp in its time domain as soon as a scan is scheduled, but
+# the actual tiles are frequently NOT published — both at the leading edge (the
+# newest 1-2 frames lag) and as interior gaps (whole missing scans). This is
+# worst for the slow-cadence visible bands, e.g. Band 2 Red Visible, where it
+# leaves the live view and the loop flashing empty frames. An unpublished frame
+# returns a tiny ~700 B-1 KB blank PNG, so we probe a single low-zoom tile
+# (z2/1/1 spans the whole GOES-East disk) for each candidate frame and keep only
+# the ones that actually have imagery. Probes run in parallel to stay fast.
+_BLANK_BYTES = 5000    # published GOES tiles are 40-60 KB; blanks are <1.5 KB
+_PROBE_WINDOW = 48     # probe at most this many newest candidate frames
+_PROBE_WORKERS = 16
+
+
+def _tile_bytes(layer, tms, iso):
+    """Content-Length of the z2/1/1 probe tile for one frame, or None on error."""
+    url = f'{GIBS_TILES}/{layer}/default/{iso}/{tms}/2/1/1.png'
+    req = urllib.request.Request(url, method='HEAD',
+                                 headers={'User-Agent': 'FXNet-Proxy/1.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            cl = r.headers.get('Content-Length')
+            return int(cl) if cl is not None else None
+    except Exception:
+        return None
+
+
+def _keep_published(times, layer, tms):
+    """Filter the candidate frames down to the ones whose tiles are published.
+
+    Probes z2/1/1 for each candidate in parallel and drops blanks (anywhere in
+    the series, not just the tail). Fails open: a frame whose probe errors out
+    (None) is kept, so a transient GIBS hiccup never empties the list. If the
+    probe tile turns out blank for *every* frame (unexpected for a layer), we
+    assume it's unreliable and return the input unfiltered.
+    """
+    if len(times) <= 1:
+        return times
+    cand = times[-_PROBE_WINDOW:]
+    with ThreadPoolExecutor(max_workers=_PROBE_WORKERS) as ex:
+        sizes = list(ex.map(lambda t: _tile_bytes(layer, tms, t), cand))
+    kept = [t for t, sz in zip(cand, sizes) if sz is None or sz >= _BLANK_BYTES]
+    return kept if kept else times
 
 
 def recent_times(layer, tms, n):
@@ -52,6 +97,7 @@ def recent_times(layer, tms, n):
             times.append(t.strftime('%Y-%m-%dT%H:%M:%SZ'))
             t += datetime.timedelta(minutes=step)
             guard += 1
+    times = _keep_published(times, layer, tms)
     return times[-n:]
 
 

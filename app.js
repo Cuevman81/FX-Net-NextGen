@@ -6742,7 +6742,11 @@ async function loadGibsLive(paneId, prodKey) {
     const p = GIBS_PRODUCTS[prodKey];
     const prev = paneGibs[paneId];
     paneGibs[paneId] = prodKey;
-    // Use newest real timestamp if known, else the 'default' keyword (auto-latest)
+    // Paint instantly with the newest known frame (cached) or the 'default'
+    // keyword, then heal below. NOTE: for slow-cadence visible bands (Red
+    // Visible) the 'default' keyword AND the newest raw domain timestamps are
+    // often BLANK; /api/gibs-times now drops every unpublished frame, so the
+    // refresh below lands on a frame that actually has tiles.
     const times = gibsTimesCache[prodKey] || [];
     const url = gibsTileUrl(prodKey, times.length ? times[times.length - 1] : 'default');
     // Recreate the source when switching products (maxzoom differs); else just retile
@@ -6759,7 +6763,8 @@ async function loadGibsLive(paneId, prodKey) {
     updateHealth('gibsSat');
     if (paneId === activePaneId) refreshTimestampLabel();
     addLiveLog(`GIBS: ${p.label} (GOES-East) loaded`, '#00e5ff');
-    // Always (re)warm the real-frame time list so looping is ready + live stays current
+    // Always (re)warm the published-frame time list so the live view heals to a
+    // real frame and looping is ready + current.
     fetchGibsTimes(prodKey).then(t => {
         if (t.length && paneGibs[paneId] === prodKey && map.getSource('gibs-sat')) {
             map.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, t[t.length - 1])]);
