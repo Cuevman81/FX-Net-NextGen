@@ -3912,8 +3912,8 @@ function aqiForecastDayHtml(label, a) {
     if (!a) return `<div style="color:#666;">${label}: N/A</div>`;
     const cell = (aqi, cat) => {
         const n = parseInt(aqi, 10);
-        if (!isNaN(n) && n >= 0) return `<span style="color:${aqiColor(n)};font-weight:bold;">${n}</span> <span style="color:#999;">${cat || ''}</span>`;
-        return cat ? `<span style="color:#999;">${cat}</span>` : '<span style="color:#666;">—</span>';
+        if (!isNaN(n) && n >= 0) return `<span style="color:${aqiColor(n)};font-weight:bold;">${n}</span> <span style="color:${aqiColor(n)};">${cat || ''}</span>`;
+        return cat ? `<span style="color:${aqiCatColor(cat)};">${cat}</span>` : '<span style="color:#666;">—</span>';
     };
     const action = (a.ActionDay === '1' || a.ActionDay === 1)
         ? ` <span style="color:#ff5252;font-weight:bold;">⚠ ACTION DAY</span>` : '';
@@ -4201,6 +4201,19 @@ function aqiColor(val) {
     if (val <= 200) return '#ff0000';
     if (val <= 300) return '#8f3f97';
     return '#7e0023';
+}
+
+// Color from an AQI category NAME (for forecasts where only a category is
+// given, no numeric AQI). Matches the aqiColor() ramp.
+function aqiCatColor(cat) {
+    const c = (cat || '').toLowerCase();
+    if (c.includes('hazardous')) return '#7e0023';
+    if (c.includes('very unhealthy')) return '#8f3f97';
+    if (c.includes('sensitive') || c === 'usg') return '#ff7e00';
+    if (c.includes('unhealthy')) return '#ff0000';
+    if (c.includes('moderate')) return '#ffff00';
+    if (c.includes('good')) return '#00e400';
+    return '#999';
 }
 
 // ─── EPA AQI Breakpoint Conversion (hourly, NOT NowCast) ───
