@@ -6429,17 +6429,22 @@ function initRadarSiteSelector() {
             const hcBtn = document.querySelector('[data-layer="radar-hc"]');
             const radarActive = refBtn?.classList.contains('active') || velBtn?.classList.contains('active') || hcBtn?.classList.contains('active');
 
-            // Sync radar site across the active tab's map panes (not other tabs)
+            // Apply the radar site to the synced group only. A PINNED pane is
+            // independent: if the active pane is pinned, only IT changes (so you
+            // can view, e.g., JAN in a pinned pane while the synced panes stay on
+            // HDC); otherwise update every non-pinned pane in the tab.
+            const activePinned = paneSyncDisabled.has(activePaneId);
             activeTabMapEntries().forEach(([id, m]) => {
-                if (m) {
-                    paneRadarSites[id] = site;
-                    if (!isNational) {
-                        if (m.getSource('site-bref')) m.getSource('site-bref').setTiles([siteRadarUrl(site, 'sr_bref')]);
-                        if (m.getSource('site-bvel')) m.getSource('site-bvel').setTiles([siteRadarUrl(site, 'sr_bvel')]);
-                        if (m.getSource('site-bdhc')) m.getSource('site-bdhc').setTiles([siteRadarUrl(site, 'bdhc')]);
-                        if (m.getSource('site-bdsa')) m.getSource('site-bdsa').setTiles([siteRadarUrl(site, 'bdsa')]);
-                        if (m.getSource('site-boha')) m.getSource('site-boha').setTiles([siteRadarUrl(site, 'boha')]);
-                    }
+                if (!m) return;
+                const applies = activePinned ? (id === activePaneId) : !paneSyncDisabled.has(id);
+                if (!applies) return;
+                paneRadarSites[id] = site;
+                if (!isNational) {
+                    if (m.getSource('site-bref')) m.getSource('site-bref').setTiles([siteRadarUrl(site, 'sr_bref')]);
+                    if (m.getSource('site-bvel')) m.getSource('site-bvel').setTiles([siteRadarUrl(site, 'sr_bvel')]);
+                    if (m.getSource('site-bdhc')) m.getSource('site-bdhc').setTiles([siteRadarUrl(site, 'bdhc')]);
+                    if (m.getSource('site-bdsa')) m.getSource('site-bdsa').setTiles([siteRadarUrl(site, 'bdsa')]);
+                    if (m.getSource('site-boha')) m.getSource('site-boha').setTiles([siteRadarUrl(site, 'boha')]);
                 }
             });
 
