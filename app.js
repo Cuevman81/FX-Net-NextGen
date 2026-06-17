@@ -8211,6 +8211,59 @@ function initSyncButton() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 24b: WHAT'S NEW (user-facing changelog)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Newest release first. Keep entries high-level + plain-language. Bump the top
+// date when you ship something users would notice — a "NEW" dot shows until the
+// user opens the panel (tracked in localStorage by the newest release date).
+const CHANGELOG = [
+    { date: 'Jun 17, 2026', items: [
+        'Tropical data now refreshes every 5 minutes (was 30) — new NHC advisories show up promptly.',
+        'In multi-pane layouts you can view a different radar (WFO) in each pinned pane — e.g. HDC and JAN side by side.',
+        'Added this “What’s New” panel.'
+    ]},
+    { date: 'Jun 16, 2026', items: [
+        'Workspace tabs: open independent multi-pane layouts and flip between them instantly.',
+        'Pin a pane (right-click) to give it its own view — e.g. hold a storm on satellite while the radar panes pan elsewhere.',
+        'Sharper map boundaries: white state / county / coastline lines that read clearly over radar and satellite.',
+        'Air Quality: click a monitor to see the Today + Tomorrow ozone and PM2.5 forecast, color-coded by AQI level.',
+        'Smoother satellite loops — the Red Visible band no longer flashes blank frames.',
+        'Potential Tropical Cyclones (PTC) are now shown distinctly on the tropical layer.'
+    ]}
+];
+
+function initWhatsNew() {
+    const panel = document.getElementById('whats-new');
+    const header = document.getElementById('whats-new-header');
+    const body = document.getElementById('whats-new-body');
+    const dot = document.getElementById('whats-new-dot');
+    if (!panel || !header || !body) return;
+
+    body.innerHTML = CHANGELOG.map(rel =>
+        `<div class="whats-new-rel"><div class="whats-new-rel-date">${rel.date}</div>` +
+        rel.items.map(it => `<div class="whats-new-item">${it}</div>`).join('') +
+        `</div>`).join('');
+
+    const latestId = CHANGELOG[0].date;
+    let seen = null;
+    try { seen = localStorage.getItem('fxnet_whatsnew_seen'); } catch (e) {}
+
+    const setOpen = (open) => {
+        body.style.display = open ? 'block' : 'none';
+        panel.classList.toggle('open', open);
+        if (open) {
+            try { localStorage.setItem('fxnet_whatsnew_seen', latestId); } catch (e) {}
+            if (dot) dot.style.display = 'none';
+        }
+    };
+
+    if (dot) dot.style.display = (seen === latestId) ? 'none' : 'inline-block';
+    header.addEventListener('click', () => setOpen(body.style.display === 'none'));
+    // Auto-expand ONCE when there's an unseen release; collapsed on later loads.
+    setOpen(seen !== latestId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 25: INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -8241,6 +8294,7 @@ function init() {
     initRadarSiteSelector();
     initPlayButton();
     initContextMenu();
+    initWhatsNew();
     initHealthToggle();
     initDebugToggle();
     initSyncButton();

@@ -12,7 +12,7 @@
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="style.css?v=105">
+    <link rel="stylesheet" href="style.css?v=106">
     <!-- Vercel Speed Insights -->
     <script type="module">
       import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
@@ -36,6 +36,16 @@
                     <span>Developed by <span style="color:var(--accent-cyan)">Rodney Cuevas, Meteorologist</span></span>
                     <div id="watchdog-status" class="status-indicator"><span class="dot pulse"></span> WATCHDOG</div>
                 </div>
+            </div>
+
+            <!-- WHAT'S NEW (changelog) -->
+            <div id="whats-new" class="whats-new">
+                <div id="whats-new-header" class="whats-new-header">
+                    <span><i data-lucide="sparkles"></i> WHAT'S NEW</span>
+                    <span id="whats-new-dot" class="whats-new-dot" style="display:none;">NEW</span>
+                    <i data-lucide="chevron-down" id="whats-new-chevron" class="whats-new-chevron"></i>
+                </div>
+                <div id="whats-new-body" class="whats-new-body" style="display:none;"></div>
             </div>
 
             <div class="product-browser">
@@ -860,7 +870,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=174"></script>
+    <script src="app.js?v=175"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
