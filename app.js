@@ -76,6 +76,7 @@ let isSyncingMaps = false;
 // Panes pinned to an independent view — they neither drive nor follow the
 // tab's pan/zoom sync. Session-only (resets on reload). Keyed by pane id.
 const paneSyncDisabled = new Set();
+let aqiFcstSeq = 0;   // unique-id counter for async AQI forecast popup injection
 
 // ═══ DATA HEALTH SYSTEM ═══
 const healthTrackers = {};
@@ -2261,6 +2262,7 @@ function initFrontalPipIcons(map) {
     map.on('click', 'airnow-aqi-layer', e => {
         if (!e.features || !e.features[0]) return;
         const p = e.features[0].properties;
+        const fcstId = `aqi-fcst-${++aqiFcstSeq}`;   // unique per click for async inject
         const ozAqi = (p.ozone_aqi != null && p.ozone_aqi !== 'null' && +p.ozone_aqi >= 0) ? +p.ozone_aqi : null;
         const pmAqi = (p.pm25_aqi != null && p.pm25_aqi !== 'null' && +p.pm25_aqi >= 0) ? +p.pm25_aqi : null;
         const ozPpb = (p.ozone_ppb != null && p.ozone_ppb !== 'null') ? +p.ozone_ppb : null;
@@ -2285,8 +2287,15 @@ function initFrontalPipIcons(map) {
                 <span style="color:#888;">Overall AQI:</span> <span style="font-weight:bold;color:${aqiColor(overall)}">${overall} — ${aqiCategory(overall)}</span>
             </div>
             <div style="color:#555;font-size:9px;margin-top:4px;">Hourly EPA breakpoint AQI (not NowCast)</div>
+            <div id="${fcstId}" style="margin-top:6px;color:#888;font-size:10px;">Loading forecast…</div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+        // Async: fetch the area's O3 + PM2.5 forecast (today/tomorrow) and inject
+        const coords = (e.features[0].geometry && e.features[0].geometry.coordinates) || [e.lngLat.lng, e.lngLat.lat];
+        fetchAqiForecast(coords[0], coords[1]).then(fc => {
+            const el = document.getElementById(fcstId);
+            if (el) el.innerHTML = renderAqiForecast(fc);
+        });
     });
     map.on('mouseenter', 'airnow-aqi-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'airnow-aqi-layer', () => { map.getCanvas().style.cursor = ''; });
@@ -3872,6 +3881,61 @@ async function fetchAQI(show) {
     } catch (e) {
         addLiveLog(`AQI ERROR: ${e.message}`, '#ff3333');
     }
+}
+
+// AirNow issues area AQI forecasts (today + tomorrow) for O3 & PM2.5. Keyless
+// ArcGIS service; point-intersect the forecast polygon containing a monitor.
+// Returns { today, tomorrow } attribute objects (null per-day if none), or
+// null if no forecast area covers the point.
+const AQI_FCST_BASE = 'https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/AirNow_National_Air_Quality_Index_(AQI)_Forecast/FeatureServer';
+async function fetchAqiForecast(lon, lat) {
+    const fields = 'RAName,RAAgency,O3AQI,O3AQICat,PM25AQI,PM25AQICat,MaxAQI,MaxAQICat,ActionDay';
+    const q = `geometry=${lon},${lat}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects` +
+              `&outFields=${fields}&returnGeometry=false&f=json`;
+    try {
+        const [t0, t1] = await Promise.all([
+            fetch(`${AQI_FCST_BASE}/0/query?${q}`).then(r => r.json()),
+            fetch(`${AQI_FCST_BASE}/1/query?${q}`).then(r => r.json())
+        ]);
+        const a0 = t0.features && t0.features[0] ? t0.features[0].attributes : null;
+        const a1 = t1.features && t1.features[0] ? t1.features[0].attributes : null;
+        if (!a0 && !a1) return null;
+        return { today: a0, tomorrow: a1 };
+    } catch (e) {
+        return null;
+    }
+}
+
+// One forecast day row (O3 + PM2.5). AirNow uses '-1'/'' when a pollutant
+// isn't forecast for the area — show the category alone, or a dash.
+function aqiForecastDayHtml(label, a) {
+    if (!a) return `<div style="color:#666;">${label}: N/A</div>`;
+    const cell = (aqi, cat) => {
+        const n = parseInt(aqi, 10);
+        if (!isNaN(n) && n >= 0) return `<span style="color:${aqiColor(n)};font-weight:bold;">${n}</span> <span style="color:#999;">${cat || ''}</span>`;
+        return cat ? `<span style="color:#999;">${cat}</span>` : '<span style="color:#666;">—</span>';
+    };
+    const action = (a.ActionDay === '1' || a.ActionDay === 1)
+        ? ` <span style="color:#ff5252;font-weight:bold;">⚠ ACTION DAY</span>` : '';
+    return `<div style="margin-bottom:3px;">
+        <span style="color:#cfd8e3;font-weight:bold;">${label}${action}</span>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:1px 8px;margin-left:8px;">
+            <span style="color:#888;">O₃:</span><span>${cell(a.O3AQI, a.O3AQICat)}</span>
+            <span style="color:#888;">PM2.5:</span><span>${cell(a.PM25AQI, a.PM25AQICat)}</span>
+        </div>
+    </div>`;
+}
+
+function renderAqiForecast(fc) {
+    if (!fc || (!fc.today && !fc.tomorrow)) {
+        return `<div style="color:#666;font-size:10px;">No AQI forecast issued for this area.</div>`;
+    }
+    const ra = (fc.today || fc.tomorrow).RAName || '';
+    return `<div style="border-top:1px solid #333;margin-top:6px;padding-top:5px;">
+        <div style="color:#00e5ff;font-weight:bold;font-size:10px;margin-bottom:3px;">AQI FORECAST${ra ? ` — ${ra}` : ''}</div>
+        ${aqiForecastDayHtml('Today', fc.today)}
+        ${aqiForecastDayHtml('Tomorrow', fc.tomorrow)}
+    </div>`;
 }
 
 async function fetchFIRMS(show) {
