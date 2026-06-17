@@ -12,7 +12,7 @@
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="style.css?v=104">
+    <link rel="stylesheet" href="style.css?v=105">
     <!-- Vercel Speed Insights -->
     <script type="module">
       import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
@@ -500,6 +500,7 @@
         <div class="menu-sep"></div>
         <div class="menu-item" data-action="toggle-sampler"><i data-lucide="crosshair"></i> Toggle Data Sampler</div>
         <div class="menu-item" data-action="sync-all"><i data-lucide="refresh-cw"></i> Sync All Panes</div>
+        <div class="menu-item" data-action="toggle-pin"><i data-lucide="pin"></i> <span class="pin-label">Pin Pane (Independent View)</span></div>
         <div class="menu-item" data-action="clear-pane" style="color:#ff6666;"><i data-lucide="trash-2"></i> Clear Pane</div>
     </div>
 
@@ -859,7 +860,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=169"></script>
+    <script src="app.js?v=170"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

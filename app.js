@@ -73,6 +73,9 @@ let activeMrmsQpe = null;
 let activeCpcTempLayer = null;
 let activeCpcPrecipLayer = null;
 let isSyncingMaps = false;
+// Panes pinned to an independent view — they neither drive nor follow the
+// tab's pan/zoom sync. Session-only (resets on reload). Keyed by pane id.
+const paneSyncDisabled = new Set();
 
 // ═══ DATA HEALTH SYSTEM ═══
 const healthTrackers = {};
@@ -612,6 +615,7 @@ function initMap(paneId) {
     // Sync all panes — pan/zoom one, the rest follow
     map.on('move', () => {
         if (isSyncingMaps) return;
+        if (paneSyncDisabled.has(paneId)) return;   // pinned pane doesn't drive others
         isSyncingMaps = true;
         const center = map.getCenter();
         const zoom = map.getZoom();
@@ -619,8 +623,8 @@ function initMap(paneId) {
         const pitch = map.getPitch();
         const myTab = tabOfPane(paneId);
         Object.entries(maps).forEach(([id, m]) => {
-            // Only sync panes within the SAME tab — other tabs keep their own view.
-            if (String(id) !== String(paneId) && m && tabOfPane(id) === myTab) {
+            // Only sync panes within the SAME tab; pinned panes keep their own view.
+            if (String(id) !== String(paneId) && m && tabOfPane(id) === myTab && !paneSyncDisabled.has(id)) {
                 m.jumpTo({ center, zoom, bearing, pitch });
             }
         });
@@ -653,6 +657,10 @@ function initMap(paneId) {
             menu.dataset.pane = paneId;
             activePaneId = paneId;
             activeGoesChannel = paneGoesChannels[paneId]; // Sync satellite channel
+            // Reflect this pane's current pin state in the menu label
+            const pinLabel = menu.querySelector('.pin-label');
+            if (pinLabel) pinLabel.textContent = paneSyncDisabled.has(paneId)
+                ? 'Unpin Pane (Rejoin Sync)' : 'Pin Pane (Independent View)';
         });
     }
 }
@@ -6512,6 +6520,9 @@ function initContextMenu() {
                 case 'sync-all':
                     syncAllPanes(paneId);
                     break;
+                case 'toggle-pin':
+                    setPaneSync(paneId, !paneSyncDisabled.has(paneId));
+                    break;
                 case 'clear-pane':
                     clearPane(map, paneId);
                     break;
@@ -7034,11 +7045,41 @@ function syncAllPanes(sourcePaneId) {
 
     const myTab = tabOfPane(sourcePaneId);
     Object.entries(maps).forEach(([id, m]) => {
-        if (id !== sourcePaneId && tabOfPane(id) === myTab) {
+        // Skip pinned panes — they're intentionally on an independent view.
+        if (id !== sourcePaneId && tabOfPane(id) === myTab && !paneSyncDisabled.has(id)) {
             m.jumpTo({ center, zoom, bearing, pitch });
         }
     });
     addLiveLog(`SYNC: Tab panes synced to Pane ${sourcePaneId}`, '#00e5ff');
+}
+
+// Pin / unpin a pane from the tab's pan-zoom sync. Pinned = independent view
+// (e.g. hold a pane on a GOM hurricane while the radar panes track an inland
+// site). Updates the on-pane badge + amber border so it's obvious at a glance.
+function setPaneSync(paneId, pinned) {
+    const paneEl = document.querySelector(`.pane[data-pane="${paneId}"]`);
+    const badge = document.getElementById(`pin-badge-${paneId}`);
+    if (pinned) {
+        paneSyncDisabled.add(paneId);
+        if (paneEl) paneEl.classList.add('pane-unsynced');
+        if (badge) badge.style.display = 'block';
+        addLiveLog(`PANE ${paneId}: PINNED — independent view (won't pan-sync)`, '#ffb300');
+    } else {
+        paneSyncDisabled.delete(paneId);
+        if (paneEl) paneEl.classList.remove('pane-unsynced');
+        if (badge) badge.style.display = 'none';
+        // Rejoin the group: snap to a synced sibling's current view, if any.
+        const myTab = tabOfPane(paneId);
+        const sibling = Object.entries(maps).find(([id]) =>
+            id !== paneId && tabOfPane(id) === myTab && !paneSyncDisabled.has(id));
+        if (sibling && maps[paneId]) {
+            const s = sibling[1];
+            isSyncingMaps = true;
+            maps[paneId].jumpTo({ center: s.getCenter(), zoom: s.getZoom(), bearing: s.getBearing(), pitch: s.getPitch() });
+            isSyncingMaps = false;
+        }
+        addLiveLog(`PANE ${paneId}: UNPINNED — rejoined pan-sync`, '#00e5ff');
+    }
 }
 
 function clearPane(map, paneId) {
@@ -7173,6 +7214,7 @@ function buildTabGrid(tabId, layout) {
         pane.dataset.pane = pid;
         pane.innerHTML =
             `<div class="pane-label">PANE ${i}</div>` +
+            `<div class="pane-pin-badge" id="pin-badge-${pid}" style="display:none;">⊘ UNSYNCED</div>` +
             `<div class="radar-timestamp" id="radar-ts-${pid}">LIVE</div>` +
             `<div id="map-${pid}" class="map-container"></div>`;
         grid.appendChild(pane);
@@ -7240,6 +7282,7 @@ function closeTab(tabId) {
         delete paneGibs[pid];
         delete paneL3[pid];
         delete pendingRestore[pid];
+        paneSyncDisabled.delete(pid);
     });
     document.getElementById(`pane-grid-${tabId}`)?.remove();
     delete tabs[tabId];
