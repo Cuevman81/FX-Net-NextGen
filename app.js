@@ -3619,11 +3619,12 @@ async function fetchNHCStorms(show) {
     try {
         const combined = { type: 'FeatureCollection', features: [] };
 
+        // Cache-bust so each poll gets the latest advisory, not a cached copy
         const [coneRes, trackRes, pointsRes, warnRes] = await Promise.all([
-            fetch(`${NHC_BASE}/7/query?where=1%3D1&outFields=*&f=geojson`),
-            fetch(`${NHC_BASE}/6/query?where=1%3D1&outFields=*&f=geojson`),
-            fetch(`${NHC_BASE}/5/query?where=1%3D1&outFields=*&f=geojson`),
-            fetch(`${NHC_BASE}/8/query?where=1%3D1&outFields=*&f=geojson`)
+            fetch(cacheBust(`${NHC_BASE}/7/query?where=1%3D1&outFields=*&f=geojson`)),
+            fetch(cacheBust(`${NHC_BASE}/6/query?where=1%3D1&outFields=*&f=geojson`)),
+            fetch(cacheBust(`${NHC_BASE}/5/query?where=1%3D1&outFields=*&f=geojson`)),
+            fetch(cacheBust(`${NHC_BASE}/8/query?where=1%3D1&outFields=*&f=geojson`))
         ]);
 
         const [coneData, trackData, pointsData, warnData] = await Promise.all([
@@ -3680,8 +3681,8 @@ async function fetchNHCOutlook(show) {
     addLiveLog('NHC: Fetching tropical outlook areas...', '#ffcc00');
     try {
         const [twoDay, sevenDay] = await Promise.all([
-            fetch(`${NHC_BASE}/1/query?where=1%3D1&outFields=*&f=geojson`).then(r => r.json()),
-            fetch(`${NHC_BASE}/3/query?where=1%3D1&outFields=*&f=geojson`).then(r => r.json())
+            fetch(cacheBust(`${NHC_BASE}/1/query?where=1%3D1&outFields=*&f=geojson`)).then(r => r.json()),
+            fetch(cacheBust(`${NHC_BASE}/3/query?where=1%3D1&outFields=*&f=geojson`)).then(r => r.json())
         ]);
 
         const combined = { type: 'FeatureCollection', features: [] };
@@ -7692,13 +7693,7 @@ function startAutoRefresh() {
         const frontsActive = Object.values(maps).some(m => isLayerVisible(m, 'wpc-fronts-solid'));
         if (frontsActive) fetchWPCFronts(true);
 
-        // NHC Storms
-        const nhcActive = Object.values(maps).some(m => isLayerVisible(m, 'nhc-track-pts'));
-        if (nhcActive) fetchNHCStorms(true);
-
-        // NHC Outlook
-        const nhcOutlookActive = Object.values(maps).some(m => isLayerVisible(m, 'nhc-outlook-fill'));
-        if (nhcOutlookActive) fetchNHCOutlook(true);
+        // NHC tropical (storms + outlook) refreshes on its own faster interval below.
 
         // River gauges refresh
         const gaugesActive = Object.values(maps).some(m => isLayerVisible(m, 'river-gauges-layer'));
@@ -7738,6 +7733,14 @@ function startAutoRefresh() {
         }
 
     }, 30 * 60 * 1000);
+
+    // NHC tropical layers refresh faster (5 min) — advisories/intermediate
+    // advisories update on short cycles during active storms, and the fetches
+    // are tiny cache-busted GeoJSON. Only runs while a tropical layer is on.
+    setInterval(() => {
+        if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-track-pts'))) fetchNHCStorms(true);
+        if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-outlook-fill'))) fetchNHCOutlook(true);
+    }, 5 * 60 * 1000);
 }
 
 
