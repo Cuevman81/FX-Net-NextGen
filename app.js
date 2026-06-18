@@ -62,6 +62,86 @@ let warningsFirstLoad = true;
 let warningsLoaded = false;
 let lastIbwCount = 0;
 let warningsGeoJSON = { type: 'FeatureCollection', features: [] };
+// Warning display mode: false = filled polygons (default), true = bold colored
+// outlines with minimal fill so numerous overlapping warnings stay legible.
+let warningOutlineMode = (() => { try { return localStorage.getItem('fxnet_warn_outline') === '1'; } catch (e) { return false; } })();
+
+// Severity priority for warning z-order. Higher = more urgent = drawn LAST in
+// source order so it renders on top where polygons overlap.
+function warningPriority(ev) {
+    if (!ev) return 30;
+    if (ev === 'Tornado Warning') return 100;
+    if (ev === 'Severe Thunderstorm Warning') return 80;
+    if (ev === 'Flash Flood Warning') return 75;
+    if (ev === 'Special Marine Warning') return 45;
+    if (ev.includes('Warning')) return 60;
+    if (ev.includes('Watch')) return 40;
+    if (ev.includes('Advisory')) return 35;
+    if (ev.includes('Statement')) return 20;
+    if (ev.includes('Outlook')) return 10;
+    return 30;
+}
+// Sort ascending so the most severe warning ends up last (= on top within a layer).
+function sortWarningsByPriority(fc) {
+    if (fc && Array.isArray(fc.features)) {
+        fc.features.sort((a, b) => warningPriority(a.properties && a.properties.event) - warningPriority(b.properties && b.properties.event));
+    }
+    return fc;
+}
+
+// Fill-opacity / outline-width expressions for the two display modes.
+const WARN_FILL_OPACITY_FILLED = ['case',
+    ['==', ['get', 'event'], 'Tornado Warning'], 0.6,
+    ['==', ['get', 'event'], 'Severe Thunderstorm Warning'], 0.5,
+    ['==', ['get', 'event'], 'Flash Flood Warning'], 0.5,
+    ['in', 'Warning', ['get', 'event']], 0.4,
+    ['in', 'Statement', ['get', 'event']], 0.25,
+    ['in', 'Outlook', ['get', 'event']], 0.2,
+    0.35
+];
+const WARN_FILL_OPACITY_OUTLINE = ['case',
+    ['==', ['get', 'event'], 'Tornado Warning'], 0.18,
+    ['==', ['get', 'event'], 'Severe Thunderstorm Warning'], 0.14,
+    ['in', 'Warning', ['get', 'event']], 0.1,
+    0.07
+];
+const WARN_OUTLINE_WIDTH_FILLED = ['case',
+    ['==', ['get', 'event'], 'Tornado Warning'], 3.5,
+    ['==', ['get', 'event'], 'Severe Thunderstorm Warning'], 2.5,
+    ['==', ['get', 'event'], 'Flash Flood Warning'], 2.5,
+    ['in', 'Warning', ['get', 'event']], 2.0,
+    ['in', 'Statement', ['get', 'event']], 1.0,
+    1.5
+];
+const WARN_OUTLINE_WIDTH_OUTLINE = ['case',
+    ['==', ['get', 'event'], 'Tornado Warning'], 4.5,
+    ['==', ['get', 'event'], 'Severe Thunderstorm Warning'], 3.5,
+    ['==', ['get', 'event'], 'Flash Flood Warning'], 3.5,
+    ['in', 'Warning', ['get', 'event']], 3.0,
+    ['in', 'Statement', ['get', 'event']], 2.0,
+    2.5
+];
+
+// Apply the current warning display mode (filled vs outline) to one map.
+function applyWarningDisplayMode(map) {
+    if (!map || !map.getLayer || !map.getLayer('nws-warnings-only-fill')) return;
+    const outline = warningOutlineMode;
+    const warningsOn = isLayerVisible(map, 'nws-warnings-only-fill');
+    try {
+        map.setPaintProperty('nws-warnings-only-fill', 'fill-opacity', outline ? WARN_FILL_OPACITY_OUTLINE : WARN_FILL_OPACITY_FILLED);
+        map.setPaintProperty('nws-warnings-only-outline', 'line-width', outline ? WARN_OUTLINE_WIDTH_OUTLINE : WARN_OUTLINE_WIDTH_FILLED);
+        map.setLayoutProperty('nws-warnings-only-casing', 'visibility', (outline && warningsOn) ? 'visible' : 'none');
+    } catch (e) { }
+}
+function applyWarningDisplayModeAll() {
+    Object.values(maps).forEach(applyWarningDisplayMode);
+}
+// Reflect the current mode in the context-menu item label.
+function updateWarnModeLabel() {
+    const el = document.querySelector('.warn-mode-label');
+    if (el) el.textContent = warningOutlineMode ? 'Warnings: Outline (overlap-safe)' : 'Warnings: Filled';
+}
+
 const zoneGeometryCache = {};  // Global cache for NWS zone polygons (persists across polling cycles)
 let watchesLoaded = false;
 let watchesGeoJSON = { type: 'FeatureCollection', features: [] };
@@ -1284,6 +1364,26 @@ function setupMapLayers(map, paneId) {
                 ['in', 'Outlook', ['get', 'event']], 0.2,
                 0.35
             ]
+        }
+    });
+    // Dark casing beneath the colored outline — only shown in OUTLINE mode so the
+    // severity-colored borders read clearly over radar/satellite/dark land.
+    map.addLayer({
+        id: 'nws-warnings-only-casing', type: 'line', source: 'nws-warnings',
+        layout: { visibility: 'none' },
+        filter: nwsWwaFilter,
+        paint: {
+            'line-color': '#000000',
+            'line-width': ['case',
+                ['==', ['get', 'event'], 'Tornado Warning'], 6.5,
+                ['==', ['get', 'event'], 'Severe Thunderstorm Warning'], 5.5,
+                ['==', ['get', 'event'], 'Flash Flood Warning'], 5.5,
+                ['in', 'Warning', ['get', 'event']], 5.0,
+                ['in', 'Statement', ['get', 'event']], 3.5,
+                4.0
+            ],
+            'line-opacity': 0.55,
+            'line-blur': 0.5
         }
     });
     map.addLayer({
@@ -4465,12 +4565,13 @@ async function checkNewWarnings() {
         }
 
         warningsLoaded = true;
-        warningsGeoJSON = data;
+        warningsGeoJSON = sortWarningsByPriority(data);
 
         // Push to all map warning layers
         Object.values(maps).forEach(m => {
             if (m.getSource('nws-warnings')) m.getSource('nws-warnings').setData(warningsGeoJSON);
         });
+        applyWarningDisplayModeAll();
         updateHealth('warnings');
 
         const isFirst = warningsFirstLoad;
@@ -6418,6 +6519,8 @@ function initProductSidebar() {
                 ['nws-enhanced-fill', 'nws-enhanced-outline', 'nws-enhanced-glow', 'nws-enhanced-label'].forEach(l => {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
+                // Casing rides along too, but only shows in outline mode.
+                applyWarningDisplayMode(map);
                 updateSidebarToActivePane();
                 return;
             }
@@ -6657,6 +6760,13 @@ function initContextMenu() {
                 case 'toggle-counties':
                     toggleMapLayer(map, 'counties-layer');
                     addLiveLog(`PANE ${paneId}: Counties toggled`, '#888');
+                    break;
+                case 'toggle-warning-outline':
+                    warningOutlineMode = !warningOutlineMode;
+                    try { localStorage.setItem('fxnet_warn_outline', warningOutlineMode ? '1' : '0'); } catch (e) { }
+                    applyWarningDisplayModeAll();
+                    updateWarnModeLabel();
+                    addLiveLog(`WARNINGS: ${warningOutlineMode ? 'Outline' : 'Filled'} display mode`, '#ffb300');
                     break;
                 case 'toggle-cities':
                     toggleMapLayer(map, 'esri-labels-layer');
@@ -8300,7 +8410,8 @@ const CHANGELOG = [
     { date: 'Jun 18, 2026', items: [
         'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.',
         'Fixed site radar flickering between the current and previous scan while zooming — all zoom levels now lock to one scan.',
-        'Site radar now checks for new volume scans every minute (was 5), so the latest scan appears as soon as it lands.'
+        'Site radar now checks for new volume scans every minute (was 5), so the latest scan appears as soon as it lands.',
+        'New “Warnings: Outline” display mode (right-click a pane) — bold severity-colored borders with minimal fill so numerous overlapping warnings stay legible. The most urgent warning (tornado → severe → flash flood) always draws on top.'
     ]},
     { date: 'Jun 17, 2026', items: [
         'Tropical data now refreshes every 5 minutes (was 30) — new NHC advisories show up promptly.',
@@ -8380,6 +8491,7 @@ function init() {
     initPlayButton();
     initContextMenu();
     initWhatsNew();
+    updateWarnModeLabel();
     initHealthToggle();
     initDebugToggle();
     initSyncButton();

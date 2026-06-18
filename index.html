@@ -505,6 +505,7 @@
         <div class="menu-item" data-action="toggle-metar"><i data-lucide="thermometer"></i> Toggle METARs</div>
         <div class="menu-sep"></div>
         <div class="menu-item" data-action="toggle-counties"><i data-lucide="map"></i> Counties</div>
+        <div class="menu-item" data-action="toggle-warning-outline"><i data-lucide="square-dashed"></i> <span class="warn-mode-label">Warnings: Filled</span></div>
         <div class="menu-item" data-action="toggle-cities"><i data-lucide="type"></i> Cities</div>
         <div class="menu-item" data-action="toggle-roads"><i data-lucide="navigation"></i> Roads</div>
         <div class="menu-sep"></div>
@@ -870,7 +871,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=180"></script>
+    <script src="app.js?v=181"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
