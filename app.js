@@ -346,22 +346,40 @@ function ridgeRadarUrl(date) {
     return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/ridge::USCOMP-N0Q-${ts}/{z}/{x}/{y}.png`;
 }
 
-function siteRadarUrl(site, product) {
-    let s = site.toLowerCase();
-
-
-    let prefix = 'k';
-    if (['abc','acg','aec','ahg','aih','akc','apd','gua','hki','hkm','hmo','hwa'].includes(s)) prefix = 'p';
-
-    let layerProd = product;
-    // 5-minute cache stability window (300,000 ms): guarantees all zoom levels requested within a 5-minute block pull from consistent cached scans to prevent GPU texture hiccuping during zoom transitions
+function siteRadarUrlBase(site, product) {
+    const s = site.toLowerCase();
+    const prefix = ['abc','acg','aec','ahg','aih','akc','apd','gua','hki','hkm','hmo','hwa'].includes(s) ? 'p' : 'k';
+    const ws = (s === 'jua' || s === 'sju') ? 'tjua' : `${prefix}${s}`;
+    // 5-minute cache window keeps zoom transitions pulling from one cache bucket.
     const tsWindow = Math.floor(Date.now() / 300000);
-    if (s === 'jua' || s === 'sju') { return `https://opengeo.ncep.noaa.gov/geoserver/tjua/ows?service=wms&version=1.3.0&request=GetMap&layers=tjua_${layerProd}&crs=EPSG:3857&bbox={bbox-epsg-3857}&width=512&height=512&format=image/png&transparent=true&tiled=false&ts=${tsWindow}`; }
-    return `https://opengeo.ncep.noaa.gov/geoserver/${prefix}${s}/ows?service=wms&version=1.3.0&request=GetMap&layers=${prefix}${s}_${layerProd}&crs=EPSG:3857&bbox={bbox-epsg-3857}&width=512&height=512&format=image/png&transparent=true&tiled=false&ts=${tsWindow}`;
+    return `https://opengeo.ncep.noaa.gov/geoserver/${ws}/ows?service=wms&version=1.3.0&request=GetMap&layers=${ws}_${product}&crs=EPSG:3857&bbox={bbox-epsg-3857}&width=512&height=512&format=image/png&transparent=true&tiled=false&ts=${tsWindow}`;
+}
+
+// Live tiles PINNED to the latest known volume scan (so every zoom level renders
+// the SAME scan — without an explicit time the WMS serves "latest at fetch time",
+// which makes scans alternate as differently-cached tiles load on zoom). Falls
+// back to unpinned "latest" until the scan time is known, then we repoint.
+function siteRadarUrl(site, product) {
+    const t = siteRadarTimes[(site || '').toUpperCase()];
+    const scan = t && t[product];
+    return siteRadarUrlBase(site, product) + (scan ? `&time=${scan}` : '');
 }
 
 function siteRadarAnimUrl(site, product, isoTimeStr) {
-    return siteRadarUrl(site, product) + `&time=${isoTimeStr}`;
+    return siteRadarUrlBase(site, product) + `&time=${isoTimeStr}`;
+}
+
+// Repoint every visible pane on `site` to its product's pinned-scan tiles.
+function repointSiteRadar(site) {
+    const key = (site || '').toUpperCase();
+    const prodSrc = { sr_bref: 'site-bref', sr_bvel: 'site-bvel', bdhc: 'site-bdhc', bdsa: 'site-bdsa', boha: 'site-boha' };
+    Object.entries(maps).forEach(([pid, m]) => {
+        if ((paneRadarSites[pid] || '').toUpperCase() !== key) return;
+        const src = prodSrc[paneRadarProducts[pid] || 'sr_bref'];
+        if (src && m.getSource(src) && isLayerVisible(m, src + '-layer')) {
+            m.getSource(src).setTiles([siteRadarUrl(paneRadarSites[pid], paneRadarProducts[pid] || 'sr_bref')]);
+        }
+    });
 }
 
 // Latest volume-scan time per site+product, read from the SAME source that
@@ -391,7 +409,11 @@ async function fetchSiteRadarTimes(site, force = false) {
             const tm = chunk.match(/<Dimension name="time"[^>]*default="([^"]+)"/);
             if (nm && tm) times[nm[1]] = tm[1];
         });
+        const prevBref = siteRadarTimes[key] && siteRadarTimes[key].sr_bref;
         siteRadarTimes[key] = times;
+        // Pin the (possibly new) scan onto the live tiles so every zoom level
+        // shows one consistent scan. Repoint on first read or when it advanced.
+        if (force || prevBref !== times.sr_bref) repointSiteRadar(site);
         if (!isPlaying) refreshTimestampLabel();
     } catch (e) { /* keep stale/none — label just omits the time */ }
 }
@@ -7625,23 +7647,20 @@ function startAutoRefresh() {
         const siteRadarLayers = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'];
         const anySiteRadar = Object.values(maps).some(m => siteRadarLayers.some(l => isLayerVisible(m, l)));
         if (anySiteRadar) {
-            const sitesToTime = new Set();
+            const sites = new Set();
             Object.entries(maps).forEach(([pid, m]) => {
                 const site = paneRadarSites[pid] || 'DGX';
                 if (site.includes('nexrad')) return;
-                const prod = paneRadarProducts[pid] || 'sr_bref';
                 const prodSourceMap = { 'sr_bref': 'site-bref', 'sr_bvel': 'site-bvel', 'bdhc': 'site-bdhc', 'bdsa': 'site-bdsa', 'boha': 'site-boha' };
-                const srcName = prodSourceMap[prod];
-                if (srcName && m.getSource(srcName)) {
-                    m.getSource(srcName).setTiles([siteRadarUrl(site, prod)]);
-                    sitesToTime.add(site);
-                }
+                const srcName = prodSourceMap[paneRadarProducts[pid] || 'sr_bref'];
+                if (srcName && m.getSource(srcName)) sites.add(site);
             });
-            // Re-read the valid time alongside the tiles so the label tracks the
-            // scan (fetchSiteRadarTimes re-renders the labels when it resolves).
-            sitesToTime.forEach(site => fetchSiteRadarTimes(site, true));
+            // Re-read each scan's valid time, then repoint the tiles to that exact
+            // scan (fetchSiteRadarTimes → repointSiteRadar) so all zoom levels match
+            // and the label tracks the scan.
+            sites.forEach(site => fetchSiteRadarTimes(site, true));
             updateHealth('radar');
-            addLiveLog('AUTO: Site radar tiles refreshed', '#444');
+            addLiveLog('AUTO: Site radar refreshed', '#444');
         }
         
         // METARs refresh + re-generate any visible contour products
@@ -8273,7 +8292,8 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 18, 2026', items: [
-        'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.'
+        'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.',
+        'Fixed site radar flickering between the current and previous scan while zooming — all zoom levels now lock to one scan.'
     ]},
     { date: 'Jun 17, 2026', items: [
         'Tropical data now refreshes every 5 minutes (was 30) — new NHC advisories show up promptly.',
