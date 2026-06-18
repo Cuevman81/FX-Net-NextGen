@@ -364,6 +364,44 @@ function siteRadarAnimUrl(site, product, isoTimeStr) {
     return siteRadarUrl(site, product) + `&time=${isoTimeStr}`;
 }
 
+// Latest volume-scan time per site+product, read from the SAME source that
+// renders the tiles (NCEP opengeo WMS GetCapabilities exposes a per-layer
+// <Dimension name="time" default="…">). Cached + throttled; CORS is '*'.
+const siteRadarTimes = {};            // { SITE: { sr_bref:'ISO', sr_bvel:'ISO', …, _ts:ms } }
+const SITE_TIME_TTL = 60 * 1000;
+function siteWorkspace(site) {
+    const s = site.toLowerCase();
+    if (s === 'jua' || s === 'sju') return 'tjua';
+    const pPrefix = ['abc','acg','aec','ahg','aih','akc','apd','gua','hki','hkm','hmo','hwa'].includes(s) ? 'p' : 'k';
+    return pPrefix + s;
+}
+async function fetchSiteRadarTimes(site) {
+    if (!site || site.includes('nexrad')) return;
+    const key = site.toUpperCase();
+    const cached = siteRadarTimes[key];
+    if (cached && Date.now() - cached._ts < SITE_TIME_TTL) return;   // throttle
+    const ws = siteWorkspace(site);
+    try {
+        const res = await fetch(`https://opengeo.ncep.noaa.gov/geoserver/${ws}/ows?service=wms&version=1.3.0&request=GetCapabilities`);
+        const xml = await res.text();
+        const times = { _ts: Date.now() };
+        const re = new RegExp('<Name>' + ws + '_([a-z0-9_]+)</Name>');
+        xml.split('<Layer').forEach(chunk => {
+            const nm = chunk.match(re);
+            const tm = chunk.match(/<Dimension name="time"[^>]*default="([^"]+)"/);
+            if (nm && tm) times[nm[1]] = tm[1];
+        });
+        siteRadarTimes[key] = times;
+        if (!isPlaying) refreshTimestampLabel();
+    } catch (e) { /* keep stale/none — label just omits the time */ }
+}
+// "13:14Z" suffix for a site product, or '' if not known yet.
+function siteTimeSuffix(site, product) {
+    const t = siteRadarTimes[(site || '').toUpperCase()];
+    const iso = t && t[product];
+    return iso ? ` · ${iso.substring(11, 16)}Z` : '';
+}
+
 // ─── WIND BARB GENERATOR ───
 function createWindBarbDataUrl(knots) {
     const k = Math.round(knots / 5) * 5;
@@ -5206,11 +5244,11 @@ function getPaneLegend(paneId) {
 
     // Imagery / base fields
     add(isLayerVisible(map, 'radar-layer'), 'NATL REFLECTIVITY', '#39ff5a');
-    add(isLayerVisible(map, 'site-bref-layer'), `${site} BREF 0.5°`, '#39ff5a');
-    add(isLayerVisible(map, 'site-bvel-layer'), `${site} VELOCITY 0.5°`, '#5ad1ff');
-    add(isLayerVisible(map, 'site-bdhc-layer'), `${site} HYDROMETEOR CLASS`, '#ff9a3c');
-    add(isLayerVisible(map, 'site-bdsa-layer'), `${site} STORM TOTAL PRECIP`, '#3cff9a');
-    add(isLayerVisible(map, 'site-boha-layer'), `${site} ONE-HOUR PRECIP`, '#3cff9a');
+    add(isLayerVisible(map, 'site-bref-layer'), `${site} BREF 0.5°${siteTimeSuffix(site, 'sr_bref')}`, '#39ff5a');
+    add(isLayerVisible(map, 'site-bvel-layer'), `${site} VELOCITY 0.5°${siteTimeSuffix(site, 'sr_bvel')}`, '#5ad1ff');
+    add(isLayerVisible(map, 'site-bdhc-layer'), `${site} HYDROMETEOR CLASS${siteTimeSuffix(site, 'bdhc')}`, '#ff9a3c');
+    add(isLayerVisible(map, 'site-bdsa-layer'), `${site} STORM TOTAL PRECIP${siteTimeSuffix(site, 'bdsa')}`, '#3cff9a');
+    add(isLayerVisible(map, 'site-boha-layer'), `${site} ONE-HOUR PRECIP${siteTimeSuffix(site, 'boha')}`, '#3cff9a');
     add(isLayerVisible(map, 'satellite-layer') && ch !== null, `GOES-E CH${ch} SATELLITE`, '#cfd8e3');
     if (isLayerVisible(map, 'gibs-sat-layer') && paneGibs[paneId]) {
         rows.push({ label: `GOES-E ${GIBS_PRODUCTS[paneGibs[paneId]]?.label || paneGibs[paneId]} (GIBS)`, color: '#9fd0ff' });
@@ -5267,6 +5305,14 @@ function updatePaneTimestamps(forceLabel = null) {
             el.classList.remove('legend-stack');
             el.textContent = forceLabel;
             return;
+        }
+
+        // Keep the site-radar valid time current (throttled; re-renders on load)
+        const m = maps[paneId];
+        const pSite = paneRadarSites[paneId];
+        if (m && pSite && !pSite.includes('nexrad') &&
+            ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].some(l => isLayerVisible(m, l))) {
+            fetchSiteRadarTimes(pSite);
         }
 
         const rows = getPaneLegend(paneId);
