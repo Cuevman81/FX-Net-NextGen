@@ -8263,6 +8263,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jun 18, 2026', items: [
+        'Site radar now shows its volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), so you can see exactly how current the data is.'
+    ]},
     { date: 'Jun 17, 2026', items: [
         'Tropical data now refreshes every 5 minutes (was 30) — new NHC advisories show up promptly.',
         'In multi-pane layouts you can view a different radar (WFO) in each pinned pane — e.g. HDC and JAN side by side.',
