@@ -7630,39 +7630,45 @@ function startAutoRefresh() {
     }, 60 * 1000);
 
     // 2. High Frequency (5 minutes)
+    // Site radar — fast poll (60s). NEXRAD volume scans complete every ~4-6 min
+    // (≈2 min for the lowest tilt in SAILS/severe mode), so we poll often to show
+    // a new scan ASAP. This is cheap: fetchSiteRadarTimes only fetches a small
+    // GetCapabilities XML and only reloads tiles when the scan time actually
+    // changed (repointSiteRadar fires on prevBref !== times.sr_bref).
+    const SITE_RADAR_LAYERS = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'];
+    setInterval(() => {
+        if (isPlaying) return;
+        const anySiteRadar = Object.values(maps).some(m => SITE_RADAR_LAYERS.some(l => isLayerVisible(m, l)));
+        if (!anySiteRadar) return;
+        const sites = new Set();
+        Object.entries(maps).forEach(([pid, m]) => {
+            const site = paneRadarSites[pid] || 'DGX';
+            if (site.includes('nexrad')) return;
+            const prodSourceMap = { 'sr_bref': 'site-bref', 'sr_bvel': 'site-bvel', 'bdhc': 'site-bdhc', 'bdsa': 'site-bdsa', 'boha': 'site-boha' };
+            const srcName = prodSourceMap[paneRadarProducts[pid] || 'sr_bref'];
+            if (srcName && m.getSource(srcName)) sites.add(site);
+        });
+        // Re-read each scan's valid time, then repoint tiles to that exact scan
+        // (only when it changed) so all zoom levels match and the label tracks it.
+        sites.forEach(site => fetchSiteRadarTimes(site, true));
+        updateHealth('radar');
+    }, 60 * 1000);
+
+    // National mosaic — IEM n0q updates ~every 2 min, so refresh at that cadence.
+    setInterval(() => {
+        if (isPlaying) return;
+        if (!activeRadarNational) return;
+        const url = cacheBust(nationalRadarUrl());
+        Object.values(maps).forEach(m => {
+            if (m.getSource('radar')) m.getSource('radar').setTiles([url]);
+        });
+        updateHealth('radar');
+        addLiveLog('AUTO: National radar tiles refreshed', '#444');
+    }, 2 * 60 * 1000);
+
     setInterval(async () => {
         if (isPlaying) return;
-        
-        // Radar refresh — national mosaic
-        if (activeRadarNational) {
-            const url = cacheBust(nationalRadarUrl());
-            Object.values(maps).forEach(m => {
-                if (m.getSource('radar')) m.getSource('radar').setTiles([url]);
-            });
-            updateHealth('radar');
-            addLiveLog('AUTO: National radar tiles refreshed', '#444');
-        }
 
-        // Radar refresh — site-specific products
-        const siteRadarLayers = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'];
-        const anySiteRadar = Object.values(maps).some(m => siteRadarLayers.some(l => isLayerVisible(m, l)));
-        if (anySiteRadar) {
-            const sites = new Set();
-            Object.entries(maps).forEach(([pid, m]) => {
-                const site = paneRadarSites[pid] || 'DGX';
-                if (site.includes('nexrad')) return;
-                const prodSourceMap = { 'sr_bref': 'site-bref', 'sr_bvel': 'site-bvel', 'bdhc': 'site-bdhc', 'bdsa': 'site-bdsa', 'boha': 'site-boha' };
-                const srcName = prodSourceMap[paneRadarProducts[pid] || 'sr_bref'];
-                if (srcName && m.getSource(srcName)) sites.add(site);
-            });
-            // Re-read each scan's valid time, then repoint the tiles to that exact
-            // scan (fetchSiteRadarTimes → repointSiteRadar) so all zoom levels match
-            // and the label tracks the scan.
-            sites.forEach(site => fetchSiteRadarTimes(site, true));
-            updateHealth('radar');
-            addLiveLog('AUTO: Site radar refreshed', '#444');
-        }
-        
         // METARs refresh + re-generate any visible contour products
         const metarsActive = Object.values(maps).some(m => isLayerVisible(m, 'metars-temp') || isLayerVisible(m, 'metars-barb'));
         const isobars2mbActive = Object.values(maps).some(m => isLayerVisible(m, 'sfc-isobars-2mb-line'));
@@ -8293,7 +8299,8 @@ function initSyncButton() {
 const CHANGELOG = [
     { date: 'Jun 18, 2026', items: [
         'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.',
-        'Fixed site radar flickering between the current and previous scan while zooming — all zoom levels now lock to one scan.'
+        'Fixed site radar flickering between the current and previous scan while zooming — all zoom levels now lock to one scan.',
+        'Site radar now checks for new volume scans every minute (was 5), so the latest scan appears as soon as it lands.'
     ]},
     { date: 'Jun 17, 2026', items: [
         'Tropical data now refreshes every 5 minutes (was 30) — new NHC advisories show up promptly.',
