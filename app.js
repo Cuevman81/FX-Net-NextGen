@@ -375,11 +375,11 @@ function siteWorkspace(site) {
     const pPrefix = ['abc','acg','aec','ahg','aih','akc','apd','gua','hki','hkm','hmo','hwa'].includes(s) ? 'p' : 'k';
     return pPrefix + s;
 }
-async function fetchSiteRadarTimes(site) {
+async function fetchSiteRadarTimes(site, force = false) {
     if (!site || site.includes('nexrad')) return;
     const key = site.toUpperCase();
     const cached = siteRadarTimes[key];
-    if (cached && Date.now() - cached._ts < SITE_TIME_TTL) return;   // throttle
+    if (!force && cached && Date.now() - cached._ts < SITE_TIME_TTL) return;   // throttle
     const ws = siteWorkspace(site);
     try {
         const res = await fetch(`https://opengeo.ncep.noaa.gov/geoserver/${ws}/ows?service=wms&version=1.3.0&request=GetCapabilities`);
@@ -5265,7 +5265,9 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'wpc-fronts-solid'), 'WPC FRONTS', '#4488ff');
     add(isLayerVisible(map, 'wpc-qpf-layer'), 'WPC QPF', '#39ff5a');
     if (isLayerVisible(map, 'radar-l3-layer') && paneL3[paneId]) {
-        rows.push({ label: `L3 ${paneL3[paneId].meta?.name || paneL3[paneId].product} · ${paneL3[paneId].station}`, color: '#33c27a' });
+        const l3t = paneL3[paneId].meta?.time;          // "YYYY-MM-DD HH:MM:SSZ"
+        const l3suffix = (l3t && l3t.length >= 16) ? ` · ${l3t.substring(11, 16)}Z` : '';
+        rows.push({ label: `L3 ${paneL3[paneId].meta?.name || paneL3[paneId].product} · ${paneL3[paneId].station}${l3suffix}`, color: '#33c27a' });
     }
     // Hazards
     add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d');
@@ -5307,10 +5309,12 @@ function updatePaneTimestamps(forceLabel = null) {
             return;
         }
 
-        // Keep the site-radar valid time current (throttled; re-renders on load)
+        // Populate the site-radar valid time on first display only; thereafter
+        // the 5-min tile refresh updates it in step with the rendered scan, so
+        // the label never runs ahead of the image.
         const m = maps[paneId];
         const pSite = paneRadarSites[paneId];
-        if (m && pSite && !pSite.includes('nexrad') &&
+        if (m && pSite && !pSite.includes('nexrad') && !siteRadarTimes[pSite.toUpperCase()] &&
             ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'].some(l => isLayerVisible(m, l))) {
             fetchSiteRadarTimes(pSite);
         }
@@ -7621,6 +7625,7 @@ function startAutoRefresh() {
         const siteRadarLayers = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'];
         const anySiteRadar = Object.values(maps).some(m => siteRadarLayers.some(l => isLayerVisible(m, l)));
         if (anySiteRadar) {
+            const sitesToTime = new Set();
             Object.entries(maps).forEach(([pid, m]) => {
                 const site = paneRadarSites[pid] || 'DGX';
                 if (site.includes('nexrad')) return;
@@ -7629,8 +7634,12 @@ function startAutoRefresh() {
                 const srcName = prodSourceMap[prod];
                 if (srcName && m.getSource(srcName)) {
                     m.getSource(srcName).setTiles([siteRadarUrl(site, prod)]);
+                    sitesToTime.add(site);
                 }
             });
+            // Re-read the valid time alongside the tiles so the label tracks the
+            // scan (fetchSiteRadarTimes re-renders the labels when it resolves).
+            sitesToTime.forEach(site => fetchSiteRadarTimes(site, true));
             updateHealth('radar');
             addLiveLog('AUTO: Site radar tiles refreshed', '#444');
         }
@@ -8264,7 +8273,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 18, 2026', items: [
-        'Site radar now shows its volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), so you can see exactly how current the data is.'
+        'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.'
     ]},
     { date: 'Jun 17, 2026', items: [
         'Tropical data now refreshes every 5 minutes (was 30) — new NHC advisories show up promptly.',
@@ -8365,6 +8374,7 @@ function init() {
                 loadL3Radar(pid, st.station, st.product);
             }
         });
+        if (!isPlaying) refreshTimestampLabel();   // update L3 time on all panes
     }, 120 * 1000);
 
     // GIBS satellite — refresh latest frame + warm loop time-list (skip while looping)
