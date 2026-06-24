@@ -5909,6 +5909,25 @@ function initMeteogram() {
     if (closeBtn) closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
     if (refreshBtn) refreshBtn.addEventListener('click', () => loadMeteogram());
 
+    // ZIP / city search
+    const goBtn = document.getElementById('meteogram-go');
+    const placeInput = document.getElementById('meteogram-place');
+    const runPlaceSearch = async () => {
+        const body = document.getElementById('meteogram-body');
+        const locEl = document.getElementById('meteogram-loc');
+        try {
+            if (locEl) locEl.textContent = 'Searching…';
+            const g = await geocodePlace(placeInput.value);
+            await loadMeteogramAt(g.lat, g.lon, g.label);
+            panel.dataset.loaded = '1';
+        } catch (e) {
+            if (locEl) locEl.textContent = '—';
+            if (body) body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;line-height:1.5;">${e.message}</div>`;
+        }
+    };
+    if (goBtn) goBtn.addEventListener('click', runPlaceSearch);
+    if (placeInput) placeInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runPlaceSearch(); } });
+
     // Draggable header (same pattern as the text panel)
     const handle = document.getElementById('meteogram-drag');
     if (handle) {
@@ -5929,25 +5948,72 @@ function initMeteogram() {
     }
 }
 
-async function loadMeteogram() {
+// Geocode a ZIP code or city name to a lat/lon (keyless, CORS-enabled):
+// 5-digit ZIP → Zippopotam.us, otherwise city name → Open-Meteo geocoding.
+async function geocodePlace(qRaw) {
+    const q = (qRaw || '').trim();
+    if (!q) throw new Error('Enter a ZIP code or city name.');
+    if (/^\d{5}$/.test(q)) {
+        const r = await fetch(`https://api.zippopotam.us/us/${q}`);
+        if (!r.ok) throw new Error(`ZIP ${q} not found.`);
+        const j = await r.json();
+        const pl = j.places && j.places[0];
+        if (!pl) throw new Error(`ZIP ${q} not found.`);
+        return { lat: +pl.latitude, lon: +pl.longitude, label: `${pl['place name']}, ${pl['state abbreviation']} ${q}` };
+    }
+    // Split off a trailing state ("City, ST" or "City ST") so we can query the
+    // bare city name and filter results to that state (Open-Meteo admin1 = full name).
+    let name = q, stateFull = '';
+    if (q.includes(',')) {
+        const parts = q.split(',');
+        name = parts[0].trim();
+        const st = parts[1].trim();
+        stateFull = (US_STATE_NAMES[st.toUpperCase()] || st).toLowerCase();
+    } else {
+        const toks = q.split(/\s+/);
+        const last = (toks[toks.length - 1] || '').toUpperCase();
+        if (toks.length > 1 && US_STATE_NAMES[last]) {
+            stateFull = US_STATE_NAMES[last].toLowerCase();
+            name = toks.slice(0, -1).join(' ');
+        }
+    }
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=10&language=en&format=json`);
+    if (!r.ok) throw new Error('Geocoding failed.');
+    const j = await r.json();
+    const results = j.results || [];
+    let pool = results.filter(x => x.country_code === 'US');
+    if (!pool.length) pool = results;
+    let hit;
+    if (stateFull) hit = pool.find(x => (x.admin1 || '').toLowerCase() === stateFull) || pool.find(x => (x.admin1 || '').toLowerCase().includes(stateFull));
+    hit = hit || pool[0];
+    if (!hit) throw new Error(`No match for “${q}”.`);
+    return { lat: hit.latitude, lon: hit.longitude, label: `${hit.name}${hit.admin1 ? ', ' + hit.admin1 : ''}` };
+}
+const US_STATE_NAMES = { AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming', DC: 'District of Columbia', PR: 'Puerto Rico' };
+
+function loadMeteogram() {
+    const map = maps[activePaneId] || Object.values(maps)[0];
+    if (!map) return;
+    const c = map.getCenter();
+    return loadMeteogramAt(c.lat, c.lng);
+}
+
+async function loadMeteogramAt(latNum, lonNum, presetLabel) {
     const body = document.getElementById('meteogram-body');
     const locEl = document.getElementById('meteogram-loc');
     const panel = document.getElementById('meteogram-panel');
     if (!body) return;
-    const map = maps[activePaneId] || Object.values(maps)[0];
-    if (!map) return;
-    const c = map.getCenter();
-    const lat = c.lat.toFixed(4), lon = c.lng.toFixed(4);
+    const lat = (+latNum).toFixed(4), lon = (+lonNum).toFixed(4);
 
-    if (locEl) locEl.textContent = 'Resolving location…';
-    body.innerHTML = `<div style="color:#6b7a88;font-size:12px;padding:20px;">Fetching NWS hourly forecast for ${lat}, ${lon}…</div>`;
+    if (locEl) locEl.textContent = presetLabel ? `Resolving ${presetLabel}…` : 'Resolving location…';
+    body.innerHTML = `<div style="color:#6b7a88;font-size:12px;padding:20px;">Fetching NWS hourly forecast for ${presetLabel || (lat + ', ' + lon)}…</div>`;
     try {
         const pRes = await fetch(`https://api.weather.gov/points/${lat},${lon}`, { headers: { 'Accept': 'application/geo+json' } });
         if (!pRes.ok) throw new Error(pRes.status === 404 ? 'NWS point forecasts cover the U.S. and territories only — pan the map over land in the U.S.' : `points ${pRes.status}`);
         const pj = await pRes.json();
         const pp = pj.properties || {};
         const rl = (pp.relativeLocation && pp.relativeLocation.properties) || {};
-        const placeName = rl.city ? `${rl.city}, ${rl.state}` : `${lat}, ${lon}`;
+        const placeName = rl.city ? `${rl.city}, ${rl.state}` : (presetLabel || `${lat}, ${lon}`);
         if (locEl) locEl.textContent = `${placeName} · ${lat}, ${lon} · ${pp.gridId || ''} ${pp.gridX || ''},${pp.gridY || ''}`;
 
         const hRes = await fetch(pp.forecastHourly, { headers: { 'Accept': 'application/geo+json' } });
@@ -8669,7 +8735,7 @@ function initSyncButton() {
 const CHANGELOG = [
     { date: 'Jun 24, 2026', items: [
         'Site radar now shows a live WSR-88D status readout — operational state, VCP / scan mode (precip vs clear-air), alarms, and Level-II latency — right in the radar window beneath the product label.',
-        'New Forecast Meteogram (NWS Products → Forecast Meteogram): a clean 48-hour temperature/dewpoint, precip-probability, and wind chart for the center of the active pane, in a draggable window like the Text Browser.'
+        'New Forecast Meteogram (NWS Products → Forecast Meteogram): a clean 48-hour temperature/dewpoint, precip-probability, and wind chart in a draggable window like the Text Browser. Pick a location by ZIP code, city name (“Norman, OK”), or the active pane’s map center.'
     ]},
     { date: 'Jun 18, 2026', items: [
         'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.',

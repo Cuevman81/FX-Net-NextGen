@@ -878,16 +878,18 @@
             <span><i data-lucide="line-chart"></i> FORECAST METEOGRAM</span>
             <button id="close-meteogram-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
         </div>
-        <div class="modal-toolbar" style="gap:12px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center;">
-            <button id="meteogram-refresh" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Load @ Map Center</button>
-            <span id="meteogram-loc" style="font-size:11px; color:var(--accent-cyan);">—</span>
+        <div class="modal-toolbar" style="gap:8px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;">
+            <input id="meteogram-place" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:150px;" />
+            <button id="meteogram-go" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Go</button>
+            <button id="meteogram-refresh" class="btn-primary" style="height:28px; padding:0 12px; font-weight:700; background:#1a2733;">Map Center</button>
+            <span id="meteogram-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
         </div>
         <div class="floating-panel-body" id="meteogram-body" style="padding:10px;">
             <div style="color:#6b7a88; font-size:12px; padding:20px; line-height:1.5;">Hit <b style="color:#cdd6df;">Load @ Map Center</b> to pull the NWS hourly forecast for the center of the active pane.</div>
         </div>
     </div>
 
-    <script src="app.js?v=184"></script>
+    <script src="app.js?v=186"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
