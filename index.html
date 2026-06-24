@@ -12,7 +12,7 @@
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="style.css?v=107">
+    <link rel="stylesheet" href="style.css?v=108">
     <!-- Vercel Speed Insights -->
     <script type="module">
       import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
@@ -81,7 +81,6 @@
                     <div class="product-item" data-layer="radar-l3" data-l3="N0C"><span>Correlation Coeff (CC)</span> <span class="badge green">NODD</span></div>
                     <div class="product-item" data-layer="radar-l3" data-l3="N0X"><span>Differential Refl (ZDR)</span> <span class="badge green">NODD</span></div>
                     <div class="product-item" data-layer="radar-l3" data-l3="N0K"><span>Specific Diff Phase (KDP)</span> <span class="badge green">NODD</span></div>
-                    <div id="radar-status-box" class="radar-status" style="display:none;"></div>
                 </div>
 
                 <!-- MRMS PRODUCTS -->
@@ -240,6 +239,7 @@
                 <div class="category-group">
                     <div class="category-label"><i data-lucide="file-text"></i> NWS PRODUCTS</div>
                     <div class="product-item" id="btn-text-products"><span>Text Browser</span></div>
+                    <div class="product-item" id="btn-meteogram"><span>Forecast Meteogram</span></div>
                 </div>
             </div>
 
@@ -872,7 +872,22 @@
         </div>
     </div>
 
-    <script src="app.js?v=182"></script>
+    <!-- FORECAST METEOGRAM (NWS hourly gridpoint forecast) -->
+    <div id="meteogram-panel" class="floating-panel" style="display:none; width:740px; height:560px;">
+        <div class="floating-panel-header" id="meteogram-drag">
+            <span><i data-lucide="line-chart"></i> FORECAST METEOGRAM</span>
+            <button id="close-meteogram-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+        </div>
+        <div class="modal-toolbar" style="gap:12px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center;">
+            <button id="meteogram-refresh" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Load @ Map Center</button>
+            <span id="meteogram-loc" style="font-size:11px; color:var(--accent-cyan);">—</span>
+        </div>
+        <div class="floating-panel-body" id="meteogram-body" style="padding:10px;">
+            <div style="color:#6b7a88; font-size:12px; padding:20px; line-height:1.5;">Hit <b style="color:#cdd6df;">Load @ Map Center</b> to pull the NWS hourly forecast for the center of the active pane.</div>
+        </div>
+    </div>
+
+    <script src="app.js?v=184"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

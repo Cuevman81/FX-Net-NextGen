@@ -5372,6 +5372,10 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'site-bdhc-layer'), `${site} HYDROMETEOR CLASS${siteTimeSuffix(site, 'bdhc')}`, '#ff9a3c');
     add(isLayerVisible(map, 'site-bdsa-layer'), `${site} STORM TOTAL PRECIP${siteTimeSuffix(site, 'bdsa')}`, '#3cff9a');
     add(isLayerVisible(map, 'site-boha-layer'), `${site} ONE-HOUR PRECIP${siteTimeSuffix(site, 'boha')}`, '#3cff9a');
+    // WSR-88D operational status, inline under the site radar product row.
+    if (SITE_RADAR_VIS_LAYERS.some(l => isLayerVisible(map, l)) && site && !site.includes('NEXRAD')) {
+        radarStatusRows(paneRadarSites[paneId]).forEach(r => rows.push(r));
+    }
     add(isLayerVisible(map, 'satellite-layer') && ch !== null, `GOES-E CH${ch} SATELLITE`, '#cfd8e3');
     if (isLayerVisible(map, 'gibs-sat-layer') && paneGibs[paneId]) {
         rows.push({ label: `GOES-E ${GIBS_PRODUCTS[paneGibs[paneId]]?.label || paneGibs[paneId]} (GIBS)`, color: '#9fd0ff' });
@@ -5886,6 +5890,182 @@ function isLayerVisible(map, layerId) {
     } catch (e) { return false; }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 12b: FORECAST METEOGRAM (NWS hourly gridpoint forecast)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function initMeteogram() {
+    const panel = document.getElementById('meteogram-panel');
+    if (!panel) return;
+    const openBtn = document.getElementById('btn-meteogram');
+    const closeBtn = document.getElementById('close-meteogram-panel');
+    const refreshBtn = document.getElementById('meteogram-refresh');
+
+    if (openBtn) openBtn.addEventListener('click', () => {
+        const opening = panel.style.display === 'none' || !panel.style.display;
+        panel.style.display = opening ? 'flex' : 'none';
+        if (opening && !panel.dataset.loaded) loadMeteogram();
+    });
+    if (closeBtn) closeBtn.addEventListener('click', () => { panel.style.display = 'none'; });
+    if (refreshBtn) refreshBtn.addEventListener('click', () => loadMeteogram());
+
+    // Draggable header (same pattern as the text panel)
+    const handle = document.getElementById('meteogram-drag');
+    if (handle) {
+        let dragging = false, startX, startY, origLeft, origTop;
+        handle.addEventListener('mousedown', e => {
+            if (e.target.closest('.btn-icon')) return;
+            dragging = true; startX = e.clientX; startY = e.clientY;
+            const rect = panel.getBoundingClientRect();
+            origLeft = rect.left; origTop = rect.top; e.preventDefault();
+        });
+        document.addEventListener('mousemove', e => {
+            if (!dragging) return;
+            panel.style.left = (origLeft + e.clientX - startX) + 'px';
+            panel.style.top = (origTop + e.clientY - startY) + 'px';
+            panel.style.right = 'auto';
+        });
+        document.addEventListener('mouseup', () => { dragging = false; });
+    }
+}
+
+async function loadMeteogram() {
+    const body = document.getElementById('meteogram-body');
+    const locEl = document.getElementById('meteogram-loc');
+    const panel = document.getElementById('meteogram-panel');
+    if (!body) return;
+    const map = maps[activePaneId] || Object.values(maps)[0];
+    if (!map) return;
+    const c = map.getCenter();
+    const lat = c.lat.toFixed(4), lon = c.lng.toFixed(4);
+
+    if (locEl) locEl.textContent = 'Resolving location…';
+    body.innerHTML = `<div style="color:#6b7a88;font-size:12px;padding:20px;">Fetching NWS hourly forecast for ${lat}, ${lon}…</div>`;
+    try {
+        const pRes = await fetch(`https://api.weather.gov/points/${lat},${lon}`, { headers: { 'Accept': 'application/geo+json' } });
+        if (!pRes.ok) throw new Error(pRes.status === 404 ? 'NWS point forecasts cover the U.S. and territories only — pan the map over land in the U.S.' : `points ${pRes.status}`);
+        const pj = await pRes.json();
+        const pp = pj.properties || {};
+        const rl = (pp.relativeLocation && pp.relativeLocation.properties) || {};
+        const placeName = rl.city ? `${rl.city}, ${rl.state}` : `${lat}, ${lon}`;
+        if (locEl) locEl.textContent = `${placeName} · ${lat}, ${lon} · ${pp.gridId || ''} ${pp.gridX || ''},${pp.gridY || ''}`;
+
+        const hRes = await fetch(pp.forecastHourly, { headers: { 'Accept': 'application/geo+json' } });
+        if (!hRes.ok) throw new Error(`hourly ${hRes.status}`);
+        const hj = await hRes.json();
+        const periods = (hj.properties && hj.properties.periods) || [];
+        if (!periods.length) throw new Error('no forecast periods returned');
+
+        renderMeteogram(body, periods, placeName, hj.properties.generatedAt);
+        panel.dataset.loaded = '1';
+    } catch (e) {
+        if (locEl) locEl.textContent = '—';
+        body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;line-height:1.5;">Couldn’t load the meteogram.<br><span style="color:#8b97a3;">${e.message}</span></div>`;
+    }
+}
+
+// Build a clean 3-panel SVG meteogram (temp/dewpoint, PoP, wind) from the
+// NWS hourly forecast periods. Temp is °F; dewpoint comes in °C → convert.
+function renderMeteogram(body, allPeriods, placeName, genTime) {
+    const N = Math.min(allPeriods.length, 48);
+    const periods = allPeriods.slice(0, N);
+    const W = 740, mL = 42, mR = 16, plotW = W - mL - mR;
+    const x = i => mL + (N <= 1 ? 0 : i * plotW / (N - 1));
+
+    // ── data ──
+    const temps = periods.map(p => p.temperature);
+    let lastDew = null;
+    const dews = periods.map(p => {
+        const v = p.dewpoint && p.dewpoint.value;
+        if (v != null) lastDew = v * 9 / 5 + 32;
+        return lastDew;
+    });
+    const pops = periods.map(p => (p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value) || 0);
+    const winds = periods.map(p => parseInt(p.windSpeed, 10) || 0);
+    const dirs = periods.map(p => p.windDirection || '');
+
+    const allT = temps.concat(dews.filter(v => v != null));
+    let tLo = Math.floor((Math.min(...allT) - 3) / 5) * 5;
+    let tHi = Math.ceil((Math.max(...allT) + 3) / 5) * 5;
+    if (tHi === tLo) tHi = tLo + 10;
+    const wMax = Math.max(10, Math.ceil(Math.max(...winds) / 5) * 5);
+
+    // ── panel geometry ──
+    const panels = {
+        temp: { top: 54, h: 122 },
+        pop:  { top: 206, h: 84 },
+        wind: { top: 320, h: 84 }
+    };
+    const yScale = (v, lo, hi, P) => P.top + P.h - ((v - lo) / (hi - lo)) * P.h;
+    const C = { temp: '#ff5a52', dew: '#33c27a', pop: '#4a9eff', wind: '#00e5ff', grid: '#1b2530', mid: '#2b3a47', axis: '#8b97a3', lab: '#cdd6df' };
+    const wd = ds => { const [Y, M, D] = ds.split('-').map(Number); return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(Y, M - 1, D).getDay()]; };
+
+    const svg = [];
+    svg.push(`<svg viewBox="0 0 ${W} 470" width="100%" style="font-family:'Consolas','Monaco',monospace;display:block;">`);
+    svg.push(`<rect x="0" y="0" width="${W}" height="470" fill="#050505"/>`);
+
+    // Title + legend
+    svg.push(`<text x="${mL}" y="18" fill="${C.lab}" font-size="12" font-weight="700">${placeName}</text>`);
+    svg.push(`<text x="${mL}" y="31" fill="${C.axis}" font-size="9">NWS hourly forecast · next ${N} h${genTime ? ' · issued ' + genTime.substring(11, 16) + 'Z' : ''}</text>`);
+    const leg = [['Temp', C.temp], ['Dewpt', C.dew], ['PoP', C.pop], ['Wind', C.wind]];
+    let lx = W - mR;
+    leg.slice().reverse().forEach(([t, col]) => {
+        lx -= (t.length * 6 + 18);
+        svg.push(`<rect x="${lx}" y="11" width="9" height="9" rx="2" fill="${col}"/><text x="${lx + 13}" y="19" fill="${C.axis}" font-size="9">${t}</text>`);
+    });
+
+    // Time gridlines + bottom axis (shared)
+    const axTop = panels.temp.top, axBot = panels.wind.top + panels.wind.h;
+    periods.forEach((p, i) => {
+        const hh = parseInt(p.startTime.substr(11, 2), 10);
+        if (hh % 6 !== 0) return;
+        const midnight = hh === 0;
+        svg.push(`<line x1="${x(i).toFixed(1)}" y1="${axTop}" x2="${x(i).toFixed(1)}" y2="${axBot}" stroke="${midnight ? C.mid : C.grid}" stroke-width="1"/>`);
+        svg.push(`<text x="${x(i).toFixed(1)}" y="${axBot + 14}" fill="${C.axis}" font-size="8.5" text-anchor="middle">${String(hh).padStart(2, '0')}</text>`);
+        if (midnight) svg.push(`<text x="${x(i).toFixed(1)}" y="${axBot + 26}" fill="${C.lab}" font-size="8.5" text-anchor="middle" font-weight="700">${wd(p.startTime.substr(0, 10))} ${p.startTime.substr(5, 5)}</text>`);
+    });
+
+    // ── helper to draw a panel frame + horizontal gridlines/labels ──
+    const drawAxis = (P, lo, hi, step, fmt, title) => {
+        svg.push(`<text x="${mL}" y="${P.top - 5}" fill="${C.lab}" font-size="9" font-weight="700">${title}</text>`);
+        for (let v = lo; v <= hi + 0.001; v += step) {
+            const yy = yScale(v, lo, hi, P).toFixed(1);
+            svg.push(`<line x1="${mL}" y1="${yy}" x2="${W - mR}" y2="${yy}" stroke="${C.grid}" stroke-width="1"/>`);
+            svg.push(`<text x="${mL - 5}" y="${(+yy + 3)}" fill="${C.axis}" font-size="8.5" text-anchor="end">${fmt(v)}</text>`);
+        }
+    };
+    const poly = (vals, P, lo, hi, col, w) => {
+        const pts = vals.map((v, i) => v == null ? null : `${x(i).toFixed(1)},${yScale(v, lo, hi, P).toFixed(1)}`).filter(Boolean).join(' ');
+        return `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linejoin="round"/>`;
+    };
+
+    // Temp / dewpoint
+    drawAxis(panels.temp, tLo, tHi, (tHi - tLo) > 40 ? 10 : 5, v => `${v}°`, 'TEMP / DEWPOINT (°F)');
+    svg.push(poly(dews, panels.temp, tLo, tHi, C.dew, 1.8));
+    svg.push(poly(temps, panels.temp, tLo, tHi, C.temp, 2));
+
+    // PoP bars
+    drawAxis(panels.pop, 0, 100, 25, v => `${v}`, 'PRECIP PROBABILITY (%)');
+    const bw = Math.max(2, plotW / N * 0.6);
+    pops.forEach((v, i) => {
+        if (!v) return;
+        const yy = yScale(v, 0, 100, panels.pop);
+        svg.push(`<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${yy.toFixed(1)}" width="${bw.toFixed(1)}" height="${(panels.pop.top + panels.pop.h - yy).toFixed(1)}" fill="${C.pop}" opacity="0.65"/>`);
+    });
+
+    // Wind speed + direction labels
+    drawAxis(panels.wind, 0, wMax, wMax / 2, v => `${v}`, 'WIND (mph)');
+    svg.push(poly(winds, panels.wind, 0, wMax, C.wind, 2));
+    periods.forEach((p, i) => {
+        const hh = parseInt(p.startTime.substr(11, 2), 10);
+        if (hh % 6 !== 0 || !dirs[i]) return;
+        svg.push(`<text x="${x(i).toFixed(1)}" y="${(panels.wind.top + 10)}" fill="${C.axis}" font-size="8" text-anchor="middle">${dirs[i]}</text>`);
+    });
+
+    svg.push(`</svg>`);
+    body.innerHTML = svg.join('');
+}
+
 function updateSidebarToActivePane() {
     const map = maps[activePaneId];
     if (!map) return;
@@ -5988,8 +6168,6 @@ function updateSidebarToActivePane() {
 
     // Keep the per-pane legend stack in sync with whatever is toggled (no-op while looping)
     refreshTimestampLabel();
-    // Reflect the active pane's NEXRAD operational status (only when a site radar shows).
-    updateRadarStatus();
 }
 
 // ─── NEXRAD WSR-88D Operational Status (api.weather.gov /radar/stations) ───
@@ -6021,56 +6199,52 @@ async function fetchRadarStatus(icao, force = false) {
     } catch (e) { return null; }
 }
 
-function renderRadarStatus(box, icao, data) {
-    if (!data || !data.properties) {
-        box.innerHTML = `<div class="rs-line rs-head">${icao}</div><div class="rs-line rs-dim">Status unavailable</div>`;
-        return;
+// Legend rows (label + left-border color) describing a site's WSR-88D status,
+// rendered inline in the pane's bottom-left legend stack. Reads the cache; if a
+// site isn't cached yet it kicks off a fetch and re-renders when it lands.
+function radarStatusRows(site) {
+    const icao = siteWorkspace(site).toUpperCase();
+    const cached = radarStationCache[icao];
+    if (!cached || !cached.data || !cached.data.properties) {
+        fetchRadarStatus(icao).then(() => { if (!isPlaying) refreshTimestampLabel(); });
+        return [{ label: `${icao} · checking status…`, color: '#6b7a88' }];
     }
-    const p = data.properties;
+    const p = cached.data.properties;
     const rda = (p.rda && p.rda.properties) || {};
     const lat = (p.latency && p.latency.properties) || p.latency || {};
     const num = v => (v && typeof v === 'object') ? v.value : v;
-
-    const name = p.name || '';
-    const vcp = rda.volumeCoveragePattern || '';
-    const mode = vcpMode(vcp);
+    const vcp = String(rda.volumeCoveragePattern || '').replace(/\D/g, '');
+    const mode = vcpMode(rda.volumeCoveragePattern);
     const oper = rda.operabilityStatus || '';
     const status = rda.status || '';
     const alarm = rda.alarmSummary || '';
     const online = /on-?line/i.test(oper) && (!status || /operate/i.test(status));
-    const alarmsOk = /no alarms/i.test(alarm);
-    const cur = num(lat.current), avg = num(lat.average);
-    const l2t = lat.levelTwoLastReceivedTime;
-    const l2 = (l2t && l2t.length >= 16) ? l2t.substring(11, 16) + 'Z' : '';
 
     const rows = [];
-    rows.push(`<div class="rs-line rs-head">${icao}${name ? ' · ' + name : ''}</div>`);
-    rows.push(`<div class="rs-line"><span class="rs-dot ${online ? 'ok' : 'bad'}"></span>${oper || 'Status unknown'}${status ? ' · ' + status : ''}</div>`);
-    if (vcp) rows.push(`<div class="rs-line">VCP ${vcp}${mode ? ' · ' + mode : ''}</div>`);
-    if (alarm) rows.push(`<div class="rs-line ${alarmsOk ? 'rs-ok' : 'rs-warn'}">${alarm}</div>`);
-    if (cur != null && !isNaN(+cur)) rows.push(`<div class="rs-line rs-dim">L2 latency ${(+cur).toFixed(1)}s${(avg != null && !isNaN(+avg)) ? ` (avg ${(+avg).toFixed(1)}s)` : ''}</div>`);
-    if (l2) rows.push(`<div class="rs-line rs-dim">Last L2 data ${l2}</div>`);
-    box.innerHTML = rows.join('');
+    const vcpStr = vcp ? `VCP ${vcp}${mode ? ' ' + mode.toUpperCase() : ''}` : '';
+    rows.push({ label: `${icao} ${online ? 'ON-LINE' : (oper || 'STATUS?')}${vcpStr ? ' · ' + vcpStr : ''}`, color: online ? '#33c27a' : '#ff5252' });
+    if (alarm && !/no alarms/i.test(alarm)) rows.push({ label: `⚠ ${alarm}`, color: '#ffb300' });
+    const cur = num(lat.current);
+    const l2t = lat.levelTwoLastReceivedTime;
+    const l2 = (l2t && l2t.length >= 16) ? l2t.substring(11, 16) + 'Z' : '';
+    if ((cur != null && !isNaN(+cur)) || l2) {
+        const latStr = (cur != null && !isNaN(+cur)) ? `L2 ${(+cur).toFixed(1)}s` : 'L2';
+        rows.push({ label: `${latStr}${l2 ? ' · ' + l2 : ''}`, color: '#6b7a88' });
+    }
+    return rows;
 }
 
-async function updateRadarStatus() {
-    const box = document.getElementById('radar-status-box');
-    if (!box) return;
-    const map = maps[activePaneId];
-    const site = paneRadarSites[activePaneId];
-    const showingSite = map && site && !site.includes('nexrad') &&
-        SITE_RADAR_VIS_LAYERS.some(l => isLayerVisible(map, l));
-    if (!showingSite) { box.style.display = 'none'; box.dataset.icao = ''; return; }
-
-    const icao = siteWorkspace(site).toUpperCase();
-    box.style.display = 'block';
-    if (box.dataset.icao !== icao) {
-        box.dataset.icao = icao;
-        box.innerHTML = `<div class="rs-line rs-head">${icao} · checking status…</div>`;
-    }
-    const data = await fetchRadarStatus(icao);
-    if (box.dataset.icao !== icao) return;   // active pane/site changed while awaiting
-    renderRadarStatus(box, icao, data);
+// Periodically refresh the operational status of every site shown in any pane,
+// then re-render the legends.
+function refreshAllRadarStatus() {
+    const sites = new Set();
+    Object.entries(maps).forEach(([pid, m]) => {
+        const s = paneRadarSites[pid];
+        if (s && !s.includes('nexrad') && SITE_RADAR_VIS_LAYERS.some(l => isLayerVisible(m, l))) sites.add(s);
+    });
+    if (!sites.size) return;
+    Promise.all([...sites].map(s => fetchRadarStatus(siteWorkspace(s).toUpperCase(), true)))
+        .then(() => { if (!isPlaying) refreshTimestampLabel(); });
 }
 
 function initProductSidebar() {
@@ -7859,8 +8033,8 @@ function startAutoRefresh() {
         addLiveLog('AUTO: National radar tiles refreshed', '#444');
     }, 2 * 60 * 1000);
 
-    // NEXRAD operational status for the active pane's site (VCP/mode/alarms/latency).
-    setInterval(() => { updateRadarStatus(); }, 2 * 60 * 1000);
+    // NEXRAD operational status for every site shown in a pane (VCP/mode/alarms/latency).
+    setInterval(() => { refreshAllRadarStatus(); }, 2 * 60 * 1000);
 
     setInterval(async () => {
         if (isPlaying) return;
@@ -8494,7 +8668,8 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 24, 2026', items: [
-        'Site radar now shows a live WSR-88D status readout (operational state, VCP / scan mode, alarms, and Level-II data latency) in the RADAR panel whenever you’re viewing a NEXRAD site.'
+        'Site radar now shows a live WSR-88D status readout — operational state, VCP / scan mode (precip vs clear-air), alarms, and Level-II latency — right in the radar window beneath the product label.',
+        'New Forecast Meteogram (NWS Products → Forecast Meteogram): a clean 48-hour temperature/dewpoint, precip-probability, and wind chart for the center of the active pane, in a draggable window like the Text Browser.'
     ]},
     { date: 'Jun 18, 2026', items: [
         'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.',
@@ -8586,6 +8761,7 @@ function init() {
     initSyncButton();
     initSoundingModal();
     initTextModal();
+    initMeteogram();
     initSolarClickHandler();
     initRiverGaugePanel();
 
