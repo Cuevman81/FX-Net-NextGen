@@ -5894,12 +5894,24 @@ function isLayerVisible(map, layerId) {
 // SECTION 12b: FORECAST METEOGRAM (NWS hourly gridpoint forecast)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+let meteoData = null;       // { allPeriods, placeName, genTime } — last fetch, for re-ranging
+let meteoHoverCtx = null;   // geometry + data for the hover crosshair / readout
+function meteoHours() {
+    const el = document.getElementById('meteogram-hours');
+    return el ? (parseInt(el.value, 10) || 48) : 48;
+}
+
 function initMeteogram() {
     const panel = document.getElementById('meteogram-panel');
     if (!panel) return;
     const openBtn = document.getElementById('btn-meteogram');
     const closeBtn = document.getElementById('close-meteogram-panel');
     const refreshBtn = document.getElementById('meteogram-refresh');
+    const hoursSel = document.getElementById('meteogram-hours');
+    // Re-range without refetching — just re-render the cached forecast.
+    if (hoursSel) hoursSel.addEventListener('change', () => {
+        if (meteoData) renderMeteogram(document.getElementById('meteogram-body'), meteoData.allPeriods, meteoData.placeName, meteoData.genTime, meteoHours());
+    });
 
     if (openBtn) openBtn.addEventListener('click', () => {
         const opening = panel.style.display === 'none' || !panel.style.display;
@@ -6022,7 +6034,8 @@ async function loadMeteogramAt(latNum, lonNum, presetLabel) {
         const periods = (hj.properties && hj.properties.periods) || [];
         if (!periods.length) throw new Error('no forecast periods returned');
 
-        renderMeteogram(body, periods, placeName, hj.properties.generatedAt);
+        meteoData = { allPeriods: periods, placeName, genTime: hj.properties.generatedAt };
+        renderMeteogram(body, meteoData.allPeriods, meteoData.placeName, meteoData.genTime, meteoHours());
         panel.dataset.loaded = '1';
     } catch (e) {
         if (locEl) locEl.textContent = '—';
@@ -6032,11 +6045,13 @@ async function loadMeteogramAt(latNum, lonNum, presetLabel) {
 
 // Build a clean 3-panel SVG meteogram (temp/dewpoint, PoP, wind) from the
 // NWS hourly forecast periods. Temp is °F; dewpoint comes in °C → convert.
-function renderMeteogram(body, allPeriods, placeName, genTime) {
-    const N = Math.min(allPeriods.length, 48);
+// `hours` = how far out to plot (NWS hourly runs ~156 h).
+function renderMeteogram(body, allPeriods, placeName, genTime, hours) {
+    const N = Math.min(allPeriods.length, hours || 48);
     const periods = allPeriods.slice(0, N);
     const W = 740, mL = 42, mR = 16, plotW = W - mL - mR;
     const x = i => mL + (N <= 1 ? 0 : i * plotW / (N - 1));
+    const dx = N <= 1 ? 0 : plotW / (N - 1);
 
     // ── data ──
     const temps = periods.map(p => p.temperature);
@@ -6065,6 +6080,8 @@ function renderMeteogram(body, allPeriods, placeName, genTime) {
     const yScale = (v, lo, hi, P) => P.top + P.h - ((v - lo) / (hi - lo)) * P.h;
     const C = { temp: '#ff5a52', dew: '#33c27a', pop: '#4a9eff', wind: '#00e5ff', grid: '#1b2530', mid: '#2b3a47', axis: '#8b97a3', lab: '#cdd6df' };
     const wd = ds => { const [Y, M, D] = ds.split('-').map(Number); return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(Y, M - 1, D).getDay()]; };
+    // Thin labels out as the range grows so the time axis stays readable.
+    const tickHrs = N <= 48 ? 6 : (N <= 96 ? 12 : 24);
 
     const svg = [];
     svg.push(`<svg viewBox="0 0 ${W} 470" width="100%" style="font-family:'Consolas','Monaco',monospace;display:block;">`);
@@ -6084,7 +6101,7 @@ function renderMeteogram(body, allPeriods, placeName, genTime) {
     const axTop = panels.temp.top, axBot = panels.wind.top + panels.wind.h;
     periods.forEach((p, i) => {
         const hh = parseInt(p.startTime.substr(11, 2), 10);
-        if (hh % 6 !== 0) return;
+        if (hh % tickHrs !== 0) return;
         const midnight = hh === 0;
         svg.push(`<line x1="${x(i).toFixed(1)}" y1="${axTop}" x2="${x(i).toFixed(1)}" y2="${axBot}" stroke="${midnight ? C.mid : C.grid}" stroke-width="1"/>`);
         svg.push(`<text x="${x(i).toFixed(1)}" y="${axBot + 14}" fill="${C.axis}" font-size="8.5" text-anchor="middle">${String(hh).padStart(2, '0')}</text>`);
@@ -6112,7 +6129,7 @@ function renderMeteogram(body, allPeriods, placeName, genTime) {
 
     // PoP bars
     drawAxis(panels.pop, 0, 100, 25, v => `${v}`, 'PRECIP PROBABILITY (%)');
-    const bw = Math.max(2, plotW / N * 0.6);
+    const bw = Math.max(1.5, plotW / N * 0.6);
     pops.forEach((v, i) => {
         if (!v) return;
         const yy = yScale(v, 0, 100, panels.pop);
@@ -6124,12 +6141,63 @@ function renderMeteogram(body, allPeriods, placeName, genTime) {
     svg.push(poly(winds, panels.wind, 0, wMax, C.wind, 2));
     periods.forEach((p, i) => {
         const hh = parseInt(p.startTime.substr(11, 2), 10);
-        if (hh % 6 !== 0 || !dirs[i]) return;
+        if (hh % tickHrs !== 0 || !dirs[i]) return;
         svg.push(`<text x="${x(i).toFixed(1)}" y="${(panels.wind.top + 10)}" fill="${C.axis}" font-size="8" text-anchor="middle">${dirs[i]}</text>`);
     });
 
+    // Hover crosshair + per-series markers (positioned on mousemove)
+    svg.push(`<line id="meteo-cross" x1="0" y1="${axTop}" x2="0" y2="${axBot}" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1" stroke-dasharray="3 3" style="display:none"/>`);
+    ['temp', 'dew', 'wind', 'pop'].forEach(k => svg.push(`<circle id="meteo-mk-${k}" r="3.2" fill="${C[k] || C.pop}" stroke="#000" stroke-width="0.8" style="display:none"/>`));
+
     svg.push(`</svg>`);
-    body.innerHTML = svg.join('');
+
+    body.style.position = 'relative';
+    body.innerHTML = `<div id="meteo-readout" style="font-family:'Consolas','Monaco',monospace;font-size:11px;color:#6b7a88;padding:1px 2px 7px;min-height:15px;">Hover the chart for values</div>` + svg.join('');
+
+    // Stash everything the hover handler needs, then wire it up.
+    meteoHoverCtx = { N, mL, dx, periods, temps, dews, winds, pops, dirs, tLo, tHi, wMax, panels, wd };
+    attachMeteoHover(body.querySelector('svg'));
+}
+
+// Crosshair + live readout for the meteogram. Maps the cursor to the nearest
+// hour, moves the crosshair + markers, and writes the values to #meteo-readout.
+function attachMeteoHover(svg) {
+    if (!svg) return;
+    const readout = document.getElementById('meteo-readout');
+    const cross = svg.querySelector('#meteo-cross');
+    const mk = { temp: svg.querySelector('#meteo-mk-temp'), dew: svg.querySelector('#meteo-mk-dew'), wind: svg.querySelector('#meteo-mk-wind'), pop: svg.querySelector('#meteo-mk-pop') };
+    const yS = (v, lo, hi, P) => P.top + P.h - ((v - lo) / (hi - lo)) * P.h;
+    const hide = () => {
+        if (cross) cross.style.display = 'none';
+        Object.values(mk).forEach(m => m && (m.style.display = 'none'));
+        if (readout) readout.innerHTML = '<span style="color:#6b7a88">Hover the chart for values</span>';
+    };
+    svg.addEventListener('mousemove', e => {
+        const ctx = meteoHoverCtx; if (!ctx || !cross) return;
+        const ctm = svg.getScreenCTM(); if (!ctm) return;
+        const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+        const loc = pt.matrixTransform(ctm.inverse());
+        let i = ctx.dx ? Math.round((loc.x - ctx.mL) / ctx.dx) : 0;
+        i = Math.max(0, Math.min(ctx.N - 1, i));
+        const px = ctx.mL + i * ctx.dx;
+        cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.style.display = '';
+        const setMk = (m, v, lo, hi, P) => {
+            if (!m) return;
+            if (v == null) { m.style.display = 'none'; return; }
+            m.setAttribute('cx', px.toFixed(1)); m.setAttribute('cy', yS(v, lo, hi, P).toFixed(1)); m.style.display = '';
+        };
+        setMk(mk.temp, ctx.temps[i], ctx.tLo, ctx.tHi, ctx.panels.temp);
+        setMk(mk.dew, ctx.dews[i], ctx.tLo, ctx.tHi, ctx.panels.temp);
+        setMk(mk.wind, ctx.winds[i], 0, ctx.wMax, ctx.panels.wind);
+        setMk(mk.pop, ctx.pops[i], 0, 100, ctx.panels.pop);
+        if (readout) {
+            const p = ctx.periods[i];
+            const d = ctx.dews[i] != null ? Math.round(ctx.dews[i]) : '–';
+            readout.innerHTML = `<b style="color:#cdd6df">${ctx.wd(p.startTime.substr(0, 10))} ${p.startTime.substr(11, 5)}</b> &nbsp; <span style="color:#ff5a52">${ctx.temps[i]}°F</span> / <span style="color:#33c27a">${d}°F dew</span> &nbsp; <span style="color:#4a9eff">PoP ${ctx.pops[i]}%</span> &nbsp; <span style="color:#00e5ff">${ctx.dirs[i] || ''} ${ctx.winds[i]} mph</span>`;
+        }
+    });
+    svg.addEventListener('mouseleave', hide);
+    hide();
 }
 
 function updateSidebarToActivePane() {
@@ -8735,7 +8803,7 @@ function initSyncButton() {
 const CHANGELOG = [
     { date: 'Jun 24, 2026', items: [
         'Site radar now shows a live WSR-88D status readout — operational state, VCP / scan mode (precip vs clear-air), alarms, and Level-II latency — right in the radar window beneath the product label.',
-        'New Forecast Meteogram (NWS Products → Forecast Meteogram): a clean 48-hour temperature/dewpoint, precip-probability, and wind chart in a draggable window like the Text Browser. Pick a location by ZIP code, city name (“Norman, OK”), or the active pane’s map center.'
+        'New Forecast Meteogram (NWS Products → Forecast Meteogram): a clean temperature/dewpoint, precip-probability, and wind chart in a draggable window like the Text Browser. Pick a location by ZIP code, city name (“Norman, OK”), or the active pane’s map center; choose a range from 12 h out to ~6.5 days; and hover the chart for an exact hour-by-hour readout with a crosshair.'
     ]},
     { date: 'Jun 18, 2026', items: [
         'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.',

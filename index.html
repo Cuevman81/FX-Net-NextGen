@@ -882,6 +882,15 @@
             <input id="meteogram-place" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:150px;" />
             <button id="meteogram-go" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Go</button>
             <button id="meteogram-refresh" class="btn-primary" style="height:28px; padding:0 12px; font-weight:700; background:#1a2733;">Map Center</button>
+            <select id="meteogram-hours" title="Forecast range" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+                <option value="12">12 h</option>
+                <option value="24">24 h</option>
+                <option value="36">36 h</option>
+                <option value="48" selected>48 h</option>
+                <option value="72">72 h (3 d)</option>
+                <option value="120">120 h (5 d)</option>
+                <option value="156">Max (~6.5 d)</option>
+            </select>
             <span id="meteogram-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
         </div>
         <div class="floating-panel-body" id="meteogram-body" style="padding:10px;">
@@ -889,7 +898,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=186"></script>
+    <script src="app.js?v=187"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
