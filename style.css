@@ -648,6 +648,28 @@ body {
     color: var(--accent-green);
 }
 
+/* NEXRAD WSR-88D operational status readout (site radar) */
+.radar-status {
+    margin: 7px 4px 3px;
+    padding: 7px 9px;
+    background: #0a1018;
+    border: 1px solid #1e2a35;
+    border-left: 3px solid var(--accent-cyan);
+    border-radius: 4px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: #cdd6df;
+}
+.radar-status .rs-line { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.radar-status .rs-head { color: var(--accent-cyan); font-weight: 700; letter-spacing: 0.3px; margin-bottom: 2px; white-space: normal; }
+.radar-status .rs-dim { color: #6b7a88; font-size: 9.5px; }
+.radar-status .rs-ok { color: var(--accent-green); }
+.radar-status .rs-warn { color: #ffb300; }
+.radar-status .rs-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.radar-status .rs-dot.ok { background: var(--accent-green); box-shadow: 0 0 5px var(--accent-green); }
+.radar-status .rs-dot.bad { background: #ff5252; box-shadow: 0 0 5px #ff5252; }
+
 .pane {
     background: #000;
     position: relative;

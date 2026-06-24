@@ -5988,6 +5988,89 @@ function updateSidebarToActivePane() {
 
     // Keep the per-pane legend stack in sync with whatever is toggled (no-op while looping)
     refreshTimestampLabel();
+    // Reflect the active pane's NEXRAD operational status (only when a site radar shows).
+    updateRadarStatus();
+}
+
+// ─── NEXRAD WSR-88D Operational Status (api.weather.gov /radar/stations) ───
+// Shows VCP/scan mode, RDA operability, alarms, and Level-II latency for the
+// site radar in the active pane. JSON + CORS, no proxy.
+const radarStationCache = {};            // { ICAO: { data, _ts } }
+const RADAR_STATUS_TTL = 90 * 1000;
+const SITE_RADAR_VIS_LAYERS = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'];
+
+// Derive precip vs clear-air scan mode from the VCP number.
+function vcpMode(vcp) {
+    const n = parseInt(String(vcp || '').replace(/\D/g, ''), 10);
+    if ([31, 32, 35].includes(n)) return 'Clear Air';
+    if ([12, 112, 212, 215, 21, 121, 221].includes(n)) return 'Precipitation';
+    return '';
+}
+
+async function fetchRadarStatus(icao, force = false) {
+    const key = (icao || '').toUpperCase();
+    if (!key) return null;
+    const cached = radarStationCache[key];
+    if (!force && cached && Date.now() - cached._ts < RADAR_STATUS_TTL) return cached.data;
+    try {
+        const res = await fetch(`https://api.weather.gov/radar/stations/${key}`, { headers: { 'Accept': 'application/geo+json' } });
+        if (!res.ok) return null;
+        const json = await res.json();
+        radarStationCache[key] = { data: json, _ts: Date.now() };
+        return json;
+    } catch (e) { return null; }
+}
+
+function renderRadarStatus(box, icao, data) {
+    if (!data || !data.properties) {
+        box.innerHTML = `<div class="rs-line rs-head">${icao}</div><div class="rs-line rs-dim">Status unavailable</div>`;
+        return;
+    }
+    const p = data.properties;
+    const rda = (p.rda && p.rda.properties) || {};
+    const lat = (p.latency && p.latency.properties) || p.latency || {};
+    const num = v => (v && typeof v === 'object') ? v.value : v;
+
+    const name = p.name || '';
+    const vcp = rda.volumeCoveragePattern || '';
+    const mode = vcpMode(vcp);
+    const oper = rda.operabilityStatus || '';
+    const status = rda.status || '';
+    const alarm = rda.alarmSummary || '';
+    const online = /on-?line/i.test(oper) && (!status || /operate/i.test(status));
+    const alarmsOk = /no alarms/i.test(alarm);
+    const cur = num(lat.current), avg = num(lat.average);
+    const l2t = lat.levelTwoLastReceivedTime;
+    const l2 = (l2t && l2t.length >= 16) ? l2t.substring(11, 16) + 'Z' : '';
+
+    const rows = [];
+    rows.push(`<div class="rs-line rs-head">${icao}${name ? ' · ' + name : ''}</div>`);
+    rows.push(`<div class="rs-line"><span class="rs-dot ${online ? 'ok' : 'bad'}"></span>${oper || 'Status unknown'}${status ? ' · ' + status : ''}</div>`);
+    if (vcp) rows.push(`<div class="rs-line">VCP ${vcp}${mode ? ' · ' + mode : ''}</div>`);
+    if (alarm) rows.push(`<div class="rs-line ${alarmsOk ? 'rs-ok' : 'rs-warn'}">${alarm}</div>`);
+    if (cur != null && !isNaN(+cur)) rows.push(`<div class="rs-line rs-dim">L2 latency ${(+cur).toFixed(1)}s${(avg != null && !isNaN(+avg)) ? ` (avg ${(+avg).toFixed(1)}s)` : ''}</div>`);
+    if (l2) rows.push(`<div class="rs-line rs-dim">Last L2 data ${l2}</div>`);
+    box.innerHTML = rows.join('');
+}
+
+async function updateRadarStatus() {
+    const box = document.getElementById('radar-status-box');
+    if (!box) return;
+    const map = maps[activePaneId];
+    const site = paneRadarSites[activePaneId];
+    const showingSite = map && site && !site.includes('nexrad') &&
+        SITE_RADAR_VIS_LAYERS.some(l => isLayerVisible(map, l));
+    if (!showingSite) { box.style.display = 'none'; box.dataset.icao = ''; return; }
+
+    const icao = siteWorkspace(site).toUpperCase();
+    box.style.display = 'block';
+    if (box.dataset.icao !== icao) {
+        box.dataset.icao = icao;
+        box.innerHTML = `<div class="rs-line rs-head">${icao} · checking status…</div>`;
+    }
+    const data = await fetchRadarStatus(icao);
+    if (box.dataset.icao !== icao) return;   // active pane/site changed while awaiting
+    renderRadarStatus(box, icao, data);
 }
 
 function initProductSidebar() {
@@ -7776,6 +7859,9 @@ function startAutoRefresh() {
         addLiveLog('AUTO: National radar tiles refreshed', '#444');
     }, 2 * 60 * 1000);
 
+    // NEXRAD operational status for the active pane's site (VCP/mode/alarms/latency).
+    setInterval(() => { updateRadarStatus(); }, 2 * 60 * 1000);
+
     setInterval(async () => {
         if (isPlaying) return;
 
@@ -8407,6 +8493,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jun 24, 2026', items: [
+        'Site radar now shows a live WSR-88D status readout (operational state, VCP / scan mode, alarms, and Level-II data latency) in the RADAR panel whenever you’re viewing a NEXRAD site.'
+    ]},
     { date: 'Jun 18, 2026', items: [
         'Site radar and dual-pol (CC/ZDR/KDP) now show the volume-scan valid time in the pane label (e.g. “HDC BREF 0.5° · 13:18Z”), and it updates as each new scan comes in.',
         'Fixed site radar flickering between the current and previous scan while zooming — all zoom levels now lock to one scan.',
