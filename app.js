@@ -667,6 +667,7 @@ function initMap(paneId) {
     });
 
     maps[paneId] = map;
+    attachSolarClick(paneId, map);   // sun-times click query (all panes, incl. new tabs)
 
     // Create synchronized cursor shadow box for this pane
     const cursorEl = document.createElement('div');
@@ -6781,6 +6782,8 @@ function initProductSidebar() {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
                 if (isActive) updateTerminator();
+                updateSolarCursor(activePaneId);
+                if (isActive) showSolarHint(activePaneId); else hideSolarHint(activePaneId);
                 updateSidebarToActivePane();
                 return;
             }
@@ -8723,11 +8726,53 @@ async function resolveTimezone(lat, lon) {
     return null; // Will fall back to browser timezone
 }
 
-function initSolarClickHandler() {
-    Object.entries(maps).forEach(([paneId, map]) => {
+// Crosshair cursor while the terminator is active, signalling the map is
+// clickable for sun times. Reset to default when the terminator is off.
+function updateSolarCursor(paneId) {
+    const map = maps[paneId];
+    if (!map) return;
+    const canvas = map.getCanvas();
+    if (!canvas) return;
+    canvas.style.cursor = isLayerVisible(map, 'solar-night-fill') ? 'crosshair' : '';
+}
+
+// Brief, dismissible hint pill telling the user they can click for sun times.
+let solarHintTimers = {};
+function showSolarHint(paneId) {
+    const paneEl = document.querySelector(`.pane[data-pane="${paneId}"]`);
+    if (!paneEl) return;
+    let hint = paneEl.querySelector('.solar-hint');
+    if (!hint) {
+        hint = document.createElement('div');
+        hint.className = 'solar-hint';
+        hint.innerHTML = '☀ Click anywhere for sunrise / sunset times';
+        paneEl.appendChild(hint);
+    }
+    hint.style.display = 'block';
+    requestAnimationFrame(() => hint.classList.add('visible'));
+    clearTimeout(solarHintTimers[paneId]);
+    solarHintTimers[paneId] = setTimeout(() => hideSolarHint(paneId), 5000);
+}
+function hideSolarHint(paneId) {
+    clearTimeout(solarHintTimers[paneId]);
+    const paneEl = document.querySelector(`.pane[data-pane="${paneId}"]`);
+    const hint = paneEl && paneEl.querySelector('.solar-hint');
+    if (hint) {
+        hint.classList.remove('visible');
+        setTimeout(() => { if (hint) hint.style.display = 'none'; }, 250);
+    }
+}
+
+// Attach the solar sun-times click query to a single pane's map. Idempotent
+// so it can be called from initMap (new panes) and initSolarClickHandler.
+function attachSolarClick(paneId, map) {
+    if (map.__solarClickAttached) return;
+    map.__solarClickAttached = true;
+    {
         map.on('click', async e => {
             // Only trigger when solar terminator is visible
             if (!isLayerVisible(map, 'solar-night-fill')) return;
+            hideSolarHint(paneId);
 
             const lat = e.lngLat.lat;
             const lon = e.lngLat.lng;
@@ -8779,7 +8824,12 @@ function initSolarClickHandler() {
 
             body.innerHTML = html;
         });
-    });
+    }
+}
+
+function initSolarClickHandler() {
+    // Attach to maps already created; panes added later attach via initMap().
+    Object.entries(maps).forEach(([paneId, map]) => attachSolarClick(paneId, map));
 
     // Close button
     const closeBtn = document.getElementById('solar-close');
