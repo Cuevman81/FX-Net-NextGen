@@ -715,6 +715,7 @@ function initMap(paneId) {
         liftBoundaries(map);        // boundaries above imagery, below features/labels
         createRadarLegend(paneId);
         createEroLegend(paneId);
+        createProbLegend(paneId);
         applyPaneRestore(paneId);   // re-apply any persisted product setup for this pane
         addLiveLog(`PANE ${paneId}: Map ready`, '#00ff88');
         setTimeout(() => map.resize(), 100);
@@ -1029,21 +1030,46 @@ function setupMapLayers(map, paneId) {
     });
 
     // ─── Layer 4a2: SPC Probabilistic Hazard Outlooks (Day 1 & 2: Tornado/Wind/Hail) ───
-    // SPC publishes parallel GeoJSONs carrying their own per-probability fill/stroke
-    // colors, so the paint is data-driven exactly like the categorical outlook.
+    // Each GeoJSON carries its own per-probability fill/stroke colors AND an embedded
+    // significant-severe feature ("CIG"/"SIGN", gray fill + black #000000 stroke).
+    // We split one source by stroke color: colored probability contours vs. the
+    // significant area, which the official product draws as black hatching.
+    if (!map.hasImage('spc-hatch')) {
+        const hs = 6;
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = hs;
+        const hx = cv.getContext('2d');
+        hx.strokeStyle = 'rgba(0,0,0,0.85)';
+        hx.lineWidth = 1.1;
+        hx.beginPath(); hx.moveTo(0, hs); hx.lineTo(hs, 0); hx.stroke();   // seamless 45° tile
+        map.addImage('spc-hatch', hx.getImageData(0, 0, hs, hs), { pixelRatio: 1 });
+    }
+    const PROB_ONLY = ['!=', ['get', 'stroke'], '#000000'];
+    const SIG_ONLY = ['==', ['get', 'stroke'], '#000000'];
     [1, 2].forEach(day => {
         ['torn', 'wind', 'hail'].forEach(hz => {
             const sid = `spc-prob-${day}-${hz}`;
             map.addSource(sid, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
             map.addLayer({
-                id: `${sid}-fill`, type: 'fill', source: sid,
+                id: `${sid}-fill`, type: 'fill', source: sid, filter: PROB_ONLY,
                 layout: { visibility: 'none' },
                 paint: { 'fill-color': ['get', 'fill'], 'fill-opacity': 0.35 }
             });
             map.addLayer({
-                id: `${sid}-line`, type: 'line', source: sid,
+                id: `${sid}-line`, type: 'line', source: sid, filter: PROB_ONLY,
                 layout: { visibility: 'none' },
                 paint: { 'line-color': ['get', 'stroke'], 'line-width': 1.6 }
+            });
+            // Significant-severe hatching (same source, the black-stroked feature)
+            map.addLayer({
+                id: `spc-sig-${day}-${hz}-fill`, type: 'fill', source: sid, filter: SIG_ONLY,
+                layout: { visibility: 'none' },
+                paint: { 'fill-pattern': 'spc-hatch', 'fill-opacity': 0.9 }
+            });
+            map.addLayer({
+                id: `spc-sig-${day}-${hz}-line`, type: 'line', source: sid, filter: SIG_ONLY,
+                layout: { visibility: 'none' },
+                paint: { 'line-color': '#000000', 'line-width': 1.1 }
             });
         });
     });
@@ -2944,6 +2970,9 @@ async function fetchSPCOutlook(day, show, prefetch) {
 }
 
 const SPC_HAZARD_NAMES = { torn: 'Tornado', wind: 'Wind', hail: 'Hail' };
+// Cache of the displayed probabilistic features per `${day}-${hazard}` so the
+// on-map legend can be built without reaching into MapLibre source internals.
+const spcProbData = {};
 async function fetchSPCProb(day, hazard, show, prefetch) {
     if (!show && !prefetch) {
         updateSidebarToActivePane();
@@ -2956,11 +2985,16 @@ async function fetchSPCProb(day, hazard, show, prefetch) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
+        // The significant-severe area ("CIG"/"SIGN", black stroke) ships inside
+        // this same file; the layers split it out by stroke color (see setup).
+        spcProbData[`${day}-${hazard}`] = data;
         Object.values(maps).forEach(m => {
             const s = m.getSource(`spc-prob-${day}-${hazard}`);
             if (s) s.setData(data);
         });
+
         if (!prefetch) updateSidebarToActivePane();
+        Object.keys(maps).forEach(updateProbLegend);
         updateHealth('spcOutlook');
         addLiveLog(`SPC: Day ${day} ${hzName} loaded (${data.features?.length || 0} areas)`, '#ffff00');
     } catch (e) {
@@ -6600,10 +6634,15 @@ function initProductSidebar() {
                 const day = item.getAttribute('data-day');
                 const hazard = item.getAttribute('data-hazard');
                 const sid = `spc-prob-${day}-${hazard}`;
+                const sg = `spc-sig-${day}-${hazard}`;
                 const isActive = !item.classList.contains('active');
                 if (isActive) await fetchSPCProb(day, hazard, true);
-                map.setLayoutProperty(`${sid}-fill`, 'visibility', isActive ? 'visible' : 'none');
-                map.setLayoutProperty(`${sid}-line`, 'visibility', isActive ? 'visible' : 'none');
+                const vis = isActive ? 'visible' : 'none';
+                map.setLayoutProperty(`${sid}-fill`, 'visibility', vis);
+                map.setLayoutProperty(`${sid}-line`, 'visibility', vis);
+                if (map.getLayer(`${sg}-fill`)) map.setLayoutProperty(`${sg}-fill`, 'visibility', vis);
+                if (map.getLayer(`${sg}-line`)) map.setLayoutProperty(`${sg}-line`, 'visibility', vis);
+                updateProbLegend(activePaneId);
                 updateSidebarToActivePane();
                 return;
             }
@@ -7745,6 +7784,67 @@ function updateEroLegend(paneId) {
     legend.style.display = 'block';
 }
 
+// SPC probabilistic outlook legend — built from the actual probability swatches
+// in the displayed data (so the colors always match), bottom-right like SPC's own.
+function createProbLegend(paneId) {
+    const paneEl = document.querySelector(`.pane[data-pane="${paneId}"]`);
+    if (!paneEl || paneEl.querySelector('.prob-legend')) return;
+    const legend = document.createElement('div');
+    legend.className = 'prob-legend';
+    legend.id = `prob-legend-${paneId}`;
+    legend.style.cssText = 'position:absolute;bottom:32px;right:8px;z-index:12;background:rgba(0,0,0,0.82);border:1px solid rgba(255,154,60,0.35);border-radius:3px;padding:6px 8px;pointer-events:none;display:none;font-family:"Roboto Mono",monospace;';
+    paneEl.appendChild(legend);
+}
+
+function updateProbLegend(paneId) {
+    const pid = paneId || activePaneId;
+    const legend = document.getElementById(`prob-legend-${pid}`);
+    const m = maps[pid];
+    if (!legend || !m) return;
+
+    const visible = [];
+    [1, 2].forEach(day => ['torn', 'wind', 'hail'].forEach(hz => {
+        if (isLayerVisible(m, `spc-prob-${day}-${hz}-fill`)) visible.push({ day, hz });
+    }));
+    if (visible.length === 0) { legend.style.display = 'none'; return; }
+
+    // Unique probability swatches (label -> fill) from the live data, low→high.
+    const swatches = new Map();
+    visible.forEach(({ day, hz }) => {
+        const data = spcProbData[`${day}-${hz}`];
+        const feats = (data && data.features) ? data.features : [];
+        feats.forEach(f => {
+            const L = f.properties?.LABEL, fill = f.properties?.fill;
+            // Skip the significant feature (black stroke / non-numeric label)
+            if (L && fill && !isNaN(parseFloat(L)) && f.properties?.stroke !== '#000000') {
+                swatches.set(L, fill);
+            }
+        });
+    });
+    const sorted = [...swatches.entries()].sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
+
+    const hazSet = [...new Set(visible.map(v => v.hz))];
+    const daySet = [...new Set(visible.map(v => v.day))];
+    const hazLabel = hazSet.length === 1 ? SPC_HAZARD_NAMES[hazSet[0]].toUpperCase() : 'SEVERE';
+    const dayLabel = daySet.length === 1 ? `DAY ${daySet[0]}` : 'DAY 1–2';
+
+    let html = `<div style="font-size:8px;font-weight:700;color:#ff9a3c;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">SPC ${dayLabel} ${hazLabel} PROB</div>`;
+    sorted.forEach(([L, fill]) => {
+        const pct = `${Math.round(parseFloat(L) * 100)}%`;
+        html += `<div style="display:flex;align-items:center;gap:5px;margin:2px 0;"><span style="width:12px;height:10px;background:${fill};opacity:0.7;border:1px solid ${fill};display:inline-block;"></span><span style="font-size:9px;color:#ddd;">${pct}</span></div>`;
+    });
+    const sigVisible = visible.some(({ day, hz }) => {
+        const data = spcProbData[`${day}-${hz}`];
+        return isLayerVisible(m, `spc-sig-${day}-${hz}-fill`) &&
+            data && data.features && data.features.some(f => f.properties?.stroke === '#000000');
+    });
+    if (sigVisible) {
+        html += `<div style="display:flex;align-items:center;gap:5px;margin:3px 0 0;border-top:1px solid rgba(255,255,255,0.15);padding-top:3px;"><span style="width:12px;height:10px;display:inline-block;background-image:repeating-linear-gradient(45deg,#000 0,#000 1px,transparent 1px,transparent 3px);background-color:#bbb;border:1px solid #888;"></span><span style="font-size:9px;color:#ddd;white-space:nowrap;">Significant (10%+)</span></div>`;
+    }
+    legend.innerHTML = html;
+    legend.style.display = 'block';
+}
+
 function updateRadarLegend(paneId) {
     const legend = document.getElementById(`radar-legend-${paneId || activePaneId}`);
     if (!legend) return;
@@ -7940,6 +8040,8 @@ function clearPane(map, paneId) {
         'spc-day1-fill', 'spc-day1-line', 'spc-day2-fill', 'spc-day2-line', 'spc-day3-fill', 'spc-day3-line',
         'spc-prob-1-torn-fill', 'spc-prob-1-torn-line', 'spc-prob-1-wind-fill', 'spc-prob-1-wind-line', 'spc-prob-1-hail-fill', 'spc-prob-1-hail-line',
         'spc-prob-2-torn-fill', 'spc-prob-2-torn-line', 'spc-prob-2-wind-fill', 'spc-prob-2-wind-line', 'spc-prob-2-hail-fill', 'spc-prob-2-hail-line',
+        'spc-sig-1-torn-fill', 'spc-sig-1-torn-line', 'spc-sig-1-wind-fill', 'spc-sig-1-wind-line', 'spc-sig-1-hail-fill', 'spc-sig-1-hail-line',
+        'spc-sig-2-torn-fill', 'spc-sig-2-torn-line', 'spc-sig-2-wind-fill', 'spc-sig-2-wind-line', 'spc-sig-2-hail-fill', 'spc-sig-2-hail-line',
         'wpc-ero-day1-fill', 'wpc-ero-day1-line', 'wpc-ero-day2-fill', 'wpc-ero-day2-line', 'wpc-ero-day3-fill', 'wpc-ero-day3-line',
         'spc-md-fill', 'spc-md-outline', 'wpc-mpd-fill', 'wpc-mpd-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
@@ -7978,6 +8080,7 @@ function clearPane(map, paneId) {
     delete paneGibs[paneId];
     updateRadarLegend(paneId);
     updateEroLegend(paneId);
+    updateProbLegend(paneId);
     addLiveLog(`PANE ${paneId}: Cleared`, '#ff3333');
 }
 
@@ -9083,7 +9186,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
-        'SPC probabilistic hazard outlooks added under SPC Products — Day 1 and Day 2 Tornado, Wind, and Hail probabilities, in their own sub-sections beneath the convective outlooks. Each uses the official SPC probability colors and refreshes with new issuances.',
+        'SPC probabilistic hazard outlooks added under SPC Products — Day 1 and Day 2 Tornado, Wind, and Hail probabilities, in their own sub-sections beneath the convective outlooks. Each uses the official SPC probability colors, draws the significant-severe area as black hatching, and shows a color-key legend in the bottom-right of the pane. Refreshes with new issuances.',
         'Workspace tabs can be renamed — double-click a tab (e.g. “Tab 1”) and type a name like “Gulf Coast” or “Severe Setup”. (Fixes the double-click that previously did nothing.)',
         'GOES-East satellite now shows the image valid time in the pane legend — both the individual ABI channels (e.g. “GOES-E CH2 SATELLITE · 17:43Z”) and the looping composites (“GOES-E GEOCOLOR · 16:30Z”). The time advances automatically as newer imagery publishes.',
         'Day/Night Terminator is now clearly visible — deeper night shading, a dusk-blue civil-twilight band, and a brighter amber terminator line. When it’s on, the map turns into a sun-times tool: a hint appears, the cursor becomes a crosshair, and clicking anywhere (in any pane) pulls up sunrise/sunset, twilight, solar noon, day length, and declination for that spot.',
