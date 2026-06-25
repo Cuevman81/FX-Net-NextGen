@@ -8204,15 +8204,29 @@ function initTabs() {
 
     document.getElementById('tab-add')?.addEventListener('click', () => createTab());
     const bar = document.getElementById('tab-bar');
+    // Detect the double-click via timing in the click handler. The native
+    // 'dblclick' event can't be used here: each preceding 'click' runs
+    // switchTab → renderTabBar, which rebuilds the buttons and detaches the
+    // element dblclick would target, so dblclick never reaches this listener.
+    let lastTabClick = { id: null, t: 0 };
     bar?.addEventListener('click', e => {
         const close = e.target.closest('.tab-close');
         if (close) { e.stopPropagation(); closeTab(close.getAttribute('data-close')); return; }
         const btn = e.target.closest('.tab-btn');
-        if (btn) switchTab(btn.getAttribute('data-tab'));
-    });
-    bar?.addEventListener('dblclick', e => {
-        const btn = e.target.closest('.tab-btn');
-        if (btn) startTabRename(btn.getAttribute('data-tab'));
+        if (!btn) return;
+        const id = btn.getAttribute('data-tab');
+        const now = Date.now();
+        const isDouble = (lastTabClick.id === id && now - lastTabClick.t < 400);
+        lastTabClick = { id, t: now };
+        if (isDouble) {
+            // Rename runs after the (already-applied) switch, on the live DOM,
+            // so the input is created last and isn't clobbered by a rebuild.
+            if (activeTabId !== id) switchTab(id);
+            startTabRename(id);
+            lastTabClick = { id: null, t: 0 };   // reset so a 3rd click doesn't re-trigger
+            return;
+        }
+        switchTab(id);
     });
 
     // Activate the saved/active tab (creates its first pane's map)
@@ -8990,6 +9004,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
+        'Workspace tabs can be renamed — double-click a tab (e.g. “Tab 1”) and type a name like “Gulf Coast” or “Severe Setup”. (Fixes the double-click that previously did nothing.)',
         'GOES-East satellite now shows the image valid time in the pane legend — both the individual ABI channels (e.g. “GOES-E CH2 SATELLITE · 17:43Z”) and the looping composites (“GOES-E GEOCOLOR · 16:30Z”). The time advances automatically as newer imagery publishes.',
         'Day/Night Terminator is now clearly visible — deeper night shading, a dusk-blue civil-twilight band, and a brighter amber terminator line. When it’s on, the map turns into a sun-times tool: a hint appears, the cursor becomes a crosshair, and clicking anywhere (in any pane) pulls up sunrise/sunset, twilight, solar noon, day length, and declination for that spot.',
         'The whole left menu now folds away horizontally — click the « button in the header (or press Ctrl/⌘+\\) to slide it off-screen and give the map full width; a handle on the left edge brings it back. Your choice is remembered between sessions.',
