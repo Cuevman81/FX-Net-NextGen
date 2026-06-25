@@ -1028,6 +1028,26 @@ function setupMapLayers(map, paneId) {
         });
     });
 
+    // ─── Layer 4a2: SPC Probabilistic Hazard Outlooks (Day 1 & 2: Tornado/Wind/Hail) ───
+    // SPC publishes parallel GeoJSONs carrying their own per-probability fill/stroke
+    // colors, so the paint is data-driven exactly like the categorical outlook.
+    [1, 2].forEach(day => {
+        ['torn', 'wind', 'hail'].forEach(hz => {
+            const sid = `spc-prob-${day}-${hz}`;
+            map.addSource(sid, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+            map.addLayer({
+                id: `${sid}-fill`, type: 'fill', source: sid,
+                layout: { visibility: 'none' },
+                paint: { 'fill-color': ['get', 'fill'], 'fill-opacity': 0.35 }
+            });
+            map.addLayer({
+                id: `${sid}-line`, type: 'line', source: sid,
+                layout: { visibility: 'none' },
+                paint: { 'line-color': ['get', 'stroke'], 'line-width': 1.6 }
+            });
+        });
+    });
+
     // ─── Layer 4b: WPC Excessive Rainfall Outlook (ERO, Days 1-3) ───
     // Categorical risk polygons (MRGL/SLGT/MDT/HIGH), fed by /api/wpc-ero
     // (KMZ->GeoJSON proxy). Same fill/line pattern as the SPC outlook.
@@ -2920,6 +2940,31 @@ async function fetchSPCOutlook(day, show, prefetch) {
         addLiveLog(`SPC: Day ${day} Outlook loaded (${data.features?.length || 0} areas)`, '#ffff00');
     } catch (e) {
         addLiveLog(`SPC ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+const SPC_HAZARD_NAMES = { torn: 'Tornado', wind: 'Wind', hail: 'Hail' };
+async function fetchSPCProb(day, hazard, show, prefetch) {
+    if (!show && !prefetch) {
+        updateSidebarToActivePane();
+        return;
+    }
+    const hzName = SPC_HAZARD_NAMES[hazard] || hazard;
+    addLiveLog(`SPC: Fetching Day ${day} ${hzName} Probability...`, '#ffb300');
+    try {
+        const res = await fetch(`https://www.spc.noaa.gov/products/outlook/day${day}otlk_${hazard}.nolyr.geojson`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        Object.values(maps).forEach(m => {
+            const s = m.getSource(`spc-prob-${day}-${hazard}`);
+            if (s) s.setData(data);
+        });
+        if (!prefetch) updateSidebarToActivePane();
+        updateHealth('spcOutlook');
+        addLiveLog(`SPC: Day ${day} ${hzName} loaded (${data.features?.length || 0} areas)`, '#ffff00');
+    } catch (e) {
+        addLiveLog(`SPC PROB ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -5438,6 +5483,12 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d');
     add(isLayerVisible(map, 'spc-day2-fill'), 'SPC DAY 2 OUTLOOK', '#ff4d4d');
     add(isLayerVisible(map, 'spc-day3-fill'), 'SPC DAY 3 OUTLOOK', '#ff4d4d');
+    [1, 2].forEach(day => {
+        ['torn', 'wind', 'hail'].forEach(hz => {
+            add(isLayerVisible(map, `spc-prob-${day}-${hz}-fill`),
+                `SPC D${day} ${SPC_HAZARD_NAMES[hz].toUpperCase()} PROB`, '#ff884d');
+        });
+    });
     add(isLayerVisible(map, 'wpc-ero-day1-fill'), 'WPC ERO DAY 1', '#39ff5a');
     add(isLayerVisible(map, 'wpc-ero-day2-fill'), 'WPC ERO DAY 2', '#39ff5a');
     add(isLayerVisible(map, 'wpc-ero-day3-fill'), 'WPC ERO DAY 3', '#39ff5a');
@@ -6349,6 +6400,11 @@ function updateSidebarToActivePane() {
             const day = item.getAttribute('data-day');
             isActive = isLayerVisible(map, `spc-day${day}-fill`);
         }
+        else if (layer === 'spc-prob') {
+            const day = item.getAttribute('data-day');
+            const hazard = item.getAttribute('data-hazard');
+            isActive = isLayerVisible(map, `spc-prob-${day}-${hazard}-fill`);
+        }
         else if (layer === 'wpc-ero') {
             const day = item.getAttribute('data-day');
             isActive = isLayerVisible(map, `wpc-ero-day${day}-fill`);
@@ -6535,6 +6591,19 @@ function initProductSidebar() {
                     map.setLayoutProperty(`spc-day${day}-fill`, 'visibility', 'none');
                     map.setLayoutProperty(`spc-day${day}-line`, 'visibility', 'none');
                 }
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── SPC Probabilistic Hazards (Day 1/2 Tornado/Wind/Hail) ───
+            if (layer === 'spc-prob') {
+                const day = item.getAttribute('data-day');
+                const hazard = item.getAttribute('data-hazard');
+                const sid = `spc-prob-${day}-${hazard}`;
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchSPCProb(day, hazard, true);
+                map.setLayoutProperty(`${sid}-fill`, 'visibility', isActive ? 'visible' : 'none');
+                map.setLayoutProperty(`${sid}-line`, 'visibility', isActive ? 'visible' : 'none');
                 updateSidebarToActivePane();
                 return;
             }
@@ -7869,6 +7938,8 @@ function clearPane(map, paneId) {
         'radar-l3-layer',
         'spc-outlook-fill', 'spc-outlook-line',
         'spc-day1-fill', 'spc-day1-line', 'spc-day2-fill', 'spc-day2-line', 'spc-day3-fill', 'spc-day3-line',
+        'spc-prob-1-torn-fill', 'spc-prob-1-torn-line', 'spc-prob-1-wind-fill', 'spc-prob-1-wind-line', 'spc-prob-1-hail-fill', 'spc-prob-1-hail-line',
+        'spc-prob-2-torn-fill', 'spc-prob-2-torn-line', 'spc-prob-2-wind-fill', 'spc-prob-2-wind-line', 'spc-prob-2-hail-fill', 'spc-prob-2-hail-line',
         'wpc-ero-day1-fill', 'wpc-ero-day1-line', 'wpc-ero-day2-fill', 'wpc-ero-day2-line', 'wpc-ero-day3-fill', 'wpc-ero-day3-line',
         'spc-md-fill', 'spc-md-outline', 'wpc-mpd-fill', 'wpc-mpd-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
@@ -8411,6 +8482,14 @@ function startAutoRefresh() {
         [1, 2, 3].forEach(day => {
             const outlookActive = Object.values(maps).some(m => isLayerVisible(m, `spc-day${day}-fill`));
             if (outlookActive) fetchSPCOutlook(day, true);
+        });
+
+        // SPC Probabilistic Hazards (Day 1/2 Tornado/Wind/Hail)
+        [1, 2].forEach(day => {
+            ['torn', 'wind', 'hail'].forEach(hz => {
+                const probActive = Object.values(maps).some(m => isLayerVisible(m, `spc-prob-${day}-${hz}-fill`));
+                if (probActive) fetchSPCProb(day, hz, true);
+            });
         });
 
         // WPC Excessive Rainfall Outlooks (Day 1-3)
@@ -9004,6 +9083,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
+        'SPC probabilistic hazard outlooks added under SPC Products — Day 1 and Day 2 Tornado, Wind, and Hail probabilities, in their own sub-sections beneath the convective outlooks. Each uses the official SPC probability colors and refreshes with new issuances.',
         'Workspace tabs can be renamed — double-click a tab (e.g. “Tab 1”) and type a name like “Gulf Coast” or “Severe Setup”. (Fixes the double-click that previously did nothing.)',
         'GOES-East satellite now shows the image valid time in the pane legend — both the individual ABI channels (e.g. “GOES-E CH2 SATELLITE · 17:43Z”) and the looping composites (“GOES-E GEOCOLOR · 16:30Z”). The time advances automatically as newer imagery publishes.',
         'Day/Night Terminator is now clearly visible — deeper night shading, a dusk-blue civil-twilight band, and a brighter amber terminator line. When it’s on, the map turns into a sun-times tool: a hint appears, the cursor becomes a crosshair, and clicking anywhere (in any pane) pulls up sunrise/sunset, twilight, solar noon, day length, and declination for that spot.',
