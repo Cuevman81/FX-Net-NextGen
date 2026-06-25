@@ -47,6 +47,8 @@ let paneRadarProducts = { '1': 'sr_bref', '2': 'sr_bref', '3': 'sr_bref', '4': '
 let paneL3 = {};
 // NASA GIBS satellite product active per pane (product key) or undefined
 let paneGibs = {};
+// Valid time (ISO Z string) of the GIBS frame currently painted in each pane
+let paneGibsTime = {};
 let activeGoesChannel = null; // Convenience: always mirrors paneGoesChannels[activePaneId]
 let paneGoesChannels = { '1': null, '2': null, '3': null, '4': null, '5': null, '6': null, '7': null, '8': null };
 let activeRadarNational = false;
@@ -2249,26 +2251,26 @@ function initFrontalPipIcons(map) {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] }
     });
-    // Civil twilight band (lighter shading)
+    // Civil twilight band (lighter shading) — deep blue reads as dusk over the dark map
     map.addLayer({
         id: 'solar-twilight-fill', type: 'fill', source: 'solar-terminator',
         filter: ['==', ['get', 'zone'], 'civil-twilight'],
         layout: { visibility: 'none' },
-        paint: { 'fill-color': '#000022', 'fill-opacity': 0.2 }
+        paint: { 'fill-color': '#16244a', 'fill-opacity': 0.35 }
     });
     // Night polygon (darker shading)
     map.addLayer({
         id: 'solar-night-fill', type: 'fill', source: 'solar-terminator',
         filter: ['==', ['get', 'zone'], 'night'],
         layout: { visibility: 'none' },
-        paint: { 'fill-color': '#000011', 'fill-opacity': 0.45 }
+        paint: { 'fill-color': '#0a1430', 'fill-opacity': 0.62 }
     });
-    // Terminator edge line
+    // Terminator edge line — bright amber, clearly visible
     map.addLayer({
         id: 'solar-terminator-line', type: 'line', source: 'solar-terminator',
         filter: ['==', ['get', 'zone'], 'night'],
         layout: { visibility: 'none' },
-        paint: { 'line-color': '#ffaa00', 'line-width': 1.5, 'line-opacity': 0.7 }
+        paint: { 'line-color': '#ffc340', 'line-width': 2.2, 'line-opacity': 0.95 }
     });
 
     // ─── Layer 10: City Labels (ESRI Reference) ───
@@ -5378,7 +5380,10 @@ function getPaneLegend(paneId) {
     }
     add(isLayerVisible(map, 'satellite-layer') && ch !== null, `GOES-E CH${ch} SATELLITE`, '#cfd8e3');
     if (isLayerVisible(map, 'gibs-sat-layer') && paneGibs[paneId]) {
-        rows.push({ label: `GOES-E ${GIBS_PRODUCTS[paneGibs[paneId]]?.label || paneGibs[paneId]} (GIBS)`, color: '#9fd0ff' });
+        const gt = paneGibsTime[paneId];
+        const gtSuffix = (gt && gt.length >= 16) ? ` · ${gt.substring(11, 16)}Z` : '';
+        const gName = (GIBS_PRODUCTS[paneGibs[paneId]]?.label || paneGibs[paneId]).toUpperCase();
+        rows.push({ label: `GOES-E ${gName}${gtSuffix}`, color: '#9fd0ff' });
     }
     add(isLayerVisible(map, 'lightning-layer'), 'NLDN LIGHTNING', '#ffd23c');
     add(isLayerVisible(map, 'mrms-echotops-layer'), 'MRMS ECHO TOPS', '#9b59ff');
@@ -7562,6 +7567,7 @@ async function loadGibsLive(paneId, prodKey) {
     // often BLANK; /api/gibs-times now drops every unpublished frame, so the
     // refresh below lands on a frame that actually has tiles.
     const times = gibsTimesCache[prodKey] || [];
+    paneGibsTime[paneId] = times.length ? times[times.length - 1] : null;
     const url = gibsTileUrl(prodKey, times.length ? times[times.length - 1] : 'default');
     // Recreate the source when switching products (maxzoom differs); else just retile
     if (map.getSource('gibs-sat') && prev === prodKey) {
@@ -7583,6 +7589,8 @@ async function loadGibsLive(paneId, prodKey) {
     fetchGibsTimes(prodKey).then(t => {
         if (t.length && paneGibs[paneId] === prodKey && map.getSource('gibs-sat')) {
             map.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, t[t.length - 1])]);
+            paneGibsTime[paneId] = t[t.length - 1];
+            if (paneId === activePaneId) refreshTimestampLabel();
         }
     });
 }
@@ -7591,6 +7599,7 @@ function clearGibs(paneId) {
     const map = maps[paneId];
     if (map && map.getLayer('gibs-sat-layer')) map.setLayoutProperty('gibs-sat-layer', 'visibility', 'none');
     delete paneGibs[paneId];
+    delete paneGibsTime[paneId];
     if (paneId === activePaneId) refreshTimestampLabel();
 }
 
@@ -8287,6 +8296,22 @@ function startAutoRefresh() {
             updateHealth('sat');
             addLiveLog('AUTO: Satellite tiles refreshed', '#444');
         }
+
+        // GIBS GOES-East refresh — advance to the newest published frame so the
+        // imagery and its valid-time label stay current.
+        Object.entries(maps).forEach(([paneId, m]) => {
+            const prodKey = paneGibs[paneId];
+            if (!prodKey || !m.getSource('gibs-sat') || !isLayerVisible(m, 'gibs-sat-layer')) return;
+            fetchGibsTimes(prodKey).then(t => {
+                if (!t.length || paneGibs[paneId] !== prodKey || !m.getSource('gibs-sat')) return;
+                const newest = t[t.length - 1];
+                if (newest === paneGibsTime[paneId]) return;   // already current
+                m.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, newest)]);
+                paneGibsTime[paneId] = newest;
+                updateHealth('gibsSat');
+                if (paneId === activePaneId) refreshTimestampLabel();
+            });
+        });
     }, 10 * 60 * 1000);
 
     // Lightning refresh (NLDN nowCOAST updates ~every 5 min; refresh every 5 min when visible)
@@ -8878,6 +8903,8 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
+        'GOES-East satellite now shows the image valid time in the pane legend (e.g. “GOES-E GEOCOLOR · 16:30Z”), and it advances automatically as newer imagery publishes.',
+        'Day/Night Terminator is now clearly visible — deeper night shading, a dusk-blue civil-twilight band, and a brighter amber terminator line.',
         'The whole left menu now folds away horizontally — click the « button in the header (or press Ctrl/⌘+\\) to slide it off-screen and give the map full width; a handle on the left edge brings it back. Your choice is remembered between sessions.',
         'Left sidebar sections are now collapsible — click any category header to fold it away (your choices are remembered), plus Expand all / Collapse all at the top. By default the menu opens lean (Warnings, Radar, and Satellite expanded; the rest one click away).'
     ]},
