@@ -1030,20 +1030,26 @@ function setupMapLayers(map, paneId) {
     });
 
     // ─── Layer 4a2: SPC Probabilistic Hazard Outlooks (Day 1 & 2: Tornado/Wind/Hail) ───
-    // Each GeoJSON carries its own per-probability fill/stroke colors AND an embedded
-    // significant-severe feature ("CIG"/"SIGN", gray fill + black #000000 stroke).
-    // We split one source by stroke color: colored probability contours vs. the
-    // significant area, which the official product draws as black hatching.
-    if (!map.hasImage('spc-hatch')) {
-        const hs = 6;
+    // Each GeoJSON carries its own per-probability fill/stroke colors AND embedded
+    // significant-severe "Conditional Intensity Group" features (CIG1/2/3, gray fill +
+    // black #000000 stroke). We split one source by stroke color: colored probability
+    // contours vs. the significant area, which SPC draws as intensity-graded hatching —
+    // CIG1 sparse diagonal, CIG2 dense diagonal, CIG3 cross-hatch.
+    [
+        { id: 'spc-hatch-1', size: 8, cross: false },   // Intensity 1 — sparse
+        { id: 'spc-hatch-2', size: 5, cross: false },   // Intensity 2 — dense
+        { id: 'spc-hatch-3', size: 6, cross: true }     // Intensity 3 — cross-hatch
+    ].forEach(hc => {
+        if (map.hasImage(hc.id)) return;
         const cv = document.createElement('canvas');
-        cv.width = cv.height = hs;
+        cv.width = cv.height = hc.size;
         const hx = cv.getContext('2d');
         hx.strokeStyle = 'rgba(0,0,0,0.85)';
-        hx.lineWidth = 1.1;
-        hx.beginPath(); hx.moveTo(0, hs); hx.lineTo(hs, 0); hx.stroke();   // seamless 45° tile
-        map.addImage('spc-hatch', hx.getImageData(0, 0, hs, hs), { pixelRatio: 1 });
-    }
+        hx.lineWidth = 1.0;
+        hx.beginPath(); hx.moveTo(0, hc.size); hx.lineTo(hc.size, 0); hx.stroke();  // seamless 45°
+        if (hc.cross) { hx.beginPath(); hx.moveTo(0, 0); hx.lineTo(hc.size, hc.size); hx.stroke(); }
+        map.addImage(hc.id, hx.getImageData(0, 0, hc.size, hc.size), { pixelRatio: 1 });
+    });
     const PROB_ONLY = ['!=', ['get', 'stroke'], '#000000'];
     const SIG_ONLY = ['==', ['get', 'stroke'], '#000000'];
     [1, 2].forEach(day => {
@@ -1060,12 +1066,16 @@ function setupMapLayers(map, paneId) {
                 layout: { visibility: 'none' },
                 paint: { 'line-color': ['get', 'stroke'], 'line-width': 1.6 }
             });
-            // Significant-severe hatching (same source, the black-stroked feature)
-            map.addLayer({
-                id: `spc-sig-${day}-${hz}-fill`, type: 'fill', source: sid, filter: SIG_ONLY,
-                layout: { visibility: 'none' },
-                paint: { 'fill-pattern': 'spc-hatch', 'fill-opacity': 0.9 }
+            // Significant-severe hatching, one fill per Conditional Intensity Group
+            [1, 2, 3].forEach(n => {
+                map.addLayer({
+                    id: `spc-sig-${day}-${hz}-i${n}`, type: 'fill', source: sid,
+                    filter: ['==', ['get', 'LABEL'], `CIG${n}`],
+                    layout: { visibility: 'none' },
+                    paint: { 'fill-pattern': `spc-hatch-${n}`, 'fill-opacity': 0.9 }
+                });
             });
+            // Single black outline around all significant areas (drawn on top)
             map.addLayer({
                 id: `spc-sig-${day}-${hz}-line`, type: 'line', source: sid, filter: SIG_ONLY,
                 layout: { visibility: 'none' },
@@ -6634,14 +6644,15 @@ function initProductSidebar() {
                 const day = item.getAttribute('data-day');
                 const hazard = item.getAttribute('data-hazard');
                 const sid = `spc-prob-${day}-${hazard}`;
-                const sg = `spc-sig-${day}-${hazard}`;
                 const isActive = !item.classList.contains('active');
                 if (isActive) await fetchSPCProb(day, hazard, true);
                 const vis = isActive ? 'visible' : 'none';
                 map.setLayoutProperty(`${sid}-fill`, 'visibility', vis);
                 map.setLayoutProperty(`${sid}-line`, 'visibility', vis);
-                if (map.getLayer(`${sg}-fill`)) map.setLayoutProperty(`${sg}-fill`, 'visibility', vis);
-                if (map.getLayer(`${sg}-line`)) map.setLayoutProperty(`${sg}-line`, 'visibility', vis);
+                ['i1', 'i2', 'i3', 'line'].forEach(suf => {
+                    const lid = `spc-sig-${day}-${hazard}-${suf}`;
+                    if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', vis);
+                });
                 updateProbLegend(activePaneId);
                 updateSidebarToActivePane();
                 return;
@@ -7784,6 +7795,13 @@ function updateEroLegend(paneId) {
     legend.style.display = 'block';
 }
 
+// CSS hatch swatches mirroring the map's intensity-graded hatching for the legend.
+const HATCH_SWATCH_CSS = {
+    1: 'background-image:repeating-linear-gradient(45deg,#000 0,#000 1px,transparent 1px,transparent 4px)',
+    2: 'background-image:repeating-linear-gradient(45deg,#000 0,#000 1px,transparent 1px,transparent 2px)',
+    3: 'background-image:repeating-linear-gradient(45deg,#000 0,#000 1px,transparent 1px,transparent 3px),repeating-linear-gradient(-45deg,#000 0,#000 1px,transparent 1px,transparent 3px)'
+};
+
 // SPC probabilistic outlook legend — built from the actual probability swatches
 // in the displayed data (so the colors always match), bottom-right like SPC's own.
 function createProbLegend(paneId) {
@@ -7833,13 +7851,22 @@ function updateProbLegend(paneId) {
         const pct = `${Math.round(parseFloat(L) * 100)}%`;
         html += `<div style="display:flex;align-items:center;gap:5px;margin:2px 0;"><span style="width:12px;height:10px;background:${fill};opacity:0.7;border:1px solid ${fill};display:inline-block;"></span><span style="font-size:9px;color:#ddd;">${pct}</span></div>`;
     });
-    const sigVisible = visible.some(({ day, hz }) => {
+    // Significant-severe Conditional Intensity Groups present in the visible data
+    const cigLevels = new Set();
+    visible.forEach(({ day, hz }) => {
         const data = spcProbData[`${day}-${hz}`];
-        return isLayerVisible(m, `spc-sig-${day}-${hz}-fill`) &&
-            data && data.features && data.features.some(f => f.properties?.stroke === '#000000');
+        if (!isLayerVisible(m, `spc-sig-${day}-${hz}-line`) || !data || !data.features) return;
+        data.features.forEach(f => {
+            const mt = /^CIG([123])$/.exec(f.properties?.LABEL || '');
+            if (mt) cigLevels.add(parseInt(mt[1]));
+        });
     });
-    if (sigVisible) {
-        html += `<div style="display:flex;align-items:center;gap:5px;margin:3px 0 0;border-top:1px solid rgba(255,255,255,0.15);padding-top:3px;"><span style="width:12px;height:10px;display:inline-block;background-image:repeating-linear-gradient(45deg,#000 0,#000 1px,transparent 1px,transparent 3px);background-color:#bbb;border:1px solid #888;"></span><span style="font-size:9px;color:#ddd;white-space:nowrap;">Significant (10%+)</span></div>`;
+    if (cigLevels.size) {
+        html += `<div style="border-top:1px solid rgba(255,255,255,0.15);margin-top:3px;padding-top:3px;"><div style="font-size:7.5px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">Sig Intensity</div>`;
+        [1, 2, 3].filter(n => cigLevels.has(n)).forEach(n => {
+            html += `<div style="display:flex;align-items:center;gap:5px;margin:2px 0;"><span style="width:12px;height:10px;display:inline-block;background-color:#bbb;${HATCH_SWATCH_CSS[n]};border:1px solid #555;"></span><span style="font-size:9px;color:#ddd;white-space:nowrap;">Intensity ${n}</span></div>`;
+        });
+        html += `</div>`;
     }
     legend.innerHTML = html;
     legend.style.display = 'block';
@@ -8040,8 +8067,12 @@ function clearPane(map, paneId) {
         'spc-day1-fill', 'spc-day1-line', 'spc-day2-fill', 'spc-day2-line', 'spc-day3-fill', 'spc-day3-line',
         'spc-prob-1-torn-fill', 'spc-prob-1-torn-line', 'spc-prob-1-wind-fill', 'spc-prob-1-wind-line', 'spc-prob-1-hail-fill', 'spc-prob-1-hail-line',
         'spc-prob-2-torn-fill', 'spc-prob-2-torn-line', 'spc-prob-2-wind-fill', 'spc-prob-2-wind-line', 'spc-prob-2-hail-fill', 'spc-prob-2-hail-line',
-        'spc-sig-1-torn-fill', 'spc-sig-1-torn-line', 'spc-sig-1-wind-fill', 'spc-sig-1-wind-line', 'spc-sig-1-hail-fill', 'spc-sig-1-hail-line',
-        'spc-sig-2-torn-fill', 'spc-sig-2-torn-line', 'spc-sig-2-wind-fill', 'spc-sig-2-wind-line', 'spc-sig-2-hail-fill', 'spc-sig-2-hail-line',
+        'spc-sig-1-torn-i1', 'spc-sig-1-torn-i2', 'spc-sig-1-torn-i3', 'spc-sig-1-torn-line',
+        'spc-sig-1-wind-i1', 'spc-sig-1-wind-i2', 'spc-sig-1-wind-i3', 'spc-sig-1-wind-line',
+        'spc-sig-1-hail-i1', 'spc-sig-1-hail-i2', 'spc-sig-1-hail-i3', 'spc-sig-1-hail-line',
+        'spc-sig-2-torn-i1', 'spc-sig-2-torn-i2', 'spc-sig-2-torn-i3', 'spc-sig-2-torn-line',
+        'spc-sig-2-wind-i1', 'spc-sig-2-wind-i2', 'spc-sig-2-wind-i3', 'spc-sig-2-wind-line',
+        'spc-sig-2-hail-i1', 'spc-sig-2-hail-i2', 'spc-sig-2-hail-i3', 'spc-sig-2-hail-line',
         'wpc-ero-day1-fill', 'wpc-ero-day1-line', 'wpc-ero-day2-fill', 'wpc-ero-day2-line', 'wpc-ero-day3-fill', 'wpc-ero-day3-line',
         'spc-md-fill', 'spc-md-outline', 'wpc-mpd-fill', 'wpc-mpd-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
@@ -9186,7 +9217,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
-        'SPC probabilistic hazard outlooks added under SPC Products — Day 1 and Day 2 Tornado, Wind, and Hail probabilities, in their own sub-sections beneath the convective outlooks. Each uses the official SPC probability colors, draws the significant-severe area as black hatching, and shows a color-key legend in the bottom-right of the pane. Refreshes with new issuances.',
+        'SPC probabilistic hazard outlooks added under SPC Products — Day 1 and Day 2 Tornado, Wind, and Hail probabilities, in their own sub-sections beneath the convective outlooks. Uses the official SPC probability colors and SPC’s new Conditional Intensity Group hatching for significant-severe areas (Intensity 1 sparse, 2 dense, 3 cross-hatch). A color + intensity key shows in the bottom-right of the pane, and it refreshes with new issuances.',
         'Workspace tabs can be renamed — double-click a tab (e.g. “Tab 1”) and type a name like “Gulf Coast” or “Severe Setup”. (Fixes the double-click that previously did nothing.)',
         'GOES-East satellite now shows the image valid time in the pane legend — both the individual ABI channels (e.g. “GOES-E CH2 SATELLITE · 17:43Z”) and the looping composites (“GOES-E GEOCOLOR · 16:30Z”). The time advances automatically as newer imagery publishes.',
         'Day/Night Terminator is now clearly visible — deeper night shading, a dusk-blue civil-twilight band, and a brighter amber terminator line. When it’s on, the map turns into a sun-times tool: a hint appears, the cursor becomes a crosshair, and clicking anywhere (in any pane) pulls up sunrise/sunset, twilight, solar noon, day length, and declination for that spot.',
