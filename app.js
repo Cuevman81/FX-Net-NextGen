@@ -5901,6 +5901,24 @@ function meteoHours() {
     return el ? (parseInt(el.value, 10) || 48) : 48;
 }
 
+// Make each left-sidebar category group collapsible (click the label).
+// Per-group state persists in localStorage.
+function initCollapsibleGroups() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('fxnet_collapsed_groups') || '{}'); } catch (e) { }
+    document.querySelectorAll('.product-browser .category-group').forEach(group => {
+        const label = group.querySelector('.category-label');
+        if (!label) return;
+        const key = (label.textContent || '').trim();
+        if (saved[key]) group.classList.add('collapsed');
+        label.addEventListener('click', () => {
+            group.classList.toggle('collapsed');
+            saved[key] = group.classList.contains('collapsed');
+            try { localStorage.setItem('fxnet_collapsed_groups', JSON.stringify(saved)); } catch (e) { }
+        });
+    });
+}
+
 function initMeteogram() {
     const panel = document.getElementById('meteogram-panel');
     if (!panel) return;
@@ -8801,6 +8819,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jun 25, 2026', items: [
+        'Left sidebar sections are now collapsible — click any category header to fold it away (your choices are remembered), so you can trim the menu down to just the layers you use.'
+    ]},
     { date: 'Jun 24, 2026', items: [
         'Site radar now shows a live WSR-88D status readout — operational state, VCP / scan mode (precip vs clear-air), alarms, and Level-II latency — right in the radar window beneath the product label.',
         'New Forecast Meteogram (NWS Products → Forecast Meteogram): a clean temperature/dewpoint, precip-probability, and wind chart in a draggable window like the Text Browser. Pick a location by ZIP code, city name (“Norman, OK”), or the active pane’s map center; choose a range from 12 h out to ~6.5 days; and hover the chart for an exact hour-by-hour readout with a crosshair.'
@@ -8896,6 +8917,7 @@ function init() {
     initSoundingModal();
     initTextModal();
     initMeteogram();
+    initCollapsibleGroups();
     initSolarClickHandler();
     initRiverGaugePanel();
 

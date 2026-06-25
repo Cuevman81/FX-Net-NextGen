@@ -146,6 +146,23 @@ body {
     opacity: 0.6;
 }
 
+/* Collapsible category groups (toggle by clicking the label) */
+.category-label {
+    cursor: pointer;
+    user-select: none;
+}
+.category-label:hover { background: rgba(255, 255, 255, 0.05); }
+.category-label::after {
+    content: '▾';
+    margin-left: auto;
+    font-size: 10px;
+    opacity: 0.55;
+    transition: transform 0.15s ease;
+}
+.category-group.collapsed .category-label::after { transform: rotate(-90deg); }
+.category-group.collapsed > *:not(.category-label) { display: none; }
+.category-group.collapsed { margin-bottom: 0; }
+
 .sub-category {
     padding: 5px 15px 3px 35px;
     font-size: 8px;
