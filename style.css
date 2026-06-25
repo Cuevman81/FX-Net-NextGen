@@ -1086,6 +1086,68 @@ body {
     animation: pulse-red 1s ease-in-out infinite;
 }
 
+/* Collapsible data-health sections (mirror the sidebar category groups) */
+#health-rows-container {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.health-group {
+    margin-bottom: 4px;
+}
+
+.health-group-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 4px 2px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    user-select: none;
+}
+
+.health-group-header:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.health-group-name {
+    font-size: 9px;
+    font-weight: bold;
+    letter-spacing: 0.6px;
+    color: rgba(255, 255, 255, 0.72);
+    flex: 1;
+}
+
+.health-group-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 4px currentColor;
+}
+
+.health-group-caret {
+    font-size: 9px;
+    color: var(--text-dim);
+    transition: transform 0.15s ease;
+}
+
+.health-group.collapsed .health-group-caret {
+    transform: rotate(-90deg);
+}
+
+.health-group-body {
+    padding: 6px 2px 2px 13px;
+}
+
+.health-group.collapsed .health-group-body {
+    display: none;
+}
+
+.health-group-body .health-row:last-child {
+    margin-bottom: 2px;
+}
+
 /* ═══════════════════════════════════════
    CONTEXT MENU
    ═══════════════════════════════════════ */

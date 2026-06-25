@@ -196,6 +196,22 @@ const HEALTH_THRESHOLDS = {
     sfcIsodrosotherms:{ label: 'Isodrosotherms',     thresholdMs: 15 * 60 * 1000 }
 };
 
+// Data-health feeds organized into collapsible sections that mirror the left
+// sidebar's categories. Order is the display order; each entry lists the
+// tracker ids that belong under that header.
+const HEALTH_GROUPS = [
+    { name: 'RADAR & LIGHTNING', ids: ['radar', 'radarL3', 'mrmsEchotops', 'mrmsQpe', 'lightning'] },
+    { name: 'SATELLITE',         ids: ['sat', 'gibsSat'] },
+    { name: 'SURFACE ANALYSIS',  ids: ['metar', 'sfcIsobars2mb', 'sfcIsotherms', 'sfcIsodrosotherms', 'wpcIsobars', 'wpcFronts'] },
+    { name: 'WARNINGS & WATCHES',ids: ['warnings', 'watches'] },
+    { name: 'SPC PRODUCTS',      ids: ['spcOutlook', 'spcMd', 'spcLsr'] },
+    { name: 'WPC PRODUCTS',      ids: ['wpcQpf', 'wpcEro', 'wpcMpd'] },
+    { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook'] },
+    { name: 'CLIMATE & OUTLOOKS',ids: ['cpcTemp', 'cpcPrecip', 'drought'] },
+    { name: 'FIRE & AIR',        ids: ['firms', 'hms', 'aqi'] },
+    { name: 'HYDRO & SOLAR',     ids: ['riverGauges', 'solar'] }
+];
+
 // ═══ US STATE CODES (all 50 for METAR fetch) ═══
 const US_STATES = [
     'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
@@ -629,6 +645,16 @@ function updateHealth(id) {
     healthTrackers[id].lastUpdate = Date.now();
 }
 
+// Legend "as of" stamp for products whose freshness is the last successful pull
+// from the source (vs. radar/satellite, which carry a published imagery valid
+// time). Reads the data-health tracker's lastUpdate so the legend never runs
+// ahead of the data actually loaded.
+function healthTimeSuffix(id) {
+    const t = healthTrackers[id];
+    if (!t || !t.lastUpdate) return '';
+    return ' · ' + new Date(t.lastUpdate).toISOString().substring(11, 16) + 'Z';
+}
+
 function checkHealthStatus() {
     const now = Date.now();
     for (const [id, tracker] of Object.entries(healthTrackers)) {
@@ -648,19 +674,63 @@ function checkHealthStatus() {
     renderHealthUI();
 }
 
+const HEALTH_STATUS_COLOR = { LIVE: '#00ff88', STALE: '#ffb300', FAIL: '#ff3333', WAIT: '#666' };
+const HEALTH_STATUS_RANK = { FAIL: 3, STALE: 2, WAIT: 1, LIVE: 0 };
+let healthGroupsCollapsed = (() => {
+    try { return JSON.parse(localStorage.getItem('fxnet_health_collapsed') || '{}'); } catch (e) { return {}; }
+})();
+
 function renderHealthUI() {
     const container = document.getElementById('health-rows-container');
     if (!container) return;
-    container.innerHTML = '';
-    for (const [id, t] of Object.entries(healthTrackers)) {
-        const row = document.createElement('div');
-        row.className = 'health-row';
-        const statusClass = t.status === 'LIVE' ? 'live' : (t.status === 'STALE' ? 'stale' : '');
-        const statusColor = t.status === 'LIVE' ? '#00ff88' : (t.status === 'STALE' ? '#ffb300' : (t.status === 'FAIL' ? '#ff3333' : '#666'));
+
+    // Track any ids not covered by a group so nothing silently disappears.
+    const grouped = new Set();
+    HEALTH_GROUPS.forEach(g => g.ids.forEach(id => grouped.add(id)));
+    const leftovers = Object.keys(healthTrackers).filter(id => !grouped.has(id));
+    const groups = leftovers.length
+        ? [...HEALTH_GROUPS, { name: 'OTHER', ids: leftovers }]
+        : HEALTH_GROUPS;
+
+    const persist = () => {
+        try { localStorage.setItem('fxnet_health_collapsed', JSON.stringify(healthGroupsCollapsed)); } catch (e) { }
+    };
+
+    const rowHtml = (id) => {
+        const t = healthTrackers[id];
+        if (!t) return '';
+        const color = HEALTH_STATUS_COLOR[t.status] || '#666';
         const timeStr = t.lastUpdate > 0 ? new Date(t.lastUpdate).toISOString().substring(11, 16) + 'Z' : '--:--';
-        row.innerHTML = `<span>${t.label}</span><span class="health-status" style="color:${statusColor};font-weight:bold;">${t.status} ${timeStr}</span>`;
-        container.appendChild(row);
-    }
+        return `<div class="health-row"><span>${t.label}</span>` +
+            `<span class="health-status" style="color:${color};font-weight:bold;">${t.status} ${timeStr}</span></div>`;
+    };
+
+    container.innerHTML = groups.map(g => {
+        const ids = g.ids.filter(id => healthTrackers[id]);
+        if (!ids.length) return '';
+        // Group dot = worst status among its feeds (red > amber > grey > green).
+        const worst = ids.reduce((w, id) => {
+            const s = healthTrackers[id].status;
+            return (HEALTH_STATUS_RANK[s] || 0) > (HEALTH_STATUS_RANK[w] || 0) ? s : w;
+        }, 'LIVE');
+        const collapsed = !!healthGroupsCollapsed[g.name];
+        const dot = `<span class="health-group-dot" style="background:${HEALTH_STATUS_COLOR[worst] || '#666'};"></span>`;
+        return `<div class="health-group${collapsed ? ' collapsed' : ''}" data-group="${g.name}">` +
+            `<div class="health-group-header">${dot}<span class="health-group-name">${g.name}</span>` +
+            `<span class="health-group-caret">▾</span></div>` +
+            `<div class="health-group-body">${ids.map(rowHtml).join('')}</div>` +
+            `</div>`;
+    }).join('');
+
+    container.querySelectorAll('.health-group-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const group = header.parentElement;
+            const name = group.getAttribute('data-group');
+            const nowCollapsed = group.classList.toggle('collapsed');
+            healthGroupsCollapsed[name] = nowCollapsed;
+            persist();
+        });
+    });
 }
 
 
@@ -5482,10 +5552,13 @@ function getPaneLegend(paneId) {
     const site = (paneRadarSites[paneId] || '').toUpperCase();
     const ch = paneGoesChannels[paneId];
     const rows = [];
-    const add = (cond, label, color) => { if (cond) rows.push({ label, color }); };
+    // healthId (optional) appends the product's last-refresh time to the label.
+    const add = (cond, label, color, healthId) => {
+        if (cond) rows.push({ label: label + (healthId ? healthTimeSuffix(healthId) : ''), color });
+    };
 
     // Imagery / base fields
-    add(isLayerVisible(map, 'radar-layer'), 'NATL REFLECTIVITY', '#39ff5a');
+    add(isLayerVisible(map, 'radar-layer'), 'NATL REFLECTIVITY', '#39ff5a', 'radar');
     add(isLayerVisible(map, 'site-bref-layer'), `${site} BREF 0.5°${siteTimeSuffix(site, 'sr_bref')}`, '#39ff5a');
     add(isLayerVisible(map, 'site-bvel-layer'), `${site} VELOCITY 0.5°${siteTimeSuffix(site, 'sr_bvel')}`, '#5ad1ff');
     add(isLayerVisible(map, 'site-bdhc-layer'), `${site} HYDROMETEOR CLASS${siteTimeSuffix(site, 'bdhc')}`, '#ff9a3c');
@@ -5502,52 +5575,52 @@ function getPaneLegend(paneId) {
         const gName = (GIBS_PRODUCTS[paneGibs[paneId]]?.label || paneGibs[paneId]).toUpperCase();
         rows.push({ label: `GOES-E ${gName}${gtSuffix}`, color: '#9fd0ff' });
     }
-    add(isLayerVisible(map, 'lightning-layer'), 'NLDN LIGHTNING', '#ffd23c');
-    add(isLayerVisible(map, 'mrms-echotops-layer'), 'MRMS ECHO TOPS', '#9b59ff');
-    add(isLayerVisible(map, 'mrms-qpe-layer'), 'MRMS QPE', '#39ff5a');
+    add(isLayerVisible(map, 'lightning-layer'), 'NLDN LIGHTNING', '#ffd23c', 'lightning');
+    add(isLayerVisible(map, 'mrms-echotops-layer'), 'MRMS ECHO TOPS', '#9b59ff', 'mrmsEchotops');
+    add(isLayerVisible(map, 'mrms-qpe-layer'), 'MRMS QPE', '#39ff5a', 'mrmsQpe');
     // Surface / analysis
-    add(isLayerVisible(map, 'metars-temp'), 'METAR OBS', '#39ff5a');
-    add(isLayerVisible(map, 'sfc-isobars-2mb-line'), 'ISOBARS 2mb', '#d0d0d0');
-    add(isLayerVisible(map, 'sfc-isotherms-line'), 'ISOTHERMS 2°F', '#ff4444');
-    add(isLayerVisible(map, 'sfc-isodrosotherms-line'), 'ISODROSOTHERMS 2°F', '#44cc44');
-    add(isLayerVisible(map, 'wpc-isobars-line'), 'WPC ISOBARS 4mb', '#d0d0d0');
-    add(isLayerVisible(map, 'wpc-fronts-solid'), 'WPC FRONTS', '#4488ff');
-    add(isLayerVisible(map, 'wpc-qpf-layer'), 'WPC QPF', '#39ff5a');
+    add(isLayerVisible(map, 'metars-temp'), 'METAR OBS', '#39ff5a', 'metar');
+    add(isLayerVisible(map, 'sfc-isobars-2mb-line'), 'ISOBARS 2mb', '#d0d0d0', 'sfcIsobars2mb');
+    add(isLayerVisible(map, 'sfc-isotherms-line'), 'ISOTHERMS 2°F', '#ff4444', 'sfcIsotherms');
+    add(isLayerVisible(map, 'sfc-isodrosotherms-line'), 'ISODROSOTHERMS 2°F', '#44cc44', 'sfcIsodrosotherms');
+    add(isLayerVisible(map, 'wpc-isobars-line'), 'WPC ISOBARS 4mb', '#d0d0d0', 'wpcIsobars');
+    add(isLayerVisible(map, 'wpc-fronts-solid'), 'WPC FRONTS', '#4488ff', 'wpcFronts');
+    add(isLayerVisible(map, 'wpc-qpf-layer'), 'WPC QPF', '#39ff5a', 'wpcQpf');
     if (isLayerVisible(map, 'radar-l3-layer') && paneL3[paneId]) {
         const l3t = paneL3[paneId].meta?.time;          // "YYYY-MM-DD HH:MM:SSZ"
         const l3suffix = (l3t && l3t.length >= 16) ? ` · ${l3t.substring(11, 16)}Z` : '';
         rows.push({ label: `L3 ${paneL3[paneId].meta?.name || paneL3[paneId].product} · ${paneL3[paneId].station}${l3suffix}`, color: '#33c27a' });
     }
     // Hazards
-    add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d');
-    add(isLayerVisible(map, 'spc-day2-fill'), 'SPC DAY 2 OUTLOOK', '#ff4d4d');
-    add(isLayerVisible(map, 'spc-day3-fill'), 'SPC DAY 3 OUTLOOK', '#ff4d4d');
+    add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d', 'spcOutlook');
+    add(isLayerVisible(map, 'spc-day2-fill'), 'SPC DAY 2 OUTLOOK', '#ff4d4d', 'spcOutlook');
+    add(isLayerVisible(map, 'spc-day3-fill'), 'SPC DAY 3 OUTLOOK', '#ff4d4d', 'spcOutlook');
     [1, 2].forEach(day => {
         ['torn', 'wind', 'hail'].forEach(hz => {
             add(isLayerVisible(map, `spc-prob-${day}-${hz}-fill`),
-                `SPC D${day} ${SPC_HAZARD_NAMES[hz].toUpperCase()} PROB`, '#ff884d');
+                `SPC D${day} ${SPC_HAZARD_NAMES[hz].toUpperCase()} PROB`, '#ff884d', 'spcOutlook');
         });
     });
-    add(isLayerVisible(map, 'wpc-ero-day1-fill'), 'WPC ERO DAY 1', '#39ff5a');
-    add(isLayerVisible(map, 'wpc-ero-day2-fill'), 'WPC ERO DAY 2', '#39ff5a');
-    add(isLayerVisible(map, 'wpc-ero-day3-fill'), 'WPC ERO DAY 3', '#39ff5a');
-    add(isLayerVisible(map, 'spc-md-fill'), 'SPC MESO DISCUSSIONS', '#ff6a00');
-    add(isLayerVisible(map, 'wpc-mpd-fill'), 'WPC MESO PRECIP DISC', '#33c27a');
-    add(isLayerVisible(map, 'spc-lsr-icons'), 'LOCAL STORM REPORTS', '#ff8c00');
-    add(isLayerVisible(map, 'nws-warnings-only-fill'), 'NWS WARNINGS', '#ff3333');
-    add(isLayerVisible(map, 'nws-watches-only-fill'), 'NWS WATCHES', '#ffaa00');
-    add(isLayerVisible(map, 'nhc-track-pts'), 'NHC STORMS', '#ff3333');
-    add(isLayerVisible(map, 'nhc-outlook-fill'), 'NHC TROPICAL OUTLOOK', '#ffaa00');
+    add(isLayerVisible(map, 'wpc-ero-day1-fill'), 'WPC ERO DAY 1', '#39ff5a', 'wpcEro');
+    add(isLayerVisible(map, 'wpc-ero-day2-fill'), 'WPC ERO DAY 2', '#39ff5a', 'wpcEro');
+    add(isLayerVisible(map, 'wpc-ero-day3-fill'), 'WPC ERO DAY 3', '#39ff5a', 'wpcEro');
+    add(isLayerVisible(map, 'spc-md-fill'), 'SPC MESO DISCUSSIONS', '#ff6a00', 'spcMd');
+    add(isLayerVisible(map, 'wpc-mpd-fill'), 'WPC MESO PRECIP DISC', '#33c27a', 'wpcMpd');
+    add(isLayerVisible(map, 'spc-lsr-icons'), 'LOCAL STORM REPORTS', '#ff8c00', 'spcLsr');
+    add(isLayerVisible(map, 'nws-warnings-only-fill'), 'NWS WARNINGS', '#ff3333', 'warnings');
+    add(isLayerVisible(map, 'nws-watches-only-fill'), 'NWS WATCHES', '#ffaa00', 'watches');
+    add(isLayerVisible(map, 'nhc-track-pts'), 'NHC STORMS', '#ff3333', 'nhcStorms');
+    add(isLayerVisible(map, 'nhc-outlook-fill'), 'NHC TROPICAL OUTLOOK', '#ffaa00', 'nhcOutlook');
     // Climate / environment
-    add(isLayerVisible(map, 'cpc-temp-layer'), 'CPC TEMP OUTLOOK', '#ff8c69');
-    add(isLayerVisible(map, 'cpc-precip-layer'), 'CPC PRECIP OUTLOOK', '#69b3ff');
-    add(isLayerVisible(map, 'drought-fill'), 'US DROUGHT MONITOR', '#d2a679');
+    add(isLayerVisible(map, 'cpc-temp-layer'), 'CPC TEMP OUTLOOK', '#ff8c69', 'cpcTemp');
+    add(isLayerVisible(map, 'cpc-precip-layer'), 'CPC PRECIP OUTLOOK', '#69b3ff', 'cpcPrecip');
+    add(isLayerVisible(map, 'drought-fill'), 'US DROUGHT MONITOR', '#d2a679', 'drought');
     add(isLayerVisible(map, 'cpc-drought-layer'), 'CPC DROUGHT OUTLOOK', '#4488ff');
-    add(isLayerVisible(map, 'firms-fires-layer'), 'ACTIVE FIRES', '#ff4500');
-    add(isLayerVisible(map, 'hms-smoke-fill'), 'HMS SMOKE', '#aaaaaa');
-    add(isLayerVisible(map, 'airnow-aqi-layer'), 'AIR QUALITY (AQI)', '#39ff5a');
-    add(isLayerVisible(map, 'river-gauges-layer'), 'RIVER GAUGES', '#5ad1ff');
-    add(isLayerVisible(map, 'solar-night-fill'), 'DAY/NIGHT TERMINATOR', '#8893a3');
+    add(isLayerVisible(map, 'firms-fires-layer'), 'ACTIVE FIRES', '#ff4500', 'firms');
+    add(isLayerVisible(map, 'hms-smoke-fill'), 'HMS SMOKE', '#aaaaaa', 'hms');
+    add(isLayerVisible(map, 'airnow-aqi-layer'), 'AIR QUALITY (AQI)', '#39ff5a', 'aqi');
+    add(isLayerVisible(map, 'river-gauges-layer'), 'RIVER GAUGES', '#5ad1ff', 'riverGauges');
+    add(isLayerVisible(map, 'solar-night-fill'), 'DAY/NIGHT TERMINATOR', '#8893a3', 'solar');
     // Reference overlays
     add(isLayerVisible(map, 'nws-cwa-layer'), 'NWS CWA BOUNDARIES', '#00e5ff');
     return rows;
@@ -9234,6 +9307,8 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
+        'Every product in the pane legend now carries a freshness time. Radar and satellite show the imagery valid time; the rest (HMS Smoke, Active Fires, lightning, METARs, surface analysis, SPC/WPC products, warnings, tropical, climate, river gauges, etc.) now show the last time that feed was pulled from the source — so you can tell at a glance how current each layer is.',
+        'The Data Health monitor is now organized into collapsible sections that mirror the menu — Radar & Lightning, Satellite, Surface Analysis, Warnings & Watches, SPC Products, WPC Products, Tropical, Climate & Outlooks, Fire & Air, and Hydro & Solar. Each section header carries a status dot (red/amber/green) showing the worst feed inside, click to fold it away, and your choices are remembered.',
         'SPC probabilistic hazard outlooks added under SPC Products — Day 1 and Day 2 Tornado, Wind, and Hail probabilities, in their own sub-sections beneath the convective outlooks. Uses the official SPC probability colors and SPC’s new Conditional Intensity Group hatching for significant-severe areas (Intensity 1 sparse, 2 dense, 3 cross-hatch). A color + intensity key shows in the bottom-right of the pane, and it refreshes with new issuances.',
         'Workspace tabs can be renamed — double-click a tab (e.g. “Tab 1”) and type a name like “Gulf Coast” or “Severe Setup”. (Fixes the double-click that previously did nothing.)',
         'GOES-East satellite now shows the image valid time in the pane legend — both the individual ABI channels (e.g. “GOES-E CH2 SATELLITE · 17:43Z”) and the looping composites (“GOES-E GEOCOLOR · 16:30Z”). The time advances automatically as newer imagery publishes.',
