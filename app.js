@@ -8954,7 +8954,7 @@ function initSyncButton() {
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
         'GOES-East satellite now shows the image valid time in the pane legend (e.g. “GOES-E GEOCOLOR · 16:30Z”), and it advances automatically as newer imagery publishes.',
-        'Day/Night Terminator is now clearly visible — deeper night shading, a dusk-blue civil-twilight band, and a brighter amber terminator line.',
+        'Day/Night Terminator is now clearly visible — deeper night shading, a dusk-blue civil-twilight band, and a brighter amber terminator line. When it’s on, the map turns into a sun-times tool: a hint appears, the cursor becomes a crosshair, and clicking anywhere (in any pane) pulls up sunrise/sunset, twilight, solar noon, day length, and declination for that spot.',
         'The whole left menu now folds away horizontally — click the « button in the header (or press Ctrl/⌘+\\) to slide it off-screen and give the map full width; a handle on the left edge brings it back. Your choice is remembered between sessions.',
         'Left sidebar sections are now collapsible — click any category header to fold it away (your choices are remembered), plus Expand all / Collapse all at the top. By default the menu opens lean (Warnings, Radar, and Satellite expanded; the rest one click away).'
     ]},
