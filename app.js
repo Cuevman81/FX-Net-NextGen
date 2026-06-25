@@ -5939,6 +5939,44 @@ function initCollapsibleGroups() {
     if (collapseBtn) collapseBtn.addEventListener('click', () => setAll(true));
 }
 
+// Fold the whole left menu off-screen to give the map full width.
+function initSidebarCollapse() {
+    const container = document.querySelector('.app-container');
+    if (!container) return;
+
+    // Re-fit every map after the slide transition settles.
+    const resizeMaps = () => {
+        try { Object.values(maps || {}).forEach(m => m && m.resize()); } catch (e) { }
+    };
+
+    const setCollapsed = (collapsed, persist = true) => {
+        container.classList.toggle('sidebar-collapsed', collapsed);
+        if (persist) {
+            try { localStorage.setItem('fxnet_sidebar_collapsed', collapsed ? '1' : '0'); } catch (e) { }
+        }
+        // MapLibre needs a couple of resizes across the 0.22s slide.
+        setTimeout(resizeMaps, 60);
+        setTimeout(resizeMaps, 260);
+    };
+
+    let startCollapsed = false;
+    try { startCollapsed = localStorage.getItem('fxnet_sidebar_collapsed') === '1'; } catch (e) { }
+    if (startCollapsed) setCollapsed(true, false);
+
+    const collapseBtn = document.getElementById('sidebar-collapse');
+    const reopenBtn = document.getElementById('sidebar-reopen');
+    if (collapseBtn) collapseBtn.addEventListener('click', () => setCollapsed(true));
+    if (reopenBtn) reopenBtn.addEventListener('click', () => setCollapsed(false));
+
+    // Ctrl/Cmd+\ toggles the menu.
+    document.addEventListener('keydown', e => {
+        if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
+            e.preventDefault();
+            setCollapsed(!container.classList.contains('sidebar-collapsed'));
+        }
+    });
+}
+
 function initMeteogram() {
     const panel = document.getElementById('meteogram-panel');
     if (!panel) return;
@@ -8840,6 +8878,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
+        'The whole left menu now folds away horizontally — click the « button in the header (or press Ctrl/⌘+\\) to slide it off-screen and give the map full width; a handle on the left edge brings it back. Your choice is remembered between sessions.',
         'Left sidebar sections are now collapsible — click any category header to fold it away (your choices are remembered), plus Expand all / Collapse all at the top. By default the menu opens lean (Warnings, Radar, and Satellite expanded; the rest one click away).'
     ]},
     { date: 'Jun 24, 2026', items: [
@@ -8938,6 +8977,7 @@ function init() {
     initTextModal();
     initMeteogram();
     initCollapsibleGroups();
+    initSidebarCollapse();
     initSolarClickHandler();
     initRiverGaugePanel();
 

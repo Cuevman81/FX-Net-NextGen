@@ -53,7 +53,57 @@ body {
     display: flex;
     flex-direction: column;
     z-index: 100;
+    transition: margin-left 0.22s ease;
 }
+
+/* Collapse the sidebar horizontally to give the map full width */
+.app-container.sidebar-collapsed .sidebar {
+    margin-left: -300px;
+}
+
+/* Collapse button in the sidebar header */
+#sidebar-collapse {
+    position: absolute;
+    top: 12px;
+    right: 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 2px;
+    line-height: 0;
+    border-radius: 3px;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+#sidebar-collapse:hover {
+    color: var(--accent-cyan);
+    background: rgba(255, 255, 255, 0.06);
+}
+#sidebar-collapse i { width: 18px; height: 18px; }
+.sidebar-header { position: relative; }
+
+/* Floating handle to reopen the sidebar when collapsed */
+#sidebar-reopen {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    z-index: 200;
+    display: none;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-left: none;
+    border-radius: 0 6px 6px 0;
+    color: var(--accent-cyan);
+    cursor: pointer;
+    padding: 14px 4px;
+    line-height: 0;
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.4);
+    transition: background 0.15s ease;
+}
+#sidebar-reopen:hover { background: #16222e; }
+#sidebar-reopen i { width: 16px; height: 16px; }
+.app-container.sidebar-collapsed #sidebar-reopen { display: block; }
 
 /* ── Sidebar Header ── */
 .sidebar-header {

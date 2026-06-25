@@ -12,7 +12,7 @@
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="style.css?v=110">
+    <link rel="stylesheet" href="style.css?v=111">
     <!-- Vercel Speed Insights -->
     <script type="module">
       import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
@@ -31,6 +31,7 @@
     <div class="app-container">
         <aside class="sidebar">
             <div class="sidebar-header">
+                <button id="sidebar-collapse" type="button" title="Collapse menu (Ctrl+\)" aria-label="Collapse menu"><i data-lucide="chevrons-left"></i></button>
                 <h1>FX-NET NEXTGEN</h1>
                 <div class="sidebar-sub-header">
                     <span>Developed by <span style="color:var(--accent-cyan)">Rodney Cuevas, Meteorologist</span></span>
@@ -258,6 +259,7 @@
         </aside>
 
         <main class="main-view">
+            <button id="sidebar-reopen" type="button" title="Show menu (Ctrl+\)" aria-label="Show menu"><i data-lucide="chevrons-right"></i></button>
             <div class="hud-top">
                 <div class="hud-item"><span class="hud-label">LAT:</span><span id="val-lat" class="hud-value">--.----</span></div>
                 <div class="hud-item"><span id="val-lon" class="hud-value">--.----</span></div>
@@ -903,7 +905,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=189"></script>
+    <script src="app.js?v=190"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
