@@ -367,6 +367,38 @@ function nationalRadarUrl() {
     return 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q/{z}/{x}/{y}.png';
 }
 
+// Latest GOES-East frame time per nowCOAST category layer, parsed from the
+// satellite WMS GetCapabilities (one doc covers every channel). The per-channel
+// IEM tiles carry no timestamp, so nowCOAST's published frame time — driven by
+// the same GOES feed on the same 5-min cadence — is the closest valid-time proxy.
+const NOWCOAST_SAT_LAYERS = ['goes_visible_imagery', 'goes_snow_ice_imagery', 'goes_shortwave_imagery', 'goes_water_vapor_imagery', 'goes_longwave_imagery'];
+let goesSatTimes = {};          // nowCOAST layer name -> latest ISO Z time
+let goesSatTimesFetched = 0;
+async function fetchGoesSatTimes(force) {
+    const now = Date.now();
+    if (!force && Object.keys(goesSatTimes).length && now - goesSatTimesFetched < 4 * 60 * 1000) return goesSatTimes;
+    try {
+        const url = 'https://nowcoast.noaa.gov/geoserver/satellite/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities';
+        const txt = await (await fetch(url, { cache: 'no-store' })).text();
+        NOWCOAST_SAT_LAYERS.forEach(L => {
+            const idx = txt.indexOf(`<Name>${L}</Name>`);
+            if (idx < 0) return;
+            const ti = txt.indexOf('name="time"', idx);
+            if (ti < 0 || ti - idx > 4000) return;      // keep within this layer's block
+            const dm = txt.slice(ti, ti + 140).match(/default="([^"]+)"/);
+            if (dm) goesSatTimes[L] = dm[1];
+        });
+        goesSatTimesFetched = now;
+    } catch (e) { /* keep any stale values */ }
+    return goesSatTimes;
+}
+function goesChannelTimeSuffix(ch) {
+    // nowCOAST has no shortwave (Ch7) category; all ABI bands share the same scan
+    // cadence, so fall back to longwave (or any available) frame time.
+    let t = goesSatTimes[getNowCoastSatLayer(ch)] || goesSatTimes['goes_longwave_imagery'] || Object.values(goesSatTimes)[0];
+    return (t && t.length >= 16) ? ` · ${t.substring(11, 16)}Z` : '';
+}
+
 // ─── NASA GIBS GOES-East (web-mercator WMTS tiles, real time-stamped frames) ───
 // Browser-direct (CORS *), no proxy/render. Gives clean looping (real 10-min
 // frames) AND smooth panning (tiles), incl. the GeoColor/composite products that
@@ -5379,7 +5411,7 @@ function getPaneLegend(paneId) {
     if (SITE_RADAR_VIS_LAYERS.some(l => isLayerVisible(map, l)) && site && !site.includes('NEXRAD')) {
         radarStatusRows(paneRadarSites[paneId]).forEach(r => rows.push(r));
     }
-    add(isLayerVisible(map, 'satellite-layer') && ch !== null, `GOES-E CH${ch} SATELLITE`, '#cfd8e3');
+    add(isLayerVisible(map, 'satellite-layer') && ch !== null, `GOES-E CH${ch} SATELLITE${goesChannelTimeSuffix(ch)}`, '#cfd8e3');
     if (isLayerVisible(map, 'gibs-sat-layer') && paneGibs[paneId]) {
         const gt = paneGibsTime[paneId];
         const gtSuffix = (gt && gt.length >= 16) ? ` · ${gt.substring(11, 16)}Z` : '';
@@ -6568,6 +6600,10 @@ function initProductSidebar() {
                     if (map.getSource('satellite')) map.getSource('satellite').setTiles([goesChannelUrl(ch)]);
                     map.setLayoutProperty('satellite-layer', 'visibility', 'visible');
                     updateHealth('sat');
+                    // Pull the latest GOES frame time so the legend can show it.
+                    fetchGoesSatTimes().then(() => {
+                        if (paneGoesChannels[activePaneId] === ch) refreshTimestampLabel();
+                    });
                 }
                 updateSidebarToActivePane();
                 refreshTimestampLabel();
@@ -8298,6 +8334,7 @@ function startAutoRefresh() {
         if (anyRefreshed) {
             updateHealth('sat');
             addLiveLog('AUTO: Satellite tiles refreshed', '#444');
+            fetchGoesSatTimes(true).then(() => refreshTimestampLabel());
         }
 
         // GIBS GOES-East refresh — advance to the newest published frame so the
@@ -8953,7 +8990,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
-        'GOES-East satellite now shows the image valid time in the pane legend (e.g. “GOES-E GEOCOLOR · 16:30Z”), and it advances automatically as newer imagery publishes.',
+        'GOES-East satellite now shows the image valid time in the pane legend — both the individual ABI channels (e.g. “GOES-E CH2 SATELLITE · 17:43Z”) and the looping composites (“GOES-E GEOCOLOR · 16:30Z”). The time advances automatically as newer imagery publishes.',
         'Day/Night Terminator is now clearly visible — deeper night shading, a dusk-blue civil-twilight band, and a brighter amber terminator line. When it’s on, the map turns into a sun-times tool: a hint appears, the cursor becomes a crosshair, and clicking anywhere (in any pane) pulls up sunrise/sunset, twilight, solar noon, day length, and declination for that spot.',
         'The whole left menu now folds away horizontally — click the « button in the header (or press Ctrl/⌘+\\) to slide it off-screen and give the map full width; a handle on the left edge brings it back. Your choice is remembered between sessions.',
         'Left sidebar sections are now collapsible — click any category header to fold it away (your choices are remembered), plus Expand all / Collapse all at the top. By default the menu opens lean (Warnings, Radar, and Satellite expanded; the rest one click away).'
