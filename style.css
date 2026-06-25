@@ -163,6 +163,26 @@ body {
 .category-group.collapsed > *:not(.category-label) { display: none; }
 .category-group.collapsed { margin-bottom: 0; }
 
+/* Expand all / Collapse all controls */
+.cat-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 15px 7px;
+}
+.cat-tools button {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font: 800 9px/1 inherit;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    cursor: pointer;
+    padding: 0;
+}
+.cat-tools button:hover { color: var(--accent-cyan); }
+.cat-tools span { color: #2b3a47; }
+
 .sub-category {
     padding: 5px 15px 3px 35px;
     font-size: 8px;

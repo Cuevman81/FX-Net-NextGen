@@ -5902,21 +5902,41 @@ function meteoHours() {
 }
 
 // Make each left-sidebar category group collapsible (click the label).
-// Per-group state persists in localStorage.
+// New users get a lean first view (only the core imagery sections open); any
+// section the user has toggled is remembered and overrides that default.
+const DEFAULT_EXPANDED_GROUPS = new Set(['NWS WARNINGS', 'RADAR (NEXRAD)', 'Satellite (GOES-East)']);
 function initCollapsibleGroups() {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem('fxnet_collapsed_groups') || '{}'); } catch (e) { }
-    document.querySelectorAll('.product-browser .category-group').forEach(group => {
+    const persist = () => { try { localStorage.setItem('fxnet_collapsed_groups', JSON.stringify(saved)); } catch (e) { } };
+    const groups = [...document.querySelectorAll('.product-browser .category-group')];
+    groups.forEach(group => {
         const label = group.querySelector('.category-label');
         if (!label) return;
         const key = (label.textContent || '').trim();
-        if (saved[key]) group.classList.add('collapsed');
+        // Explicit user choice wins; otherwise fall back to the default.
+        const collapsed = (key in saved) ? saved[key] : !DEFAULT_EXPANDED_GROUPS.has(key);
+        group.classList.toggle('collapsed', collapsed);
         label.addEventListener('click', () => {
             group.classList.toggle('collapsed');
             saved[key] = group.classList.contains('collapsed');
-            try { localStorage.setItem('fxnet_collapsed_groups', JSON.stringify(saved)); } catch (e) { }
+            persist();
         });
     });
+
+    const setAll = collapse => {
+        groups.forEach(group => {
+            const label = group.querySelector('.category-label');
+            if (!label) return;
+            group.classList.toggle('collapsed', collapse);
+            saved[(label.textContent || '').trim()] = collapse;
+        });
+        persist();
+    };
+    const expandBtn = document.getElementById('expand-all-groups');
+    const collapseBtn = document.getElementById('collapse-all-groups');
+    if (expandBtn) expandBtn.addEventListener('click', () => setAll(false));
+    if (collapseBtn) collapseBtn.addEventListener('click', () => setAll(true));
 }
 
 function initMeteogram() {
@@ -8820,7 +8840,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 25, 2026', items: [
-        'Left sidebar sections are now collapsible — click any category header to fold it away (your choices are remembered), so you can trim the menu down to just the layers you use.'
+        'Left sidebar sections are now collapsible — click any category header to fold it away (your choices are remembered), plus Expand all / Collapse all at the top. By default the menu opens lean (Warnings, Radar, and Satellite expanded; the rest one click away).'
     ]},
     { date: 'Jun 24, 2026', items: [
         'Site radar now shows a live WSR-88D status readout — operational state, VCP / scan mode (precip vs clear-air), alarms, and Level-II latency — right in the radar window beneath the product label.',
