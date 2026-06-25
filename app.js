@@ -1035,20 +1035,15 @@ function setupMapLayers(map, paneId) {
     // black #000000 stroke). We split one source by stroke color: colored probability
     // contours vs. the significant area, which SPC draws as intensity-graded hatching —
     // CIG1 sparse diagonal, CIG2 dense diagonal, CIG3 cross-hatch.
-    [
-        { id: 'spc-hatch-1', size: 8, cross: false },   // Intensity 1 — sparse
-        { id: 'spc-hatch-2', size: 5, cross: false },   // Intensity 2 — dense
-        { id: 'spc-hatch-3', size: 6, cross: true }     // Intensity 3 — cross-hatch
-    ].forEach(hc => {
-        if (map.hasImage(hc.id)) return;
+    [1, 2, 3].forEach(n => {
+        const id = `spc-hatch-${n}`;
+        if (map.hasImage(id)) return;
+        const sz = 8;
         const cv = document.createElement('canvas');
-        cv.width = cv.height = hc.size;
-        const hx = cv.getContext('2d');
-        hx.strokeStyle = 'rgba(0,0,0,0.85)';
-        hx.lineWidth = 1.0;
-        hx.beginPath(); hx.moveTo(0, hc.size); hx.lineTo(hc.size, 0); hx.stroke();  // seamless 45°
-        if (hc.cross) { hx.beginPath(); hx.moveTo(0, 0); hx.lineTo(hc.size, hc.size); hx.stroke(); }
-        map.addImage(hc.id, hx.getImageData(0, 0, hc.size, hc.size), { pixelRatio: 1 });
+        cv.width = cv.height = sz;
+        const cx = cv.getContext('2d');
+        drawSpcHatch(cx, sz, n);
+        map.addImage(id, cx.getImageData(0, 0, sz, sz), { pixelRatio: 1 });
     });
     const PROB_ONLY = ['!=', ['get', 'stroke'], '#000000'];
     const SIG_ONLY = ['==', ['get', 'stroke'], '#000000'];
@@ -7795,12 +7790,34 @@ function updateEroLegend(paneId) {
     legend.style.display = 'block';
 }
 
-// CSS hatch swatches mirroring the map's intensity-graded hatching for the legend.
-const HATCH_SWATCH_CSS = {
-    1: 'background-image:repeating-linear-gradient(45deg,#000 0,#000 1px,transparent 1px,transparent 4px)',
-    2: 'background-image:repeating-linear-gradient(45deg,#000 0,#000 1px,transparent 1px,transparent 2px)',
-    3: 'background-image:repeating-linear-gradient(45deg,#000 0,#000 1px,transparent 1px,transparent 3px),repeating-linear-gradient(-45deg,#000 0,#000 1px,transparent 1px,transparent 3px)'
-};
+// Draw SPC-style significant-severe hatching into a canvas tile (seamless 45°).
+// Mirrors SPC's Conditional Intensity Groups: 1 = dashed diagonal, 2 = solid
+// diagonal, 3 = solid cross-hatch — increasing ink with intensity. Used for both
+// the map fill-pattern and the legend swatch so they're pixel-identical.
+function drawSpcHatch(ctx, size, intensity) {
+    ctx.clearRect(0, 0, size, size);
+    ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+    ctx.lineWidth = 1.0;
+    ctx.setLineDash(intensity === 1 ? [2.2, 2.6] : []);
+    ctx.beginPath(); ctx.moveTo(0, size); ctx.lineTo(size, 0); ctx.stroke();
+    if (intensity === 3) { ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(size, size); ctx.stroke(); }
+}
+
+// data: URLs of the same patterns for the legend swatches (built once, lazily).
+let HATCH_DATA_URLS = null;
+function hatchDataUrl(intensity) {
+    if (!HATCH_DATA_URLS) {
+        HATCH_DATA_URLS = {};
+        [1, 2, 3].forEach(n => {
+            const sz = 10;
+            const cv = document.createElement('canvas');
+            cv.width = cv.height = sz;
+            drawSpcHatch(cv.getContext('2d'), sz, n);
+            HATCH_DATA_URLS[n] = cv.toDataURL();
+        });
+    }
+    return HATCH_DATA_URLS[intensity];
+}
 
 // SPC probabilistic outlook legend — built from the actual probability swatches
 // in the displayed data (so the colors always match), bottom-right like SPC's own.
@@ -7864,7 +7881,7 @@ function updateProbLegend(paneId) {
     if (cigLevels.size) {
         html += `<div style="border-top:1px solid rgba(255,255,255,0.15);margin-top:3px;padding-top:3px;"><div style="font-size:7.5px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">Sig Intensity</div>`;
         [1, 2, 3].filter(n => cigLevels.has(n)).forEach(n => {
-            html += `<div style="display:flex;align-items:center;gap:5px;margin:2px 0;"><span style="width:12px;height:10px;display:inline-block;background-color:#bbb;${HATCH_SWATCH_CSS[n]};border:1px solid #555;"></span><span style="font-size:9px;color:#ddd;white-space:nowrap;">Intensity ${n}</span></div>`;
+            html += `<div style="display:flex;align-items:center;gap:5px;margin:2px 0;"><span style="width:14px;height:11px;display:inline-block;background-color:#fff;background-image:url(${hatchDataUrl(n)});background-repeat:repeat;border:1px solid #555;"></span><span style="font-size:9px;color:#ddd;white-space:nowrap;">Intensity ${n}</span></div>`;
         });
         html += `</div>`;
     }
