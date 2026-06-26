@@ -2825,8 +2825,14 @@ function initFrontalPipIcons(map) {
         const watchesActive = isLayerVisible(map, 'nws-watches-only-fill') || isLayerVisible(map, 'nws-watches-wms-layer') || isLayerVisible(map, 'nws-wwa-wms-layer');
         if (!warningsActive && !watchesActive) return;
 
-        // Ensure we didn't click on a METAR or FIRMS or MD icon
-        const otherFeats = map.queryRenderedFeatures(e.point, { layers: ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nexrad-sites-layer', 'river-gauges-layer'] });
+        // Ensure we didn't click on a METAR or FIRMS or MD icon, or an outlook area
+        // (those have their own popups; only query alerts on a "bare" map click).
+        const otlkLayers = [];
+        [1, 2, 3].forEach(d => otlkLayers.push(`spc-day${d}-fill`));
+        [1, 2].forEach(d => ['torn', 'wind', 'hail'].forEach(hz => otlkLayers.push(`spc-prob-${d}-${hz}-fill`)));
+        [1, 2, 3, 4, 5, 6, 7, 8].forEach(d => otlkLayers.push(`spc-firewx-day${d}-fill`));
+        const queryLayers = ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nexrad-sites-layer', 'river-gauges-layer', 'wpc-ero-day1-fill', 'wpc-ero-day2-fill', 'wpc-ero-day3-fill', ...otlkLayers].filter(l => map.getLayer(l));
+        const otherFeats = map.queryRenderedFeatures(e.point, { layers: queryLayers });
         if (otherFeats.length > 0) return;
 
         const lat = e.lngLat.lat.toFixed(4);
@@ -2958,6 +2964,80 @@ function initFrontalPipIcons(map) {
         });
         map.on('mouseenter', lyr, () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', lyr, () => { map.getCanvas().style.cursor = ''; });
+    });
+
+    // ─── SPC outlook / fire-weather area click → details popup + in-app discussion ───
+    // Mimics the NHC tropical-outlook popup: click an area, read its category, and
+    // open the associated SPC narrative. Convective categorical + probabilistic
+    // outlooks share one Day-N discussion; fire weather has its own per-day text
+    // (Days 3-8 are one combined product).
+    const cursorPointer = lyr => {
+        map.on('mouseenter', lyr, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', lyr, () => { map.getCanvas().style.cursor = ''; });
+    };
+    const showDiscPopup = (lngLat, accent, title, sub, url, discTitle, header) => {
+        const btnId = `spc-disc-${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
+        popup.setLngLat(lngLat).setHTML(
+            `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:10px;border-radius:4px;max-width:300px;">
+                <div style="font-weight:bold;color:${accent};font-size:13px;margin-bottom:4px;">${title}</div>
+                ${sub ? `<div style="color:#cfcfcf;margin-bottom:8px;">${sub}</div>` : ''}
+                <button id="${btnId}" style="background:#1a3a4a;color:#00e5ff;border:1px solid #00e5ff;padding:4px 10px;border-radius:3px;cursor:pointer;font-size:10px;width:100%;">View Full Discussion →</button>
+            </div>`
+        ).addTo(map);
+        setTimeout(() => {
+            const btn = document.getElementById(btnId);
+            if (btn) btn.addEventListener('click', () => { popup.remove(); openSpcDiscussion(url, discTitle, header); });
+        }, 50);
+    };
+    const otlkDiscUrl = day => `https://www.spc.noaa.gov/products/outlook/day${day}otlk.html`;
+    const fireWxDiscUrl = day => (day <= 2)
+        ? `https://www.spc.noaa.gov/products/fire_wx/fwdy${day}.html`
+        : 'https://www.spc.noaa.gov/products/exper/fire_wx/index.html';
+
+    // Convective categorical outlooks (Day 1-3)
+    [1, 2, 3].forEach(day => {
+        const lyr = `spc-day${day}-fill`;
+        map.on('click', lyr, e => {
+            if (!e.features || !e.features[0]) return;
+            const p = e.features[0].properties || {};
+            const label = p.LABEL2 || p.LABEL || 'Categorical Risk';
+            showDiscPopup(e.lngLat, p.fill || '#ff4d4d', `SPC Day ${day} Outlook`, label,
+                otlkDiscUrl(day), `SPC Day ${day} Convective Outlook`, `>>> Clicked area: ${label} <<<`);
+        });
+        cursorPointer(lyr);
+    });
+
+    // Probabilistic hazard outlooks (Day 1-2 torn/wind/hail) — share the Day-N narrative
+    [1, 2].forEach(day => {
+        ['torn', 'wind', 'hail'].forEach(hz => {
+            const lyr = `spc-prob-${day}-${hz}-fill`;
+            map.on('click', lyr, e => {
+                if (!e.features || !e.features[0]) return;
+                const p = e.features[0].properties || {};
+                const pct = !isNaN(parseFloat(p.LABEL)) ? `${Math.round(parseFloat(p.LABEL) * 100)}% probability` : (p.LABEL2 || '');
+                const hazName = SPC_HAZARD_NAMES[hz] || hz;
+                showDiscPopup(e.lngLat, p.fill || '#ff884d', `SPC Day ${day} ${hazName} Prob`, pct,
+                    otlkDiscUrl(day), `SPC Day ${day} Convective Outlook`, `>>> Clicked area: ${hazName} ${pct} <<<`);
+            });
+            cursorPointer(lyr);
+        });
+    });
+
+    // Fire weather outlooks (Day 1-8): categorical fills + dry-thunderstorm boundaries
+    [1, 2, 3, 4, 5, 6, 7, 8].forEach(day => {
+        ['fill', 'dryt'].forEach(suf => {
+            const lyr = `spc-firewx-day${day}-${suf}`;
+            map.on('click', lyr, e => {
+                if (!e.features || !e.features[0]) return;
+                const p = e.features[0].properties || {};
+                const cat = p.category || p.label || 'Fire Weather';
+                showDiscPopup(e.lngLat, p.stroke || '#ff7f00', `SPC Day ${day} Fire Wx`, cat,
+                    fireWxDiscUrl(day),
+                    day <= 2 ? `SPC Day ${day} Fire Weather Outlook` : 'SPC Day 3-8 Fire Weather Outlook',
+                    `>>> Clicked area: ${cat} <<<`);
+            });
+            cursorPointer(lyr);
+        });
     });
 
     map.on('click', 'nexrad-sites-layer', e => {
@@ -3179,6 +3259,31 @@ async function openEroDiscussion(category) {
     } catch (e) {
         if (contentEl) contentEl.textContent = `Error loading WPC Excessive Rainfall Discussion: ${e.message}`;
         addLiveLog(`WPC ERO DISC ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// Load an SPC text discussion (the narrative inside the page's <pre>) into the
+// in-app text browser — used by the outlook/fire-weather area-click popups so
+// the user can read the discussion for the area they clicked, NHC-style. SPC
+// HTML pages are CORS-enabled, so no proxy is needed.
+async function openSpcDiscussion(url, title, header) {
+    const panel = document.getElementById('text-panel');
+    const contentEl = document.getElementById('text-product-content');
+    if (panel) panel.style.display = 'flex';
+    if (contentEl) contentEl.textContent = `Loading ${title}...`;
+    addLiveLog(`SPC: Opening ${title}...`, '#ffb300');
+    try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const html = await res.text();
+        const pre = new DOMParser().parseFromString(html, 'text/html').querySelector('pre');
+        const text = pre ? pre.textContent.trim() : '';
+        if (!text) throw new Error('discussion text not found');
+        if (contentEl) contentEl.textContent = (header ? header + '\n\n' : '') + text;
+        addLiveLog(`SPC: ${title} loaded`, '#00ff88');
+    } catch (e) {
+        if (contentEl) contentEl.textContent = `Error loading ${title}: ${e.message}`;
+        addLiveLog(`SPC DISC ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -9447,6 +9552,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 26, 2026', items: [
+        'Click any SPC outlook area to read its discussion — like the NHC tropical outlook. Clicking a convective categorical or probabilistic risk area, or a fire weather area (Day 1–8), pops up the category/probability and a “View Full Discussion →” button that loads the official SPC narrative for that day right in the text browser.',
         'SPC Fire Weather Outlooks added under Fire & Smoke — Day 1 through Day 8. Days 1–2 show the full categorical product (Elevated, Critical, Extremely Critical, shaded in SPC’s own colors and outlined, with dry-thunderstorm areas as dashed boundaries); Days 3–8 show the extended Critical Risk areas. A color key shows in the bottom-left of the pane, the pane legend timestamps it, and it refreshes with new issuances.',
         'Corrected NWS region groupings in the SITE and Skew-T station menus so every office sits under its official region. Soundings: Nashville (BNA), Norman (OUN), Fort Worth (FWD) and Albuquerque (ABQ) moved to Southern; Wilmington OH (ILN) to Eastern; Glasgow MT (GGW) to Western; Denver (DNR) and Riverton (RIW) to Central. Radar: the New Mexico sites (ABX, FDX, HDX) moved to Southern. (Paducah, PAH, stays in Central — Kentucky is a Central Region office.)'
     ]},
