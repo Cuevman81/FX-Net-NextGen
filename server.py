@@ -179,6 +179,32 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
 
+        elif path == '/api/spc-fire-wx':
+            # SPC Fire Weather Outlook (KMZ -> GeoJSON). Reuse the Vercel
+            # function's converter so local and prod behavior stay identical.
+            try:
+                from urllib.parse import urlparse, parse_qs
+                import importlib.util
+                qs = parse_qs(urlparse(self.path).query)
+                day = qs.get('day', ['1'])[0]
+                spec = importlib.util.spec_from_file_location(
+                    'spc_fire_wx', os.path.join(os.path.dirname(__file__), 'api', 'spc-fire-wx.py'))
+                fw_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(fw_mod)
+                if day not in fw_mod.FIREWX_KMZ:
+                    day = '1'
+                geojson = fw_mod.kmz_to_geojson(day)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(geojson).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
+
         elif path == '/api/radar-l3':
             # NEXRAD Level III (NODD) -> transparent georeferenced radar overlay.
             # Reuse the Vercel function's decode/render so local/prod stay identical.

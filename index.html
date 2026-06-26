@@ -222,6 +222,9 @@
                     <div class="category-label"><i data-lucide="flame"></i> FIRE & SMOKE</div>
                     <div class="product-item" data-layer="firms-fires"><span>Active Fires (VIIRS/MODIS)</span> <span class="badge orange">NASA</span></div>
                     <div class="product-item" data-layer="hms-smoke"><span>HMS Smoke Plumes</span> <span class="badge orange">NOAA</span></div>
+                    <div class="sub-category">SPC Fire Weather Outlook</div>
+                    <div class="product-item" data-layer="spc-firewx" data-day="1"><span>Day 1 Fire Wx Outlook</span> <span class="badge orange">SPC</span></div>
+                    <div class="product-item" data-layer="spc-firewx" data-day="2"><span>Day 2 Fire Wx Outlook</span> <span class="badge orange">SPC</span></div>
                 </div>
 
                 <!-- AIR QUALITY -->
@@ -913,7 +916,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=203"></script>
+    <script src="app.js?v=204"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
