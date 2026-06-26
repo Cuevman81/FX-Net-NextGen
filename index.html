@@ -280,6 +280,7 @@
                     <select id="radar-site-select">
                         <option value="nexrad-n0q-900913">National Mosaic</option>
                         <optgroup label="Southern Region">
+                            <option value="ABX">ABX - Albuquerque NM</option>
                             <option value="AMA">AMA - Amarillo TX</option>
                             <option value="AMX">AMX - Miami FL</option>
                             <option value="BMX">BMX - Birmingham AL</option>
@@ -294,6 +295,7 @@
                             <option value="EVX">EVX - NW Florida FL</option>
                             <option value="EWX">EWX - Austin/San Antonio TX</option>
                             <option value="FDR">FDR - Frederick/Altus OK</option>
+                            <option value="FDX">FDX - Cannon AFB NM</option>
                             <option value="FFC">FFC - Atlanta GA</option>
                             <option value="FWS">FWS - Dallas/Fort Worth TX</option>
                             <option value="GRK">GRK - Central TX</option>
@@ -306,6 +308,7 @@
                             <option value="LBB">LBB - Lubbock TX</option>
                             <option value="LCH">LCH - Lake Charles LA</option>
                             <option value="HDC">HDC - Hammond/New Orleans LA</option>
+                            <option value="HDX">HDX - Holloman AFB NM</option>
                             <option value="LZK">LZK - Little Rock AR</option>
                             <option value="MAF">MAF - Midland/Odessa TX</option>
                             <option value="MLB">MLB - Melbourne FL</option>
@@ -394,7 +397,6 @@
                             <option value="TYX">TYX - Fort Drum NY</option>
                         </optgroup>
                         <optgroup label="Western Region">
-                            <option value="ABX">ABX - Albuquerque NM</option>
                             <option value="ATX">ATX - Seattle WA</option>
                             <option value="BBX">BBX - Marysville CA</option>
                             <option value="BHX">BHX - Eureka CA</option>
@@ -404,10 +406,8 @@
                             <option value="EMX">EMX - Tucson AZ</option>
                             <option value="ESX">ESX - Las Vegas NV</option>
                             <option value="EYX">EYX - Edwards AFB CA</option>
-                            <option value="FDX">FDX - Cannon AFB NM</option>
                             <option value="FSX">FSX - Flagstaff AZ</option>
                             <option value="GGW">GGW - Glasgow MT</option>
-                            <option value="HDX">HDX - Holloman AFB NM</option>
                             <option value="HNX">HNX - Hanford CA</option>
                             <option value="ICX">ICX - Cedar City UT</option>
                             <option value="IWA">IWA - Phoenix AZ</option>
@@ -582,10 +582,12 @@
                             <option value="AMA">AMA - Amarillo TX</option>
                             <option value="MAF">MAF - Midland TX</option>
                             <option value="EPZ">EPZ - El Paso TX</option>
-                        </optgroup>
-                        <optgroup label="Central Region">
                             <option value="OUN">OUN - Norman OK</option>
                             <option value="FWD">FWD - Fort Worth TX</option>
+                            <option value="ABQ">ABQ - Albuquerque NM</option>
+                            <option value="BNA">BNA - Nashville TN</option>
+                        </optgroup>
+                        <optgroup label="Central Region">
                             <option value="SGF">SGF - Springfield MO</option>
                             <option value="DVN">DVN - Davenport IA</option>
                             <option value="OAX">OAX - Omaha NE</option>
@@ -596,11 +598,10 @@
                             <option value="MPX">MPX - Chanhassen MN</option>
                             <option value="GRB">GRB - Green Bay WI</option>
                             <option value="DTX">DTX - White Lake MI</option>
-                            <option value="ILN">ILN - Wilmington OH</option>
                             <option value="PAH">PAH - Paducah KY</option>
-                            <option value="BNA">BNA - Nashville TN</option>
                             <option value="BIS">BIS - Bismarck ND</option>
-                            <option value="GGW">GGW - Glasgow MT</option>
+                            <option value="DNR">DNR - Denver CO</option>
+                            <option value="RIW">RIW - Riverton WY</option>
                         </optgroup>
                         <optgroup label="Eastern Region">
                             <option value="OKX">OKX - Upton/NYC NY</option>
@@ -617,11 +618,11 @@
                             <option value="MHX">MHX - Morehead City NC</option>
                             <option value="ILM">ILM - Wilmington NC</option>
                             <option value="WAL">WAL - Wallops Island VA</option>
+                            <option value="ILN">ILN - Wilmington OH</option>
                         </optgroup>
                         <optgroup label="Western Region">
-                            <option value="DNR">DNR - Denver CO</option>
-                            <option value="ABQ">ABQ - Albuquerque NM</option>
                             <option value="TFX">TFX - Great Falls MT</option>
+                            <option value="GGW">GGW - Glasgow MT</option>
                             <option value="BOI">BOI - Boise ID</option>
                             <option value="LKN">LKN - Elko NV</option>
                             <option value="VEF">VEF - Las Vegas NV</option>
@@ -635,7 +636,6 @@
                             <option value="SLE">SLE - Salem OR</option>
                             <option value="UIL">UIL - Quillayute WA</option>
                             <option value="OTX">OTX - Spokane WA</option>
-                            <option value="RIW">RIW - Riverton WY</option>
                         </optgroup>
                         <optgroup label="Alaska / Pacific / PR">
                             <option value="ANC">ANC - Anchorage AK</option>
@@ -913,7 +913,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=202"></script>
+    <script src="app.js?v=203"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

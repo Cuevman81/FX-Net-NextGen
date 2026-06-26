@@ -9306,6 +9306,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jun 26, 2026', items: [
+        'Corrected NWS region groupings in the SITE and Skew-T station menus so every office sits under its official region. Soundings: Nashville (BNA), Norman (OUN), Fort Worth (FWD) and Albuquerque (ABQ) moved to Southern; Wilmington OH (ILN) to Eastern; Glasgow MT (GGW) to Western; Denver (DNR) and Riverton (RIW) to Central. Radar: the New Mexico sites (ABX, FDX, HDX) moved to Southern. (Paducah, PAH, stays in Central — Kentucky is a Central Region office.)'
+    ]},
     { date: 'Jun 25, 2026', items: [
         'Every product in the pane legend now carries a freshness time. Radar and satellite show the imagery valid time; the rest (HMS Smoke, Active Fires, lightning, METARs, surface analysis, SPC/WPC products, warnings, tropical, climate, river gauges, etc.) now show the last time that feed was pulled from the source — so you can tell at a glance how current each layer is.',
         'The Data Health monitor is now organized into collapsible sections that mirror the menu — Radar & Lightning, Satellite, Surface Analysis, Warnings & Watches, SPC Products, WPC Products, Tropical, Climate & Outlooks, Fire & Air, and Hydro & Solar. Each section header carries a status dot (red/amber/green) showing the worst feed inside, click to fold it away, and your choices are remembered.',
