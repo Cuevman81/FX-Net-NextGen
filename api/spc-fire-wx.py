@@ -7,11 +7,18 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 
-# SPC Fire Weather Outlook is published as a "latest" KMZ for Days 1 and 2.
-# (Days 3-8 are a single combined product with a different structure.)
+# SPC Fire Weather Outlook is published as a "latest" KMZ per day. Days 1-2 are
+# the full categorical product (Elevated/Critical/Extreme + dry thunderstorm);
+# Days 3-8 are the extended outlook (Critical Risk only) under /exper/.
 FIREWX_KMZ = {
     '1': 'https://www.spc.noaa.gov/products/fire_wx/day1firewx.kmz',
     '2': 'https://www.spc.noaa.gov/products/fire_wx/day2firewx.kmz',
+    '3': 'https://www.spc.noaa.gov/products/exper/fire_wx/day3firewx.kmz',
+    '4': 'https://www.spc.noaa.gov/products/exper/fire_wx/day4firewx.kmz',
+    '5': 'https://www.spc.noaa.gov/products/exper/fire_wx/day5firewx.kmz',
+    '6': 'https://www.spc.noaa.gov/products/exper/fire_wx/day6firewx.kmz',
+    '7': 'https://www.spc.noaa.gov/products/exper/fire_wx/day7firewx.kmz',
+    '8': 'https://www.spc.noaa.gov/products/exper/fire_wx/day8firewx.kmz',
 }
 
 # The KMZ placemarks carry no inline style, so colors are assigned by name.
@@ -45,12 +52,17 @@ def _classify(name):
 
 
 def _valid_from_kmlname(kml_name):
-    # Inner KML is named like "260626_1700_day1firewx.kml" (YYMMDD_HHMM UTC).
+    # Days 1-2: "260626_1700_day1firewx.kml" (YYMMDD_HHMM UTC).
     m = re.search(r'(\d{6})_(\d{4})', kml_name or '')
-    if not m:
-        return None
-    d, t = m.group(1), m.group(2)
-    return f'20{d[0:2]}-{d[2:4]}-{d[4:6]}T{t[0:2]}:{t[2:4]}:00Z'
+    if m:
+        d, t = m.group(1), m.group(2)
+        return f'20{d[0:2]}-{d[2:4]}-{d[4:6]}T{t[0:2]}:{t[2:4]}:00Z'
+    # Days 3-8: "260625_day3firewx.kml" (date only).
+    m = re.search(r'(\d{6})', kml_name or '')
+    if m:
+        d = m.group(1)
+        return f'20{d[0:2]}-{d[2:4]}-{d[4:6]}T00:00:00Z'
+    return None
 
 
 def kmz_to_geojson(day):

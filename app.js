@@ -1157,7 +1157,7 @@ function setupMapLayers(map, paneId) {
     // (kind='dryt', no fill) draw as dashed boundaries over the categorical fills.
     const FWX_CAT = ['==', ['get', 'kind'], 'cat'];
     const FWX_DRYT = ['==', ['get', 'kind'], 'dryt'];
-    [1, 2].forEach(day => {
+    [1, 2, 3, 4, 5, 6, 7, 8].forEach(day => {
         const sid = `spc-firewx-day${day}`;
         map.addSource(sid, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
         map.addLayer({
@@ -5675,8 +5675,9 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'cpc-drought-layer'), 'CPC DROUGHT OUTLOOK', '#4488ff');
     add(isLayerVisible(map, 'firms-fires-layer'), 'ACTIVE FIRES', '#ff4500', 'firms');
     add(isLayerVisible(map, 'hms-smoke-fill'), 'HMS SMOKE', '#aaaaaa', 'hms');
-    add(isLayerVisible(map, 'spc-firewx-day1-fill'), 'SPC D1 FIRE WX', '#ff7f00', 'spcFireWx');
-    add(isLayerVisible(map, 'spc-firewx-day2-fill'), 'SPC D2 FIRE WX', '#ff7f00', 'spcFireWx');
+    [1, 2, 3, 4, 5, 6, 7, 8].forEach(d => {
+        add(isLayerVisible(map, `spc-firewx-day${d}-fill`), `SPC D${d} FIRE WX`, '#ff7f00', 'spcFireWx');
+    });
     add(isLayerVisible(map, 'airnow-aqi-layer'), 'AIR QUALITY (AQI)', '#39ff5a', 'aqi');
     add(isLayerVisible(map, 'river-gauges-layer'), 'RIVER GAUGES', '#5ad1ff', 'riverGauges');
     add(isLayerVisible(map, 'solar-night-fill'), 'DAY/NIGHT TERMINATOR', '#8893a3', 'solar');
@@ -8059,7 +8060,7 @@ function updateFireWxLegend(paneId) {
     const m = maps[pid];
     if (!legend || !m) return;
 
-    const days = [1, 2].filter(d => isLayerVisible(m, `spc-firewx-day${d}-fill`));
+    const days = [1, 2, 3, 4, 5, 6, 7, 8].filter(d => isLayerVisible(m, `spc-firewx-day${d}-fill`));
     if (days.length === 0) { legend.style.display = 'none'; return; }
 
     // Unique categories present across the visible days, ordered low→high by rank.
@@ -8074,7 +8075,7 @@ function updateFireWxLegend(paneId) {
     if (items.size === 0) { legend.style.display = 'none'; return; }
     const sorted = [...items.entries()].sort((a, b) => a[1].rank - b[1].rank);
 
-    const dayLabel = days.length === 1 ? `DAY ${days[0]}` : 'DAY 1–2';
+    const dayLabel = days.length === 1 ? `DAY ${days[0]}` : `DAY ${days[0]}–${days[days.length - 1]}`;
     let html = `<div style="font-size:8px;font-weight:700;color:#ff9a3c;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">SPC ${dayLabel} FIRE WX</div>`;
     sorted.forEach(([label, s]) => {
         const swatch = s.kind === 'dryt'
@@ -8290,6 +8291,12 @@ function clearPane(map, paneId) {
         'wpc-ero-day1-fill', 'wpc-ero-day1-line', 'wpc-ero-day2-fill', 'wpc-ero-day2-line', 'wpc-ero-day3-fill', 'wpc-ero-day3-line',
         'spc-firewx-day1-fill', 'spc-firewx-day1-line', 'spc-firewx-day1-dryt',
         'spc-firewx-day2-fill', 'spc-firewx-day2-line', 'spc-firewx-day2-dryt',
+        'spc-firewx-day3-fill', 'spc-firewx-day3-line', 'spc-firewx-day3-dryt',
+        'spc-firewx-day4-fill', 'spc-firewx-day4-line', 'spc-firewx-day4-dryt',
+        'spc-firewx-day5-fill', 'spc-firewx-day5-line', 'spc-firewx-day5-dryt',
+        'spc-firewx-day6-fill', 'spc-firewx-day6-line', 'spc-firewx-day6-dryt',
+        'spc-firewx-day7-fill', 'spc-firewx-day7-line', 'spc-firewx-day7-dryt',
+        'spc-firewx-day8-fill', 'spc-firewx-day8-line', 'spc-firewx-day8-dryt',
         'spc-md-fill', 'spc-md-outline', 'wpc-mpd-fill', 'wpc-mpd-outline', 'spc-lsr-icons', 'spc-lsr-mag',
         'nws-warnings-only-fill', 'nws-warnings-only-outline',
         'nws-enhanced-fill', 'nws-enhanced-outline', 'nws-enhanced-glow', 'nws-enhanced-label',
@@ -8849,8 +8856,8 @@ function startAutoRefresh() {
             if (eroActive) fetchERO(day, true);
         });
 
-        // SPC Fire Weather Outlooks (Day 1/2)
-        [1, 2].forEach(day => {
+        // SPC Fire Weather Outlooks (Day 1-8)
+        [1, 2, 3, 4, 5, 6, 7, 8].forEach(day => {
             const fwActive = Object.values(maps).some(m => isLayerVisible(m, `spc-firewx-day${day}-fill`));
             if (fwActive) fetchSPCFireWx(day, true);
         });
@@ -9440,7 +9447,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jun 26, 2026', items: [
-        'SPC Fire Weather Outlooks added under Fire & Smoke — Day 1 and Day 2. Categorical risk areas (Elevated, Critical, Extremely Critical) are shaded in SPC’s own colors and outlined; dry-thunderstorm areas draw as dashed boundaries on top. A color key shows in the bottom-left of the pane, the pane legend timestamps it, and it refreshes with new issuances.',
+        'SPC Fire Weather Outlooks added under Fire & Smoke — Day 1 through Day 8. Days 1–2 show the full categorical product (Elevated, Critical, Extremely Critical, shaded in SPC’s own colors and outlined, with dry-thunderstorm areas as dashed boundaries); Days 3–8 show the extended Critical Risk areas. A color key shows in the bottom-left of the pane, the pane legend timestamps it, and it refreshes with new issuances.',
         'Corrected NWS region groupings in the SITE and Skew-T station menus so every office sits under its official region. Soundings: Nashville (BNA), Norman (OUN), Fort Worth (FWD) and Albuquerque (ABQ) moved to Southern; Wilmington OH (ILN) to Eastern; Glasgow MT (GGW) to Western; Denver (DNR) and Riverton (RIW) to Central. Radar: the New Mexico sites (ABX, FDX, HDX) moved to Southern. (Paducah, PAH, stays in Central — Kentucky is a Central Region office.)'
     ]},
     { date: 'Jun 25, 2026', items: [
