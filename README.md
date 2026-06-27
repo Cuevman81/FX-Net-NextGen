@@ -17,29 +17,50 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 
 ## ⚡ Key Features
 
-### 🗺️ Multi-Pane Map Synchronization
-- **Quad-Pane Layouts**: Seamlessly split your view into 1, 2, or 4 independent map panes.
-- **Master Sync**: Lock all panes to a master view to instantly compare radar reflectivity, GOES infrared satellite, WPC surface fronts, and SPC severe weather outlooks across the exact same geographic region.
+### 🗺️ Multi-Pane Workspace
+- **1 / 2 / 4-Pane Layouts**: Split the view into independent map panes, each with its own products, radar site, and animation state.
+- **Workspace Tabs**: Save multiple labeled workspaces (double-click to rename, e.g. "Gulf Coast", "Severe Setup"); overlays persist across sessions.
+- **Master Sync & Looping**: Lock all panes to a master view to compare radar, satellite, surface fronts, and severe outlooks over the exact same region — with synchronized time loops.
+- **Per-Pane Legend & Data Health**: A live legend stack timestamps every active product (imagery valid time or last fetch), and a collapsible Data Health monitor groups every feed by category with red/amber/green status dots.
 
 ### 🚨 Real-Time Weather Alerts & Vector Watches
-- **National Watchdog**: Polls official NWS feeds every 15 seconds for rapid convective updates. Live scrolling ticker displays new Tornado, Severe Thunderstorm, and Flash Flood warnings.
-- **High-Fidelity Watch Vectors**: Directly integrates NOAA's REST MapServer feature service to draw pristine, county-precise polygon boundaries for Severe Thunderstorm and Tornado watches.
-- **Universal Point Query**: Clicking anywhere on the map inside an alert instantly queries the NWS active alerts database, generating beautifully formatted, color-coded stacked HTML bulletins with full precautionary actions.
+- **National Watchdog**: Polls official NWS feeds every 15 seconds for rapid convective updates. A live scrolling ticker surfaces new Tornado, Severe Thunderstorm, and Flash Flood warnings.
+- **High-Fidelity Watch Vectors**: Integrates NOAA's REST MapServer feature service to draw county-precise polygon boundaries for Severe Thunderstorm and Tornado watches, with Impact-Based-Warning (IBW) pulse styling for Considerable/Catastrophic tags.
+- **Universal Point Query**: Click anywhere inside an alert to query the NWS active-alerts database and render color-coded, stacked HTML bulletins with full precautionary actions.
 
-### 🛰️ Comprehensive Meteorological Guidance
-- **Storm Prediction Center (SPC)**: Day 1–3 Convective Outlook polygons and real-time Mesoscale Discussions (MCDs).
-- **Weather Prediction Center (WPC)**: Surface isobars, high/low pressure centers, QPF precipitation forecasts, and coded surface fronts.
-- **National Hurricane Center (NHC)**: Tropical weather outlook areas, active storm cones, and tracking forecast points.
-- **Surface Observations**: Real-time METAR station plotting (temperature, dew point, pressure, and wind barbs).
-- **Interactive Soundings**: Clickable Skew-T log-P vertical atmospheric profile viewer across US sounding sites.
+### 📡 Full Radar Suite
+- **National Reflectivity (MRMS)**: Seamless CONUS base-reflectivity mosaic.
+- **Single-Site Products (NCEP)**: Per-site Reflectivity, Base Velocity, Hydrometeor Classification, Storm Total Precip, and One-Hour Precip pinned to the latest volume scan.
+- **Dual-Pol & Velocity (NODD Level III)**: A **dependency-free, stdlib-only decoder** (`api/radar-l3.py`, validated byte-for-byte against MetPy) renders Correlation Coefficient (CC), Differential Reflectivity (ZDR), Specific Differential Phase (KDP), and true **Storm Relative Velocity (SRM, product 56)** — at the 0.5° tilt, georeferenced as transparent PNG overlays with AWIPS-style color tables.
+
+### 🛰️ Satellite & Lightning
+- **GOES-East (NASA GIBS)**: All ABI visible/water-vapor/infrared channels plus GeoColor composites, with smooth time-looping driven by real published frame times.
+- **Lightning**: Near-real-time strike density (NLDN via nowCOAST).
+
+### 🔥 Severe, Fire & Hydro Guidance
+- **Storm Prediction Center (SPC)**: Day 1–3 Convective Outlooks (categorical), Day 1–2 probabilistic Tornado/Wind/Hail with significant-severe hatching, **Fire Weather Outlooks Day 1–8**, and Mesoscale Discussions (MCDs).
+- **Weather Prediction Center (WPC)**: Surface isobars, high/low centers, coded fronts, QPF, **Excessive Rainfall Outlooks (ERO)**, and Mesoscale Precipitation Discussions (MPDs).
+- **NHC-Style Discussion Popups**: Click any SPC/fire-weather/tropical area to open the official text discussion for that hazard in an in-app browser.
+- **Fire & Smoke / Air Quality**: HMS smoke plumes, FIRMS active-fire detections, and AQI.
+- **Rivers, Drought & Climate**: USGS/NWS river-gauge stages, US Drought Monitor, and CPC climate outlooks.
+
+### 🌐 Observations, Soundings & Tools
+- **National Hurricane Center (NHC)**: Tropical weather outlook areas, active storm cones, and forecast track points.
+- **Surface Observations**: Real-time METAR plotting (temperature, dew point, pressure, wind barbs) plus isobar/isotherm/isodrosotherm analysis.
+- **Interactive Soundings**: Clickable Skew-T log-P viewer across US sounding sites.
+- **Solar Tools**: Day/Night terminator with a click-anywhere solar calculator (sunrise/sunset, twilight, solar noon, day length, declination).
 
 ---
 
 ## 🚀 Cloud Deployment (Vercel)
-This project comes fully configured for instant cloud hosting on **Vercel** with zero backend infrastructure needed:
-- **Edge Rewrites (`vercel.json`)**: Bypasses strict CORS policies on government servers by automatically proxying NOAA and Aviation Weather Center endpoints directly at the global edge network.
-- **Serverless Python (`api/drought-monitor.py`)**: Dynamically computes date offsets and retrieves high-fidelity US Drought Monitor GeoJSON.
-- **Runtime Diagnostics (`api/log.py`)**: Captures client diagnostic logs directly into your Vercel runtime console.
+This project is configured for instant cloud hosting on **Vercel** with no managed backend:
+- **Edge Rewrites (`vercel.json`)**: Bypass strict CORS on government servers by proxying NOAA/NWS/Aviation Weather Center endpoints at the global edge.
+- **Serverless Python (`api/`)** — lightweight, dependency-light functions:
+  - `radar-l3.py` — decodes NEXRAD Level III (NODD) dual-pol & storm-relative velocity to georeferenced PNGs (stdlib + numpy/Pillow only; no MetPy).
+  - `spc-fire-wx.py`, `wpc-ero.py`, `wpc-mpd.py` — convert SPC/WPC KMZ products to GeoJSON on the fly (stdlib KML parser with XXE guards).
+  - `nhc-two-atl.py`, `nhc-two-epac.py` — NHC Tropical Weather Outlook areas for the Atlantic & East Pacific.
+  - `river-gauges.py`, `drought-monitor.py`, `gibs-times.py` — hydrology, drought GeoJSON, and live satellite frame-time discovery.
+  - `log.py` — captures client diagnostics into the Vercel runtime console.
 
 ---
 
