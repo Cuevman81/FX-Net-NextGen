@@ -5749,9 +5749,13 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'wpc-fronts-solid'), 'WPC FRONTS', '#4488ff', 'wpcFronts');
     add(isLayerVisible(map, 'wpc-qpf-layer'), 'WPC QPF', '#39ff5a', 'wpcQpf');
     if (isLayerVisible(map, 'radar-l3-layer') && paneL3[paneId]) {
-        const l3t = paneL3[paneId].meta?.time;          // "YYYY-MM-DD HH:MM:SSZ"
+        const l3m = paneL3[paneId].meta || {};
+        const l3t = l3m.time;                            // "YYYY-MM-DD HH:MM:SSZ"
         const l3suffix = (l3t && l3t.length >= 16) ? ` · ${l3t.substring(11, 16)}Z` : '';
-        rows.push({ label: `L3 ${paneL3[paneId].meta?.name || paneL3[paneId].product} · ${paneL3[paneId].station}${l3suffix}`, color: '#33c27a' });
+        // SRM carries the subtracted storm-motion vector — show it like AWIPS.
+        const sm = (l3m.product === 'N0S' && l3m.storm_spd > 0)
+            ? ` · SM ${Math.round(l3m.storm_dir)}°/${Math.round(l3m.storm_spd)}kt` : '';
+        rows.push({ label: `L3 ${l3m.name || paneL3[paneId].product} · ${paneL3[paneId].station}${l3suffix}${sm}`, color: '#33c27a' });
     }
     // Hazards
     add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d', 'spcOutlook');
@@ -7938,7 +7942,10 @@ async function loadL3Radar(paneId, station, product) {
     if (!map) return;
     addLiveLog(`L3 NODD: Loading ${station} ${product}...`, '#33c27a');
     try {
-        const res = await fetch(`/api/radar-l3?station=${station}&product=${product}`);
+        // Cache-buster so every poll truly re-lists the NODD bucket and lands on
+        // the newest volume scan (endpoint sets max-age=30; this defeats any stale
+        // browser/edge copy on the 120s refresh).
+        const res = await fetch(`/api/radar-l3?station=${station}&product=${product}&_=${Date.now()}`);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'render failed');
         if (map.getSource('radar-l3')) {
@@ -9551,6 +9558,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jun 27, 2026', items: [
+        'Storm Relative Velocity (SRM) added under Radar → NODD (Level III), at the 0.5° tilt like the other site products. This is the true storm-relative product (NEXRAD product 56, the same one AWIPS shows) — base velocity with the storm-motion vector removed — so rotation and mesocyclone couplets stand out. Green is inbound, red is outbound, magenta is range-folded; the pane legend shows the scan time and the storm motion that was subtracted (e.g. “SM 235°/12kt”).',
+        'Dual-pol / Level III overlays (SRM, CC, ZDR, KDP) now bypass any browser/edge caching on each refresh, so every 2-minute poll lands on the newest volume scan from the NODD bucket.',
+    ]},
     { date: 'Jun 26, 2026', items: [
         'Click any SPC outlook area to read its discussion — like the NHC tropical outlook. Clicking a convective categorical or probabilistic risk area, or a fire weather area (Day 1–8), pops up the category/probability and a “View Full Discussion →” button that loads the official SPC narrative for that day right in the text browser.',
         'SPC Fire Weather Outlooks added under Fire & Smoke — Day 1 through Day 8. Days 1–2 show the full categorical product (Elevated, Critical, Extremely Critical, shaded in SPC’s own colors and outlined, with dry-thunderstorm areas as dashed boundaries); Days 3–8 show the extended Critical Risk areas. A color key shows in the bottom-left of the pane, the pane legend timestamps it, and it refreshes with new issuances.',

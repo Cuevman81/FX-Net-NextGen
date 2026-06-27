@@ -1,2 +1,2 @@
-[2026-06-26T18:03:28.436Z] [INFO] [Vercel Speed Insights] Failed to load script from /_vercel/speed-insights/script.js. Please check if any content blockers are enabled and try again.
-[2026-06-26T18:03:31.060Z] [INFO] [Vercel Speed Insights] Failed to load script from /_vercel/speed-insights/script.js. Please check if any content blockers are enabled and try again.
+[2026-06-27T12:46:28.915Z] [INFO] [Vercel Speed Insights] Failed to load script from /_vercel/speed-insights/script.js. Please check if any content blockers are enabled and try again.
+[2026-06-27T12:46:31.334Z] [INFO] [Vercel Speed Insights] Failed to load script from /_vercel/speed-insights/script.js. Please check if any content blockers are enabled and try again.
