@@ -155,6 +155,22 @@ body {
     color: var(--text-dim);
 }
 
+/* Subtle "view source" link on its own line below the author credit (open source) */
+.repo-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    font-size: 9px;
+    letter-spacing: 0.3px;
+    color: var(--text-dim);
+    text-decoration: none;
+    width: fit-content;
+    transition: color 0.15s ease;
+}
+.repo-link:hover { color: var(--accent-cyan); }
+.repo-link svg { flex: 0 0 auto; }
+
 /* ── Watchdog Status ── */
 .status-indicator {
     font-size: 8px;
