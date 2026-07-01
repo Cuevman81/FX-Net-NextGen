@@ -425,14 +425,37 @@ function goesChannelTimeSuffix(ch) {
     return (t && t.length >= 16) ? ` · ${t.substring(11, 16)}Z` : '';
 }
 
+// Exact valid time of the image behind IEM's live per-channel tiles (tiny CORS-*
+// JSON published next to each image). GOES-East is currently GOES-19; try the
+// prior platform too so a satellite swap degrades to "no timestamp", not a break.
+let iemGoesValid = {};   // ch -> ISO valid string
+async function fetchIemGoesValid(ch) {
+    const pad = String(ch).padStart(2, '0');
+    for (const sat of ['GOES-19', 'GOES-16']) {
+        try {
+            const r = await fetch(`https://mesonet.agron.iastate.edu/data/gis/images/GOES/conus/channel${pad}/${sat}_C${pad}.json`, { cache: 'no-store' });
+            if (!r.ok) continue;
+            const j = await r.json();
+            if (j?.meta?.valid) { iemGoesValid[ch] = j.meta.valid; return j.meta.valid; }
+        } catch (e) { /* try next platform */ }
+    }
+    return iemGoesValid[ch] || null;
+}
+
 // ─── NASA GIBS GOES-East (web-mercator WMTS tiles, real time-stamped frames) ───
 // Browser-direct (CORS *), no proxy/render. Gives clean looping (real 10-min
 // frames) AND smooth panning (tiles), incl. the GeoColor/composite products that
 // the per-channel IEM tiles + category-based nowCOAST loop never animated cleanly.
+// iemCh: products with a 1:1 ABI channel get their LIVE frame from IEM's
+// per-channel tile cache (~5-10 min behind the scan) instead of the newest
+// published GIBS frame (~45-60 min publication lag). Loops still run on GIBS
+// timestamped frames — the IEM cache has no time dimension. The RGB composites
+// (GeoColor/AirMass/Dust/FireTemp) have no single-channel equivalent, so their
+// live frame stays GIBS.
 const GIBS_PRODUCTS = {
     GeoColor: { layer: 'GOES-East_ABI_GeoColor',            tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'GeoColor' },
-    CleanIR:  { layer: 'GOES-East_ABI_Band13_Clean_Infrared', tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Clean IR (Band 13)' },
-    RedVis:   { layer: 'GOES-East_ABI_Band2_Red_Visible_1km', tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Red Visible' },
+    CleanIR:  { layer: 'GOES-East_ABI_Band13_Clean_Infrared', tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Clean IR (Band 13)', iemCh: 13 },
+    RedVis:   { layer: 'GOES-East_ABI_Band2_Red_Visible_1km', tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Red Visible', iemCh: 2 },
     AirMass:  { layer: 'GOES-East_ABI_Air_Mass',            tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Air Mass RGB' },
     Dust:     { layer: 'GOES-East_ABI_Dust',                tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Dust RGB' },
     FireTemp: { layer: 'GOES-East_ABI_FireTemp',            tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Fire Temp RGB' }
@@ -7993,9 +8016,13 @@ async function loadGibsLive(paneId, prodKey) {
     // Visible) the 'default' keyword AND the newest raw domain timestamps are
     // often BLANK; /api/gibs-times now drops every unpublished frame, so the
     // refresh below lands on a frame that actually has tiles.
+    // Products with iemCh skip GIBS for the live view entirely — IEM's
+    // per-channel cache is ~5-10 min behind the scan vs GIBS' ~45-60 min lag.
     const times = gibsTimesCache[prodKey] || [];
-    paneGibsTime[paneId] = times.length ? times[times.length - 1] : null;
-    const url = gibsTileUrl(prodKey, times.length ? times[times.length - 1] : 'default');
+    paneGibsTime[paneId] = p.iemCh ? (iemGoesValid[p.iemCh] || null)
+                                   : (times.length ? times[times.length - 1] : null);
+    const url = p.iemCh ? cacheBust(goesChannelUrl(p.iemCh))
+                        : gibsTileUrl(prodKey, times.length ? times[times.length - 1] : 'default');
     // Recreate the source when switching products (maxzoom differs); else just retile
     if (map.getSource('gibs-sat') && prev === prodKey) {
         map.getSource('gibs-sat').setTiles([url]);
@@ -8011,15 +8038,27 @@ async function loadGibsLive(paneId, prodKey) {
     updateHealth('gibsSat');
     if (paneId === activePaneId) refreshTimestampLabel();
     addLiveLog(`GIBS: ${p.label} (GOES-East) loaded`, '#00e5ff');
-    // Always (re)warm the published-frame time list so the live view heals to a
-    // real frame and looping is ready + current.
-    fetchGibsTimes(prodKey).then(t => {
-        if (t.length && paneGibs[paneId] === prodKey && map.getSource('gibs-sat')) {
-            map.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, t[t.length - 1])]);
-            paneGibsTime[paneId] = t[t.length - 1];
-            if (paneId === activePaneId) refreshTimestampLabel();
-        }
-    });
+    // Always (re)warm the published-frame time list so looping is ready + current.
+    // Hybrid (iemCh) products keep their fresher IEM live tiles — only pull the
+    // exact IEM valid time for the legend; non-hybrid products heal the live view
+    // onto the newest published GIBS frame.
+    if (p.iemCh) {
+        fetchGibsTimes(prodKey);
+        fetchIemGoesValid(p.iemCh).then(v => {
+            if (v && paneGibs[paneId] === prodKey) {
+                paneGibsTime[paneId] = v;
+                if (paneId === activePaneId) refreshTimestampLabel();
+            }
+        });
+    } else {
+        fetchGibsTimes(prodKey).then(t => {
+            if (t.length && paneGibs[paneId] === prodKey && map.getSource('gibs-sat')) {
+                map.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, t[t.length - 1])]);
+                paneGibsTime[paneId] = t[t.length - 1];
+                if (paneId === activePaneId) refreshTimestampLabel();
+            }
+        });
+    }
 }
 
 function clearGibs(paneId) {
@@ -8902,10 +8941,23 @@ function startAutoRefresh() {
         }
 
         // GIBS GOES-East refresh — advance to the newest published frame so the
-        // imagery and its valid-time label stay current.
+        // imagery and its valid-time label stay current. Hybrid (iemCh) products
+        // instead re-pull IEM's live per-channel tiles + exact valid time.
         Object.entries(maps).forEach(([paneId, m]) => {
             const prodKey = paneGibs[paneId];
             if (!prodKey || !m.getSource('gibs-sat') || !isLayerVisible(m, 'gibs-sat-layer')) return;
+            const p = GIBS_PRODUCTS[prodKey];
+            if (p.iemCh) {
+                m.getSource('gibs-sat').setTiles([cacheBust(goesChannelUrl(p.iemCh))]);
+                updateHealth('gibsSat');
+                fetchIemGoesValid(p.iemCh).then(v => {
+                    if (v && paneGibs[paneId] === prodKey) {
+                        paneGibsTime[paneId] = v;
+                        if (paneId === activePaneId) refreshTimestampLabel();
+                    }
+                });
+                return;
+            }
             fetchGibsTimes(prodKey).then(t => {
                 if (!t.length || paneGibs[paneId] !== prodKey || !m.getSource('gibs-sat')) return;
                 const newest = t[t.length - 1];
@@ -9568,6 +9620,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 1, 2026', items: [
+        'Much fresher live satellite for Clean IR and Red Visible — the live (non-looping) view of these two products now comes from IEM\'s per-channel GOES-East cache, typically 5–10 minutes behind the actual scan instead of the ~45–60 minute publication lag of the NASA GIBS feed. The pane legend shows the exact image valid time. Loops still run on GIBS timestamped frames (IEM has no time history), so animation quality is unchanged — you get the fresh frame live and the clean loop when animating.',
         'Under-the-hood hardening pass from a full code audit: the map engine (MapLibre) and icon library are now bundled with the app instead of loaded from a third-party CDN, so an outside outage or a bad library release can never take the workstation down.',
         'API responses are now properly cached at the network edge — outlook, drought, river-gauge and MPD layers load noticeably faster on repeat visits, and the app is far gentler on the NOAA source servers.',
         'All alert bulletins, storm-report remarks, and river-gauge popups now render feed text safely (script-injection hardening), and the in-app diagnostics log no longer grows without limit during long sessions.',
