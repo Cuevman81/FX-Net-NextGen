@@ -68,6 +68,15 @@ let warningsGeoJSON = { type: 'FeatureCollection', features: [] };
 // outlines with minimal fill so numerous overlapping warnings stay legible.
 let warningOutlineMode = (() => { try { return localStorage.getItem('fxnet_warn_outline') === '1'; } catch (e) { return false; } })();
 
+// Escape feed-derived text before interpolating into innerHTML. NWS/CAP alert
+// text, LSR spotter remarks, gauge names, etc. originate from many upstream
+// systems — never trust them as markup.
+function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+
 // Severity priority for warning z-order. Higher = more urgent = drawn LAST in
 // source order so it renders on top where polygons overlap.
 function warningPriority(ev) {
@@ -2934,7 +2943,7 @@ function initFrontalPipIcons(map) {
         const p = e.features[0].properties;
         const coord = e.features[0].geometry.coordinates;
         const timeStr = p.valid ? new Date(p.valid).toUTCString() : 'Recent';
-        const mag = p.magnitude && p.unit ? `<div><span style="color:#888;">Magnitude:</span> ${p.magnitude} ${p.unit}</div>` : (p.magnitude ? `<div><span style="color:#888;">Magnitude:</span> ${p.magnitude}</div>` : '');
+        const mag = p.magnitude && p.unit ? `<div><span style="color:#888;">Magnitude:</span> ${esc(p.magnitude)} ${esc(p.unit)}</div>` : (p.magnitude ? `<div><span style="color:#888;">Magnitude:</span> ${esc(p.magnitude)}</div>` : '');
         const typeColors = {
             'TORNADO': '#ff0000', 'HAIL': '#00cc00', 'TSTM WND GST': '#3399ff',
             'TSTM WND DMG': '#3399ff', 'FLASH FLOOD': '#00cccc', 'FLOOD': '#008888',
@@ -2942,12 +2951,12 @@ function initFrontalPipIcons(map) {
         };
         const color = typeColors[p.lsrType] || '#ff9900';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
-            <div style="font-weight:bold;color:${color};font-size:13px;margin-bottom:2px;">${p.icon || '⚡'} ${p.lsrType}</div>
-            <div style="color:#aaa;margin-bottom:2px;">${p.city}, ${p.county} Co., ${p.state}</div>
-            <div style="color:#888;margin-bottom:6px;">${timeStr} — WFO: ${p.wfo}</div>
+            <div style="font-weight:bold;color:${color};font-size:13px;margin-bottom:2px;">${p.icon || '⚡'} ${esc(p.lsrType)}</div>
+            <div style="color:#aaa;margin-bottom:2px;">${esc(p.city)}, ${esc(p.county)} Co., ${esc(p.state)}</div>
+            <div style="color:#888;margin-bottom:6px;">${timeStr} — WFO: ${esc(p.wfo)}</div>
             ${mag}
-            <div style="color:#888;margin-bottom:4px;"><span style="color:#888;">Source:</span> ${p.source}</div>
-            ${p.remark ? `<div style="color:#ccc;font-style:italic;margin-top:4px;border-top:1px solid #333;padding-top:4px;">${p.remark}</div>` : ''}
+            <div style="color:#888;margin-bottom:4px;"><span style="color:#888;">Source:</span> ${esc(p.source)}</div>
+            ${p.remark ? `<div style="color:#ccc;font-style:italic;margin-top:4px;border-top:1px solid #333;padding-top:4px;">${esc(p.remark)}</div>` : ''}
             <div style="color:#555;margin-top:4px;">${coord ? coord[1].toFixed(4) + '°N, ' + Math.abs(coord[0]).toFixed(4) + '°W' : ''}</div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
@@ -4638,8 +4647,8 @@ async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
         const wfo = g.wfo?.abbreviation || '';
 
         let html = `
-            <div style="color:#88ccff; font-size:9px; margin-bottom:2px; font-weight:bold;">${g.name || gaugeId}</div>
-            <div style="color:#777; font-size:8px; margin-bottom:6px;">${locStr} | WFO: ${wfo} | ID: ${g.lid}</div>
+            <div style="color:#88ccff; font-size:9px; margin-bottom:2px; font-weight:bold;">${esc(g.name || gaugeId)}</div>
+            <div style="color:#777; font-size:8px; margin-bottom:6px;">${locStr} | WFO: ${esc(wfo)} | ID: ${esc(g.lid)}</div>
             <table style="border-collapse:collapse; width:100%; margin-bottom:6px;">
                 <tr style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">
                     <td style="padding:1px 6px 3px 0;"></td>
@@ -4676,11 +4685,11 @@ async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
             html += `<div style="border-top:1px solid rgba(0,229,255,0.15); padding-top:4px; margin-bottom:3px;">
                 <span style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">Hydrograph</span>
             </div>
-            <img src="${images.default}" style="width:100%; max-width:420px; border-radius:3px; border:1px solid rgba(0,229,255,0.15);" onerror="this.style.display='none'" />`;
+            <img src="${esc(images.default)}" style="width:100%; max-width:420px; border-radius:3px; border:1px solid rgba(0,229,255,0.15);" onerror="this.style.display='none'" />`;
         }
 
         // Link to water.weather.gov
-        html += `<div style="margin-top:4px;"><a href="https://water.weather.gov/ahps2/hydrograph.php?gage=${gaugeId.toLowerCase()}&wfo=${wfo.toLowerCase()}" target="_blank" style="color:#00e5ff; font-size:8px; text-decoration:none;">Open on water.weather.gov &rarr;</a></div>`;
+        html += `<div style="margin-top:4px;"><a href="https://water.weather.gov/ahps2/hydrograph.php?gage=${encodeURIComponent(gaugeId.toLowerCase())}&wfo=${encodeURIComponent(wfo.toLowerCase())}" target="_blank" style="color:#00e5ff; font-size:8px; text-decoration:none;">Open on water.weather.gov &rarr;</a></div>`;
 
         const panel = document.getElementById('river-gauge-panel');
         const body = document.getElementById('river-gauge-body');
@@ -5140,7 +5149,7 @@ function buildWarningItem(event, area, severity, props) {
     if (isEmergency) {
         ibwBadge = '<span class="ibw-badge ibw-emergency">⚠ EMERGENCY</span>';
     } else if (threat === 'Catastrophic' || threat === 'Destructive') {
-        ibwBadge = `<span class="ibw-badge ibw-catastrophic">⚠ ${threat.toUpperCase()}</span>`;
+        ibwBadge = `<span class="ibw-badge ibw-catastrophic">⚠ ${esc(threat.toUpperCase())}</span>`;
     } else if (threat === 'Considerable') {
         ibwBadge = '<span class="ibw-badge ibw-considerable">⚠ CONSIDERABLE</span>';
     } else if (isPDS) {
@@ -5148,19 +5157,19 @@ function buildWarningItem(event, area, severity, props) {
     }
 
     if (ibwBadge) item.classList.add('ibw-enhanced');
-    item.innerHTML = `<div class="warning-header">${time}Z — ${event || 'Alert'}${ibwBadge}</div><div>${stateTag}${(area || '').substring(0, 120)}</div>`;
+    item.innerHTML = `<div class="warning-header">${time}Z — ${esc(event || 'Alert')}${ibwBadge}</div><div>${stateTag}${esc((area || '').substring(0, 120))}</div>`;
 
     item.addEventListener('click', () => {
         const panel = document.getElementById('text-panel');
         const content = document.getElementById('text-product-content');
         if (!panel || !content) return;
-        const desc = (props?.description || 'No description available.').replace(/\n/g, '<br>');
-        const instr = (props?.instruction || '').replace(/\n/g, '<br>');
+        const desc = esc(props?.description || 'No description available.').replace(/\n/g, '<br>');
+        const instr = esc(props?.instruction || '').replace(/\n/g, '<br>');
         const expires = props?.expires ? new Date(props.expires).toUTCString() : 'Unknown';
         content.innerHTML = `<div style="font-family:'Courier New',monospace;font-size:12px;color:#e0e0e0;line-height:1.6;">` +
-            `<div style="font-weight:bold;color:${getEventColor(props?.event)};font-size:15px;margin-bottom:6px;">${props?.event || 'Weather Alert'}</div>` +
-            `<div style="color:#888;margin-bottom:2px;">${senderName}</div>` +
-            `<div style="margin-bottom:6px;">${props?.headline || ''}</div>` +
+            `<div style="font-weight:bold;color:${getEventColor(props?.event)};font-size:15px;margin-bottom:6px;">${esc(props?.event || 'Weather Alert')}</div>` +
+            `<div style="color:#888;margin-bottom:2px;">${esc(senderName)}</div>` +
+            `<div style="margin-bottom:6px;">${esc(props?.headline || '')}</div>` +
             `<div style="color:#ffb300;font-size:11px;margin-bottom:10px;">Expires: ${expires}</div>` +
             `<div style="border-top:1px solid #333;padding-top:8px;white-space:pre-wrap;">${desc}</div>` +
             (instr ? `<div style="border-top:1px solid #333;margin-top:10px;padding-top:8px;color:#00e5ff;white-space:pre-wrap;"><b>PRECAUTIONARY/PREPAREDNESS ACTIONS:</b><br>${instr}</div>` : '') +
@@ -9558,6 +9567,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 1, 2026', items: [
+        'Under-the-hood hardening pass from a full code audit: the map engine (MapLibre) and icon library are now bundled with the app instead of loaded from a third-party CDN, so an outside outage or a bad library release can never take the workstation down.',
+        'API responses are now properly cached at the network edge — outlook, drought, river-gauge and MPD layers load noticeably faster on repeat visits, and the app is far gentler on the NOAA source servers.',
+        'All alert bulletins, storm-report remarks, and river-gauge popups now render feed text safely (script-injection hardening), and the in-app diagnostics log no longer grows without limit during long sessions.',
+    ]},
     { date: 'Jun 27, 2026', items: [
         'Storm Relative Velocity (SRM) added under Radar → NODD (Level III), at the 0.5° tilt like the other site products. This is the true storm-relative product (NEXRAD product 56, the same one AWIPS shows) — base velocity with the storm-motion vector removed — so rotation and mesocyclone couplets stand out. Green is inbound, red is outbound, magenta is range-folded; the pane legend shows the scan time and the storm motion that was subtracted (e.g. “SM 235°/12kt”).',
         'Dual-pol / Level III overlays (SRM, CC, ZDR, KDP) now bypass any browser/edge caching on each refresh, so every 2-minute poll lands on the newest volume scan from the NODD bucket.',

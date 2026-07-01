@@ -5,13 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FX-Net NextGen | Tactical Meteorological Workstation</title>
     <link rel="icon" href="data:,">
-    <script src="diagnostics.js?v=44"></script>
+    <script src="diagnostics.js?v=45"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Roboto+Mono&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Vendored libraries (pinned: MapLibre GL 3.6.2, Lucide 1.23.0) — self-hosted so a
+         CDN outage or a mutated @latest release can never break or tamper with the app. -->
+    <script src="vendor/maplibre-gl.js"></script>
+    <link href="vendor/maplibre-gl.css" rel="stylesheet" />
+    <script src="vendor/lucide.min.js"></script>
     <link rel="stylesheet" href="style.css?v=115">
     <!-- Vercel Speed Insights -->
     <script type="module">
@@ -924,7 +926,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=207"></script>
+    <script src="app.js?v=208"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

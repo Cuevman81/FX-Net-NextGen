@@ -121,6 +121,8 @@ class handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
+            # Browser revalidates after 2 min; Vercel CDN shields WPC for 10 min.
+            self.send_header('Cache-Control', 'public, max-age=120, s-maxage=600')
             self.end_headers()
             self.wfile.write(body)
         except Exception as e:

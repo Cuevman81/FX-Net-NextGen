@@ -71,7 +71,7 @@ def _read_shp_polygons(data):
 
 
 def fetch_active_mpds():
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     sts = (now - datetime.timedelta(hours=36)).strftime('%Y-%m-%dT%H:%MZ')
     ets = (now + datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%MZ')
     url = f'{IEM_MPD}?sts={sts}&ets={ets}&format=shp'
@@ -125,6 +125,8 @@ class handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
+            # MPDs are sporadic; 1 min browser / 5 min CDN keeps the IEM fetch rare.
+            self.send_header('Cache-Control', 'public, max-age=60, s-maxage=300')
             self.end_headers()
             self.wfile.write(body)
         except Exception as e:

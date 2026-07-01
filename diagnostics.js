@@ -11,16 +11,26 @@ window.diagnosticsLogs = [];
 const originalLog = console.log;
 const originalError = console.error;
 
+// The /log capture route only exists on the local dev server (server.py); on
+// Vercel every POST would 404. Only ship logs when running on localhost.
+const LOG_TO_SERVER = ['localhost', '127.0.0.1'].includes(location.hostname);
+const MAX_DIAG_LOGS = 2000;   // keep memory bounded on long-running sessions
+
 function appendToLiveLog(msg, type = 'info') {
     const entry = `[${new Date().toISOString()}] [${type.toUpperCase()}] ${msg}`;
     window.diagnosticsLogs.push(entry);
-    
+    if (window.diagnosticsLogs.length > MAX_DIAG_LOGS) {
+        window.diagnosticsLogs.splice(0, window.diagnosticsLogs.length - MAX_DIAG_LOGS);
+    }
+
     // Send directly to the local python server
-    fetch('/log', {
-        method: 'POST',
-        body: entry
-    }).catch(e => { /* Ignore errors so we don't infinitely loop log errors */ });
-    
+    if (LOG_TO_SERVER) {
+        fetch('/log', {
+            method: 'POST',
+            body: entry
+        }).catch(e => { /* Ignore errors so we don't infinitely loop log errors */ });
+    }
+
     // Attempt to add to DOM if it's ready
     const container = document.getElementById('live-log-entries');
     if (container) {
@@ -29,6 +39,7 @@ function appendToLiveLog(msg, type = 'info') {
         div.style.color = type === 'error' ? '#ff4444' : (type === 'warn' ? '#ffaa00' : '#00ff88');
         div.style.marginBottom = '2px';
         container.appendChild(div);
+        while (container.children.length > 200) container.firstChild.remove();
         container.scrollTop = container.scrollHeight;
     }
 }

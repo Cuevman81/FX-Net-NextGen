@@ -4,17 +4,15 @@ import os
 import urllib.request
 import urllib.error
 import json
-import ssl
 
 PORT = 8888
 LOG_FILE = "fxnet_diagnostic_log.txt"
 
 def safe_urlopen(req, timeout=15):
-    try:
-        context = ssl._create_unverified_context()
-        return urllib.request.urlopen(req, timeout=timeout, context=context)
-    except AttributeError:
-        return urllib.request.urlopen(req, timeout=timeout)
+    # TLS certificates are verified (Python's default). If this ever fails with
+    # SSLCertVerificationError on a fresh macOS Python, install its root certs:
+    #   /Applications/Python 3.x/Install Certificates.command
+    return urllib.request.urlopen(req, timeout=timeout)
 
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -23,7 +21,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         if path == '/api/metar':
             try:
                 # Proxy the AWC request using explicit IDs to avoid bounding box limit failures
-                icao_list = "KATL,KORD,KDFW,KDEN,KJFK,KLAX,KSEA,KSFO,KMIA,KPHX,KMSP,KDTW,KBOS,KPHL,KCLT,KSLC,KMCO,KIAD,KEWR,KMDW,KTPA,KPDX,KHOU,KDAL,KSJC,KSTL,KBWI,KMSY,KMEM,KCLE,KIND,KAUS,KSAT,KRDU,KCVG,KSDF,KPIT,KMKE,KBUF,KOMA,KOKC,KRIC,KHNL,PANC,KABQ,KCHS,KCMH,KRSW,KBDL,KBOI,KBUR,KPVD,KPBI,KORF,KMYR,KSRQ,KILM,KTLH,KJAX,KPNS,KVPS,KMOB,KBHM,KBNA,KHSV,KLIT,KJAN,KGPT,KLFT,KXNA,KBTR,KSHV,KSFB,KEYW,KMLB,KPGD,KAPF,KPIE,KGNV,KCRG,KECP,KVLD,KDAB,KSAV,KDHN,KCSG,KABY,KAGS,KVQQ,KSSI,KCAE,KFLO,KOAJ,KPHF,KCHO,KROA,KLYH,KCRW,KBLF,KHTS,KPKB,KCKB,KBKW,KEKN,KMGW,KHLG,KLWB,KSHD,KOKV,KFRR,KCJR,KHWY,KMTN,KDCA,KILG,KDOV,KTTN,KACY,KBLM,KMIV,KWRI,KVAY,KCDW,KSMQ,KTEB,KMMU,KFWN,KLDJ,KDYL,KPTW,KUKT,KLOM,KMQS,KPNE,KCKZ,KABE,KRDG,KBCB,KPSK,KVJI,KTNB,KGEV,KGKT,KDKK,KMEV,KSYP,KSKF,KEDC,KHYI,KGTU,KBAZ,KRBD,KSSF,KCVB,KERV,KPEZ,KSZT,KCOE,KPBF,KPEQ,KDSM,KCID,KDBQ,KSUX,KMLI,KPIA,KSPI,KCMI,KBMG,KLAF,KFWA,KSBN,KGRR,KLAN,KFNT,KMBS,KTVC,KPLN,KAPN,KMQT,KIMT,KGRB,KATW,KCWA,KEAU,KLSE,KRST,KDLH,KBRD,KSTC,KFAR,KGFK,KBIS,KMOT,KDIK,KJMS,KABR,KPIR,KRAP,KFSD,KSUA,KVTN,KLBF,KGRI,KMCK,KGLD,KHYS,KSLN,KGBD,KDDC,KGCK,KHUT,KICT,KTOP,KMHK,KLNK,KCNU,KJLN,KSGF,KCGI,KPAH,KEVV,KOWB,KLEX,KCRW,KHTS,KPKB,KCKB,KEKN,KGEG,KPUW,KALW,KPSC,KYKM,KEAT,KMWH,KOLM,KHQM,KUIL,KAST,KTMK,KSLE,KEUG,KOTH,KACV,KCEC,KRDD,KCIC,KSMF,KSCK,KMOD,KMER,KFAT,KVIS,KBFL,KPMD,KWJF,KNID,KTRM,KIPL,KNYL,KPRC,KFLG,KINW,KSAW,KPGA,KGCN,KSGE,KCGZ,KDUG,KTUS,KFHU,KSAD,KOLS,KALS,KDRO,KTEX,KMTJ,KGJT,KRIL,KEGE,KASE,KSBS,KHDN,KCAG,KCPR,KGCC,KSHR,KCOD"
+                icao_list = "KATL,KORD,KDFW,KDEN,KJFK,KLAX,KSEA,KSFO,KMIA,KPHX,KMSP,KDTW,KBOS,KPHL,KCLT,KSLC,KMCO,KIAD,KEWR,KMDW,KTPA,KPDX,KHOU,KDAL,KSJC,KSTL,KBWI,KMSY,KMEM,KCLE,KIND,KAUS,KSAT,KRDU,KCVG,KSDF,KPIT,KMKE,KBUF,KOMA,KOKC,KRIC,KHNL,PANC,KABQ,KCHS,KCMH,KRSW,KBDL,KBOI,KBUR,KPVD,KPBI,KORF,KMYR,KSRQ,KILM,KTLH,KJAX,KPNS,KVPS,KMOB,KBHM,KBNA,KHSV,KLIT,KJAN,KGPT,KLFT,KXNA,KBTR,KSHV,KSFB,KEYW,KMLB,KPGD,KAPF,KPIE,KGNV,KCRG,KECP,KVLD,KDAB,KSAV,KDHN,KCSG,KABY,KAGS,KVQQ,KSSI,KCAE,KFLO,KOAJ,KPHF,KCHO,KROA,KLYH,KCRW,KBLF,KHTS,KPKB,KCKB,KBKW,KEKN,KMGW,KHLG,KLWB,KSHD,KOKV,KFRR,KCJR,KHWY,KMTN,KDCA,KILG,KDOV,KTTN,KACY,KBLM,KMIV,KWRI,KVAY,KCDW,KSMQ,KTEB,KMMU,KFWN,KLDJ,KDYL,KPTW,KUKT,KLOM,KMQS,KPNE,KCKZ,KABE,KRDG,KBCB,KPSK,KVJI,KTNB,KGEV,KGKT,KDKK,KMEV,KSYP,KSKF,KEDC,KHYI,KGTU,KBAZ,KRBD,KSSF,KCVB,KERV,KPEZ,KSZT,KCOE,KPBF,KPEQ,KDSM,KCID,KDBQ,KSUX,KMLI,KPIA,KSPI,KCMI,KBMG,KLAF,KFWA,KSBN,KGRR,KLAN,KFNT,KMBS,KTVC,KPLN,KAPN,KMQT,KIMT,KGRB,KATW,KCWA,KEAU,KLSE,KRST,KDLH,KBRD,KSTC,KFAR,KGFK,KBIS,KMOT,KDIK,KJMS,KABR,KPIR,KRAP,KFSD,KSUA,KVTN,KLBF,KGRI,KMCK,KGLD,KHYS,KSLN,KGBD,KDDC,KGCK,KHUT,KICT,KTOP,KMHK,KLNK,KCNU,KJLN,KSGF,KCGI,KPAH,KEVV,KOWB,KLEX,KGEG,KPUW,KALW,KPSC,KYKM,KEAT,KMWH,KOLM,KHQM,KUIL,KAST,KTMK,KSLE,KEUG,KOTH,KACV,KCEC,KRDD,KCIC,KSMF,KSCK,KMOD,KMER,KFAT,KVIS,KBFL,KPMD,KWJF,KNID,KTRM,KIPL,KNYL,KPRC,KFLG,KINW,KSAW,KPGA,KGCN,KSGE,KCGZ,KDUG,KTUS,KFHU,KSAD,KOLS,KALS,KDRO,KTEX,KMTJ,KGJT,KRIL,KEGE,KASE,KSBS,KHDN,KCAG,KCPR,KGCC,KSHR,KCOD"
                 req = urllib.request.Request(f"https://aviationweather.gov/api/data/metar?format=geojson&ids={icao_list}")
                 req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
                 with safe_urlopen(req, timeout=15) as response:
@@ -35,7 +33,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             except Exception as e:
                 self.send_response(500)
                 self.end_headers()
-                self.wfile.write(f'{{"type":"FeatureCollection","features":[],"error":"{str(e)}"}}'.encode())
+                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
         elif path == '/api/wpc-isobars':
             try:
                 req = urllib.request.Request('https://ftp-wpc.ncep.noaa.gov/sfcanl_isobars/isobars_latest.txt')
@@ -151,7 +149,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             except Exception as e:
                 self.send_response(500)
                 self.end_headers()
-                self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
 
         elif path == '/api/wpc-ero':
             # WPC Excessive Rainfall Outlook (KMZ -> GeoJSON). Reuse the Vercel
@@ -177,7 +175,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(500)
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
 
         elif path == '/api/spc-fire-wx':
             # SPC Fire Weather Outlook (KMZ -> GeoJSON). Reuse the Vercel
@@ -203,7 +201,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(500)
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
 
         elif path == '/api/radar-l3':
             # NEXRAD Level III (NODD) -> transparent georeferenced radar overlay.
@@ -273,7 +271,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(500)
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(f'{{"error":"{str(e)}"}}'.encode())
+                self.wfile.write(json.dumps({'error': str(e)}).encode())
 
         else:
             # Fallback to serving regular static files
@@ -281,12 +279,12 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == '/log':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            
+            content_length = min(int(self.headers.get('Content-Length', 0) or 0), 64 * 1024)
+            post_data = self.rfile.read(content_length) if content_length > 0 else b''
+
             # Append log entry to the file
             with open(LOG_FILE, 'a') as f:
-                f.write(post_data.decode('utf-8') + '\n')
+                f.write(post_data.decode('utf-8', errors='replace') + '\n')
                 
             self.send_response(200)
             self.end_headers()

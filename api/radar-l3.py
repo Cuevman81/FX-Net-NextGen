@@ -15,6 +15,7 @@ from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone, timedelta
 import urllib.request
 import xml.etree.ElementTree as ET
+import re
 import struct
 import bz2
 import io
@@ -26,6 +27,7 @@ import numpy as np
 from PIL import Image
 
 L3_BUCKET = 'https://unidata-nexrad-level3.s3.amazonaws.com'
+_STATION_RE = re.compile(r'^[A-Z0-9]{3,4}$')   # guard against URL injection
 
 # Per-product calibration. value = scale*code + offset for code>=2 (codes 0,1 are
 # below-threshold / range-folded -> transparent). gate_km = range-bin spacing.
@@ -301,6 +303,8 @@ def render_v16(dec):
 
 
 def build_radar(station, product):
+    if not _STATION_RE.match(station):
+        raise ValueError('invalid station')
     if product not in CAL and product not in V16:
         raise ValueError(f'unsupported product {product}')
     key = fetch_latest_key(station, product)

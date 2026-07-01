@@ -2,6 +2,7 @@ from http.server import BaseHTTPRequestHandler
 import urllib.request
 import urllib.error
 import datetime
+import json
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -31,6 +32,8 @@ class handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
+            # USDM updates weekly (Thursdays); cache aggressively.
+            self.send_header('Cache-Control', 'public, max-age=3600, s-maxage=21600')
             self.end_headers()
             self.wfile.write(data)
         except Exception as e:
@@ -38,4 +41,4 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(f'{{"error": "{str(e)}"}}'.encode())
+            self.wfile.write(json.dumps({'error': str(e)}).encode())
