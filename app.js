@@ -2898,9 +2898,14 @@ function initFrontalPipIcons(map) {
 
     // NWS Alert map click (Universal Point Query for Warnings, Watches, Advisories)
     map.on('click', async e => {
-        const warningsActive = isLayerVisible(map, 'nws-warnings-only-fill') || isLayerVisible(map, 'nws-advis-fill') || isLayerVisible(map, 'nws-wwa-wms-layer');
+        // Track each alert class separately so the point query surfaces only the
+        // classes whose layer is actually on — matching the map's warnings /
+        // advisories / watches split. (The legacy combined WWA WMS counts for
+        // both warnings and advisories.)
+        const warnLayerOn = isLayerVisible(map, 'nws-warnings-only-fill') || isLayerVisible(map, 'nws-wwa-wms-layer');
+        const advisLayerOn = isLayerVisible(map, 'nws-advis-fill') || isLayerVisible(map, 'nws-wwa-wms-layer');
         const watchesActive = isLayerVisible(map, 'nws-watches-only-fill') || isLayerVisible(map, 'nws-watches-wms-layer') || isLayerVisible(map, 'nws-wwa-wms-layer');
-        if (!warningsActive && !watchesActive) return;
+        if (!warnLayerOn && !advisLayerOn && !watchesActive) return;
 
         // Ensure we didn't click on a METAR or FIRMS or MD icon, or an outlook area
         // (those have their own popups; only query alerts on a "bare" map click).
@@ -2921,13 +2926,14 @@ function initFrontalPipIcons(map) {
             const data = await res.json();
             const rawFeatures = data.features || [];
             
-            // Filter features based on what layers are turned on
+            // Filter to only the alert classes whose layer is on, using the same
+            // classification as the map fill layers: Watch -> watches; else
+            // Warning/Emergency -> warnings; everything else -> advisories.
             const features = rawFeatures.filter(f => {
                 const eventName = f.properties?.event || '';
-                const isWatch = eventName.includes('Watch');
-                if (isWatch && !watchesActive) return false;
-                if (!isWatch && !warningsActive) return false;
-                return true;
+                if (eventName.includes('Watch')) return watchesActive;
+                const isWarning = eventName.includes('Warning') || eventName.includes('Emergency');
+                return isWarning ? warnLayerOn : advisLayerOn;
             });
 
             if (features.length === 0) {
@@ -9679,7 +9685,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 1, 2026', items: [
-        'Warnings and Advisories are now separate toggles under NWS WARNINGS — "Active Warnings" shows only true warnings (Tornado, Severe Thunderstorm, Flash Flood, etc.), and a new "Advisories & Statements" item shows advisories, statements, alerts and outlooks on their own — just like Active Watches already worked. Turn on either or both; each gets its own pane-legend row, and clicking an area still pops up the full bulletin.',
+        'Warnings and Advisories are now separate toggles under NWS WARNINGS — "Active Warnings" shows only true warnings (Tornado, Severe Thunderstorm, Flash Flood, etc.), and a new "Advisories & Statements" item shows advisories, statements, alerts and outlooks on their own — just like Active Watches already worked. Turn on either or both; each gets its own pane-legend row, and clicking an area still pops up the full bulletin. The click-to-query popup now respects the split too: with only Warnings on it lists just the warnings at that spot (no advisories mixed in), and vice-versa.',
         'Much fresher live satellite for Clean IR and Red Visible — the live (non-looping) view of these two products now comes from IEM\'s per-channel GOES-East cache, typically 5–10 minutes behind the actual scan instead of the ~45–60 minute publication lag of the NASA GIBS feed. The pane legend shows the exact image valid time. Loops still run on GIBS timestamped frames (IEM has no time history), so animation quality is unchanged — you get the fresh frame live and the clean loop when animating.',
         'Under-the-hood hardening pass from a full code audit: the map engine (MapLibre) and icon library are now bundled with the app instead of loaded from a third-party CDN, so an outside outage or a bad library release can never take the workstation down.',
         'API responses are now properly cached at the network edge — outlook, drought, river-gauge and MPD layers load noticeably faster on repeat visits, and the app is far gentler on the NOAA source servers.',
