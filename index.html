@@ -61,7 +61,8 @@
                 <!-- NWS WARNINGS -->
                 <div class="category-group">
                     <div class="category-label"><i data-lucide="bell"></i> NWS WARNINGS</div>
-                    <div class="product-item" data-layer="nws-warnings-only"><span>Warnings & Advisories</span> <span class="badge red">LIVE</span></div>
+                    <div class="product-item" data-layer="nws-warnings-only"><span>Active Warnings</span> <span class="badge red">LIVE</span></div>
+                    <div class="product-item" data-layer="nws-advisories-only"><span>Advisories & Statements</span> <span class="badge yellow">LIVE</span></div>
                     <div class="product-item" data-layer="nws-watches-only"><span>Active Watches</span> <span class="badge orange">LIVE</span></div>
                     <div id="warning-ticker" class="warning-ticker-container">
                         <div id="watchdog-filter-bar" style="display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid #1e2a35;">
@@ -926,7 +927,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=209"></script>
+    <script src="app.js?v=210"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

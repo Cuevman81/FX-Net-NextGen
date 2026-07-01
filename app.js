@@ -134,14 +134,19 @@ const WARN_OUTLINE_WIDTH_OUTLINE = ['case',
 ];
 
 // Apply the current warning display mode (filled vs outline) to one map.
+// Covers both the Warnings stack and the Advisories/Statements stack.
 function applyWarningDisplayMode(map) {
     if (!map || !map.getLayer || !map.getLayer('nws-warnings-only-fill')) return;
     const outline = warningOutlineMode;
     const warningsOn = isLayerVisible(map, 'nws-warnings-only-fill');
+    const advisOn = isLayerVisible(map, 'nws-advis-fill');
     try {
         map.setPaintProperty('nws-warnings-only-fill', 'fill-opacity', outline ? WARN_FILL_OPACITY_OUTLINE : WARN_FILL_OPACITY_FILLED);
         map.setPaintProperty('nws-warnings-only-outline', 'line-width', outline ? WARN_OUTLINE_WIDTH_OUTLINE : WARN_OUTLINE_WIDTH_FILLED);
         map.setLayoutProperty('nws-warnings-only-casing', 'visibility', (outline && warningsOn) ? 'visible' : 'none');
+        map.setPaintProperty('nws-advis-fill', 'fill-opacity', outline ? WARN_FILL_OPACITY_OUTLINE : WARN_FILL_OPACITY_FILLED);
+        map.setPaintProperty('nws-advis-outline', 'line-width', outline ? WARN_OUTLINE_WIDTH_OUTLINE : WARN_OUTLINE_WIDTH_FILLED);
+        map.setLayoutProperty('nws-advis-casing', 'visibility', (outline && advisOn) ? 'visible' : 'none');
     } catch (e) { }
 }
 function applyWarningDisplayModeAll() {
@@ -1438,19 +1443,23 @@ function setupMapLayers(map, paneId) {
         data: watchesLoaded ? watchesGeoJSON : { type: 'FeatureCollection', features: [] }
     });
 
-    // 6a: Warnings & Advisories Layer (Broadened)
+    // 6a: Warnings & Advisories Layers (Broadened)
     // ── Official NWS WWA Color Table (https://www.weather.gov/help-map) ──
-    const nwsWwaFilter = ['all',
-        ['any',
-            ['in', 'Warning', ['get', 'event']],
-            ['in', 'Emergency', ['get', 'event']],
-            ['in', 'Statement', ['get', 'event']],
-            ['in', 'Advisory', ['get', 'event']],
-            ['in', 'Alert', ['get', 'event']],
-            ['in', 'Outlook', ['get', 'event']]
-        ],
-        ['!', ['in', 'Watch', ['get', 'event']]]  // Watches have their own dedicated layer
+    // Split into two independently-toggleable classes (like the Watches layer):
+    //   Warnings   = event contains "Warning"/"Emergency" (imminent threat)
+    //   Advisories = Statements / Advisories / Alerts / Outlooks (everything else)
+    const nwsWwaKinds = ['any',
+        ['in', 'Warning', ['get', 'event']],
+        ['in', 'Emergency', ['get', 'event']],
+        ['in', 'Statement', ['get', 'event']],
+        ['in', 'Advisory', ['get', 'event']],
+        ['in', 'Alert', ['get', 'event']],
+        ['in', 'Outlook', ['get', 'event']]
     ];
+    const nwsNotWatch = ['!', ['in', 'Watch', ['get', 'event']]];  // Watches have their own dedicated layer
+    const nwsWarnClass = ['any', ['in', 'Warning', ['get', 'event']], ['in', 'Emergency', ['get', 'event']]];
+    const nwsWwaFilter = ['all', nwsWwaKinds, nwsNotWatch, nwsWarnClass];            // warnings only
+    const nwsAdvisFilter = ['all', nwsWwaKinds, nwsNotWatch, ['!', nwsWarnClass]];   // advisories/statements only
     const nwsColorExpr = ['match', ['get', 'event'],
         // ── Warnings (imminent threat) ──
         'Tsunami Warning',              '#fd6347',
@@ -1565,6 +1574,42 @@ function setupMapLayers(map, paneId) {
         // ── Fallback ──
         '#c0c0c0'
     ];
+    // Advisories / Statements stack — drawn beneath the warnings stack.
+    map.addLayer({
+        id: 'nws-advis-fill', type: 'fill', source: 'nws-warnings',
+        layout: { visibility: 'none' },
+        filter: nwsAdvisFilter,
+        paint: {
+            'fill-color': nwsColorExpr,
+            'fill-opacity': ['case',
+                ['in', 'Statement', ['get', 'event']], 0.25,
+                ['in', 'Outlook', ['get', 'event']], 0.2,
+                0.35
+            ]
+        }
+    });
+    map.addLayer({
+        id: 'nws-advis-casing', type: 'line', source: 'nws-warnings',
+        layout: { visibility: 'none' },
+        filter: nwsAdvisFilter,
+        paint: {
+            'line-color': '#000000',
+            'line-width': ['case', ['in', 'Statement', ['get', 'event']], 3.5, 4.0],
+            'line-opacity': 0.55,
+            'line-blur': 0.5
+        }
+    });
+    map.addLayer({
+        id: 'nws-advis-outline', type: 'line', source: 'nws-warnings',
+        layout: { visibility: 'none' },
+        filter: nwsAdvisFilter,
+        paint: {
+            'line-color': nwsColorExpr,
+            'line-width': ['case', ['in', 'Statement', ['get', 'event']], 1.0, 1.5],
+            'line-opacity': 0.9
+        }
+    });
+
     map.addLayer({
         id: 'nws-warnings-only-fill', type: 'fill', source: 'nws-warnings',
         layout: { visibility: 'none' },
@@ -2853,7 +2898,7 @@ function initFrontalPipIcons(map) {
 
     // NWS Alert map click (Universal Point Query for Warnings, Watches, Advisories)
     map.on('click', async e => {
-        const warningsActive = isLayerVisible(map, 'nws-warnings-only-fill') || isLayerVisible(map, 'nws-wwa-wms-layer');
+        const warningsActive = isLayerVisible(map, 'nws-warnings-only-fill') || isLayerVisible(map, 'nws-advis-fill') || isLayerVisible(map, 'nws-wwa-wms-layer');
         const watchesActive = isLayerVisible(map, 'nws-watches-only-fill') || isLayerVisible(map, 'nws-watches-wms-layer') || isLayerVisible(map, 'nws-wwa-wms-layer');
         if (!warningsActive && !watchesActive) return;
 
@@ -5806,6 +5851,7 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'wpc-mpd-fill'), 'WPC MESO PRECIP DISC', '#33c27a', 'wpcMpd');
     add(isLayerVisible(map, 'spc-lsr-icons'), 'LOCAL STORM REPORTS', '#ff8c00', 'spcLsr');
     add(isLayerVisible(map, 'nws-warnings-only-fill'), 'NWS WARNINGS', '#ff3333', 'warnings');
+    add(isLayerVisible(map, 'nws-advis-fill'), 'NWS ADVISORIES', '#ffd23c', 'warnings');
     add(isLayerVisible(map, 'nws-watches-only-fill'), 'NWS WATCHES', '#ffaa00', 'watches');
     add(isLayerVisible(map, 'nhc-track-pts'), 'NHC STORMS', '#ff3333', 'nhcStorms');
     add(isLayerVisible(map, 'nhc-outlook-fill'), 'NHC TROPICAL OUTLOOK', '#ffaa00', 'nhcOutlook');
@@ -6704,6 +6750,7 @@ function updateSidebarToActivePane() {
         else if (layer === 'hms-smoke') isActive = isLayerVisible(map, 'hms-smoke-fill');
         else if (layer === 'firms-fires') isActive = isLayerVisible(map, 'firms-fires-layer');
         else if (layer === 'nws-warnings-only') isActive = isLayerVisible(map, 'nws-warnings-only-fill');
+        else if (layer === 'nws-advisories-only') isActive = isLayerVisible(map, 'nws-advis-fill');
         else if (layer === 'nws-watches-only') isActive = isLayerVisible(map, 'nws-watches-only-fill');
         else if (layer === 'nws-wwa') isActive = isLayerVisible(map, 'nws-wwa-wms-layer');
         else if (layer === 'spc-md') isActive = isLayerVisible(map, 'spc-md-fill');
@@ -7439,6 +7486,17 @@ function initProductSidebar() {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
                 // Casing rides along too, but only shows in outline mode.
+                applyWarningDisplayMode(map);
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── NWS Advisories & Statements Only ───
+            if (layer === 'nws-advisories-only') {
+                const isActive = !item.classList.contains('active');
+                map.setLayoutProperty('nws-advis-fill', 'visibility', isActive ? 'visible' : 'none');
+                map.setLayoutProperty('nws-advis-outline', 'visibility', isActive ? 'visible' : 'none');
+                // Casing rides along, but only shows in outline mode.
                 applyWarningDisplayMode(map);
                 updateSidebarToActivePane();
                 return;
@@ -8458,7 +8516,8 @@ function clearPane(map, paneId) {
         'spc-firewx-day7-fill', 'spc-firewx-day7-line', 'spc-firewx-day7-dryt',
         'spc-firewx-day8-fill', 'spc-firewx-day8-line', 'spc-firewx-day8-dryt',
         'spc-md-fill', 'spc-md-outline', 'wpc-mpd-fill', 'wpc-mpd-outline', 'spc-lsr-icons', 'spc-lsr-mag',
-        'nws-warnings-only-fill', 'nws-warnings-only-outline',
+        'nws-warnings-only-fill', 'nws-warnings-only-outline', 'nws-warnings-only-casing',
+        'nws-advis-fill', 'nws-advis-outline', 'nws-advis-casing',
         'nws-enhanced-fill', 'nws-enhanced-outline', 'nws-enhanced-glow', 'nws-enhanced-label',
         'nws-watches-only-fill', 'nws-watches-only-outline',
         'nws-wwa-wms-layer', 'nws-watches-wms-layer',
@@ -9620,6 +9679,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 1, 2026', items: [
+        'Warnings and Advisories are now separate toggles under NWS WARNINGS — "Active Warnings" shows only true warnings (Tornado, Severe Thunderstorm, Flash Flood, etc.), and a new "Advisories & Statements" item shows advisories, statements, alerts and outlooks on their own — just like Active Watches already worked. Turn on either or both; each gets its own pane-legend row, and clicking an area still pops up the full bulletin.',
         'Much fresher live satellite for Clean IR and Red Visible — the live (non-looping) view of these two products now comes from IEM\'s per-channel GOES-East cache, typically 5–10 minutes behind the actual scan instead of the ~45–60 minute publication lag of the NASA GIBS feed. The pane legend shows the exact image valid time. Loops still run on GIBS timestamped frames (IEM has no time history), so animation quality is unchanged — you get the fresh frame live and the clean loop when animating.',
         'Under-the-hood hardening pass from a full code audit: the map engine (MapLibre) and icon library are now bundled with the app instead of loaded from a third-party CDN, so an outside outage or a bad library release can never take the workstation down.',
         'API responses are now properly cached at the network edge — outlook, drought, river-gauge and MPD layers load noticeably faster on repeat visits, and the app is far gentler on the NOAA source servers.',
