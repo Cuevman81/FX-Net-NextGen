@@ -11128,16 +11128,18 @@ function renderSkewT(lv, D) {
             capeShade = `<polygon points="${poly(up.concat(down))}" fill="#ff3b3b" fill-opacity="0.15"/>`;
         }
     }
-    // wind barbs at right margin (standard levels)
+    // wind barbs at right margin — evenly spaced by screen position (every ~18 px)
+    // so dense BUFR profiles show many more levels than a fixed mandatory-level list.
     let barbs = ''; const bx = PR + 22;
     const wl = lv.filter(l => l.drct != null && l.sknt != null);
-    const chosen = [];
-    [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150].forEach(tp => {
-        let best = null, bd = 1e9; wl.forEach(l => { const d = Math.abs(l.pres - tp); if (d < bd && d < 25) { bd = d; best = l; } });
-        if (best && !chosen.includes(best)) chosen.push(best);
-    });
+    const chosen = []; let lastBarbY = Infinity;
+    for (const l of wl) {                        // wl is surface-first (descending pressure)
+        const y = yP(l.pres);
+        if (y < PT || y > PB) continue;
+        if (lastBarbY - y >= 18) { chosen.push(l); lastBarbY = y; }
+    }
     chosen.forEach(l => {
-        const y = yP(l.pres); const bp = _vadBarbPaths(bx, y, l.drct, l.sknt, 20);
+        const y = yP(l.pres); const bp = _vadBarbPaths(bx, y, l.drct, l.sknt, 17);
         barbs += bp.lines.map(d => `<path d="${d}" stroke="#cfe0ee" stroke-width="1" fill="none"/>`).join('');
         barbs += bp.flags.map(d => `<path d="${d}" fill="#cfe0ee" stroke="#cfe0ee" stroke-width="0.5"/>`).join('');
     });
@@ -11160,7 +11162,7 @@ function renderSkewT(lv, D) {
         ${_ir('SBCAPE', fx(D.cape) + ' J/kg', D.cape > 1000 ? '#ff6a6a' : '#9fd3ff')}
         ${_ir('SBCIN', fx(D.cin) + ' J/kg', '#7fbfff')}
         ${_ir('Lifted Index', D.li != null ? D.li.toFixed(1) : '—', D.li < 0 ? '#ff6a6a' : '#9fd3ff')}
-        ${_ir('PWAT', D.pw.toFixed(1) + ' mm', '#33c27a')}
+        ${_ir('PWAT', (D.pw / 25.4).toFixed(2) + ' in', '#33c27a')}
         ${_ir('LCL', fx(D.lclZ) + ' m AGL', '#cdd6df')}
         ${_ir('LFC', D.lfc ? Math.round(D.lfc) + ' hPa' : '—', '#cdd6df')}
         ${_ir('EL', D.el ? Math.round(D.el) + ' hPa' : '—', '#cdd6df')}
@@ -11208,7 +11210,7 @@ async function loadSkewt(station) {
         if (lv.length < 3) throw new Error('sounding too sparse');
         const D = _skewtCompute(lv);
         const srcLabel = pr.source === 'wyoming' ? 'BUFR hi-res' : 'std raob';
-        if (meta) meta.innerHTML = `${station} · ${(pr.valid || used).replace('T', ' ')} · ${lv.length} lvl (${srcLabel}) · SBCAPE ${Math.round(D.cape)} · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${D.pw.toFixed(1)}mm`;
+        if (meta) meta.innerHTML = `${station} · ${(pr.valid || used).replace('T', ' ')} · ${lv.length} lvl (${srcLabel}) · SBCAPE ${Math.round(D.cape)} · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${(D.pw / 25.4).toFixed(2)} in`;
         if (body) body.innerHTML = renderSkewT(lv, D);
     } catch (e) {
         if (meta) meta.textContent = `Skew-T: ${e.message}`;
