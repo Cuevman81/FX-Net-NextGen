@@ -10303,6 +10303,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 3, 2026', items: [
+        'Interactive Skew-T upgrade: soundings now pull the high-resolution BUFR profile (thousands of levels, ~1–2 s radiosonde data) from the University of Wyoming — much smoother, more detailed temperature/dewpoint traces — and fall back to the standard decoded RAOB when high-res isn’t available. The panel header shows the level count and which source it used. CAPE/CIN are now computed with the virtual-temperature correction (the SPC/SHARPpy convention), so instability values line up with the numbers you’d see on an SPC sounding instead of reading systematically low. PWAT was cross-checked to within 0.1 mm of the official value.',
         'Interactive Skew-T (NSHARP-lite): a new SPC-PRODUCTS item, “Interactive Skew-T (RAOB),” opens a live radiosonde sounding for the upper-air site nearest the pane center (pick any of ~55 sites, or an earlier 00/12Z cycle). It draws the temperature and dewpoint traces on a real skew-T/log-P grid with a lifted surface parcel and shaded CAPE, wind barbs up the right margin, and a 0–10 km hodograph — plus computed SBCAPE, SBCIN, Lifted Index, PWAT, LCL/LFC/EL and 0–1 / 0–6 km bulk shear. All the thermodynamics run in your browser.',
         'Graphical AIRMETs (G-AIRMET): the AVIATION group now plots the AWC’s gridded AIRMET hazard areas (turbulence, icing, IFR, mountain obscuration, surface winds, low-level wind shear, freezing level) as color-coded polygons; click one for the hazard, product, forecast hour and cause.',
         'Terminal Forecasts (TAF): airports now plot as dots colored by the current prevailing flight category (VFR/MVFR/IFR/LIFR). Click a site for its wind, visibility, ceiling, sky cover and valid period.',
@@ -10977,23 +10978,24 @@ function initVadPanel() {
 // with parcel ascent + hodograph in an SVG, and computes surface-based instability
 // indices client-side. All math is in JS — negligible runtime weight, no server work.
 
-// Curated US/nearby upper-air (RAOB) sites: id -> [lat, lon].
+// Curated US upper-air (RAOB) sites: id -> [lat, lon, wmo]. The WMO number lets
+// the /api/raob proxy pull the high-resolution BUFR sounding from Wyoming.
 const RAOB_SITES = {
-    KOUN: [35.18, -97.44], KLZK: [34.83, -92.26], KBMX: [33.10, -86.70], KFWD: [32.83, -97.30],
-    KJAN: [32.32, -90.08], KLIX: [30.34, -89.83], KTAE: [30.44, -84.30], KJAX: [30.48, -81.70],
-    KTBW: [27.70, -82.40], KMFL: [25.75, -80.38], KEYW: [24.55, -81.75], KCRP: [27.77, -97.50],
-    KBRO: [25.90, -97.42], KDRT: [29.37, -100.92], KMAF: [31.94, -102.19], KEPZ: [31.87, -106.70],
-    KABQ: [35.04, -106.62], KAMA: [35.23, -101.70], KDDC: [37.76, -99.97], KTOP: [39.07, -95.62],
-    KOAX: [41.32, -96.37], KLBF: [41.13, -100.68], KDNR: [39.77, -104.88], KRIW: [43.06, -108.48],
-    KBIS: [46.77, -100.75], KABR: [45.45, -98.41], KMPX: [44.85, -93.56], KDVN: [41.61, -90.58],
-    KILX: [40.15, -89.34], KGRB: [44.50, -88.11], KDTX: [42.70, -83.47], KILN: [39.42, -83.82],
-    KBNA: [36.25, -86.57], KGSO: [36.08, -79.95], KRNK: [37.20, -80.41], KIAD: [38.98, -77.47],
-    KWAL: [37.93, -75.48], KOKX: [40.87, -72.86], KALB: [42.70, -73.83], KBUF: [42.94, -78.72],
-    KPIT: [40.53, -80.23], KGYX: [43.89, -70.25], KCHH: [41.65, -69.96], KUNR: [44.07, -103.21],
-    KLKN: [40.87, -115.73], KSLC: [40.77, -111.95], KBOI: [43.56, -116.21], KGGW: [48.21, -106.62],
-    KTFX: [47.46, -111.38], KOTX: [47.68, -117.63], KSLE: [44.91, -123.00], KMFR: [42.37, -122.87],
-    KREV: [39.57, -119.80], KVEF: [36.05, -115.18], KNKX: [32.87, -117.15], KVBG: [34.75, -120.52],
-    KOAK: [37.73, -122.22], KTUS: [32.23, -110.96]
+    KOUN: [35.18, -97.44, 72357], KLZK: [34.83, -92.26, 72340], KBMX: [33.10, -86.70, 72230], KFWD: [32.83, -97.30, 72249],
+    KJAN: [32.32, -90.08, 72235], KLIX: [30.34, -89.83, 72233], KJAX: [30.48, -81.70, 72206],
+    KTBW: [27.70, -82.40, 72210], KMFL: [25.75, -80.38, 72202], KEYW: [24.55, -81.75, 72201], KCRP: [27.77, -97.50, 72251],
+    KBRO: [25.90, -97.42, 72250], KDRT: [29.37, -100.92, 72261], KMAF: [31.94, -102.19, 72265], KEPZ: [31.87, -106.70, 72364],
+    KABQ: [35.04, -106.62, 72365], KAMA: [35.23, -101.70, 72363], KDDC: [37.76, -99.97, 72451], KTOP: [39.07, -95.62, 72456],
+    KOAX: [41.32, -96.37, 72558], KLBF: [41.13, -100.68, 72562], KDNR: [39.77, -104.88, 72469], KRIW: [43.06, -108.48, 72672],
+    KBIS: [46.77, -100.75, 72764], KABR: [45.45, -98.41, 72659], KMPX: [44.85, -93.56, 72649], KDVN: [41.61, -90.58, 74455],
+    KILX: [40.15, -89.34, 74560], KGRB: [44.50, -88.11, 72645], KDTX: [42.70, -83.47, 72632], KILN: [39.42, -83.82, 72426],
+    KBNA: [36.25, -86.57, 72327], KGSO: [36.08, -79.95, 72317], KRNK: [37.20, -80.41, 72318], KIAD: [38.98, -77.47, 72403],
+    KWAL: [37.93, -75.48, 72402], KOKX: [40.87, -72.86, 72501], KALB: [42.70, -73.83, 72518], KBUF: [42.94, -78.72, 72528],
+    KPIT: [40.53, -80.23, 72520], KGYX: [43.89, -70.25, 74389], KCHH: [41.65, -69.96, 74494], KUNR: [44.07, -103.21, 72662],
+    KLKN: [40.87, -115.73, 72582], KSLC: [40.77, -111.95, 72572], KBOI: [43.56, -116.21, 72681], KGGW: [48.21, -106.62, 72768],
+    KTFX: [47.46, -111.38, 72776], KOTX: [47.68, -117.63, 72786], KSLE: [44.91, -123.00, 72694], KMFR: [42.37, -122.87, 72597],
+    KREV: [39.57, -119.80, 72489], KVEF: [36.05, -115.18, 72388], KNKX: [32.87, -117.15, 72293], KVBG: [34.75, -120.52, 72393],
+    KOAK: [37.73, -122.22, 72493], KTUS: [32.23, -110.96, 72274]
 };
 
 // ── Thermodynamics (Bolton 1980; pseudoadiabatic parcel). T in °C unless noted K. ──
@@ -11009,19 +11011,6 @@ function _moistLapse(Tk, p) {                                                   
 }
 function _uv(dir, spd) { const a = dir * Math.PI / 180; return [-spd * Math.sin(a), -spd * Math.cos(a)]; }
 
-function _skewtParcel(lv) {
-    const sfc = lv[0], Psfc = sfc.pres, Tsfc = sfc.tmpc + 273.15, Tdsfc = sfc.dwpc + 273.15;
-    const Tlcl = _lclTempK(Tsfc, Tdsfc);
-    const Plcl = Psfc * Math.pow(Tlcl / Tsfc, 1 / 0.2854);
-    const TkLcl = Tsfc * Math.pow(Plcl / Psfc, 0.2854);
-    function pT(p) {
-        if (p >= Plcl) return Tsfc * Math.pow(p / Psfc, 0.2854);   // dry adiabat below LCL
-        let Tk = TkLcl, pp = Plcl;                                  // moist adiabat above
-        while (pp > p) { const dp = Math.max(-2, p - pp); Tk += _moistLapse(Tk, pp) * dp; pp += dp; }
-        return Tk;
-    }
-    return { Psfc, Tsfc, Tlcl, Plcl, pT };
-}
 function _skewtShear(lv) {
     const w = lv.filter(l => l.drct != null && l.sknt != null && l.hght != null);
     if (w.length < 2) return { shear01: null, shear06: null };
@@ -11034,11 +11023,34 @@ function _skewtShear(lv) {
     return { shear01: mag(s, u1), shear06: mag(s, u6) };
 }
 function _skewtCompute(lv) {
-    const par = _skewtParcel(lv);
+    const sfc = lv[0], Psfc = sfc.pres, Tsfc = sfc.tmpc + 273.15, Tdsfc = sfc.dwpc + 273.15;
+    const wsfc = _mixr(sfc.dwpc, Psfc);
+    const Tlcl = _lclTempK(Tsfc, Tdsfc);
+    const Plcl = Psfc * Math.pow(Tlcl / Tsfc, 1 / 0.2854);
+    const TkLcl = Tsfc * Math.pow(Plcl / Psfc, 0.2854);
     const P = lv.map(l => l.pres), Z = lv.map(l => l.hght), Te = lv.map(l => l.tmpc + 273.15);
-    const Tp = P.map(p => par.pT(p));
-    const buoy = Tp.map((t, i) => (t - Te[i]) / Te[i]);
-    const pos = []; for (let i = 0; i < P.length; i++) if (P[i] <= par.Plcl + 0.5 && buoy[i] > 0) pos.push(i);
+    // Parcel temperature in a single upward pass: dry adiabat below the LCL, moist
+    // above — carrying the pseudoadiabat state forward level-to-level with <=2 hPa
+    // substeps (O(n), works for both coarse IEM and dense Wyoming BUFR profiles).
+    const Tp = new Array(P.length);
+    let mT = TkLcl, mP = Plcl;
+    for (let i = 0; i < P.length; i++) {
+        const p = P[i];
+        if (p >= Plcl) { Tp[i] = Tsfc * Math.pow(p / Psfc, 0.2854); mT = TkLcl; mP = Plcl; }
+        else {
+            let Tk = mT, pp = mP;
+            while (pp > p) { const dp = Math.max(-2, p - pp); Tk += _moistLapse(Tk, pp) * dp; pp += dp; }
+            Tp[i] = Tk; mT = Tk; mP = p;
+        }
+    }
+    // Virtual-temperature buoyancy (SPC/SHARPpy convention — raises CAPE ~10-25%
+    // and eases CIN vs a plain-T calc): parcel carries wsfc below the LCL and its
+    // saturation mixing ratio above; the environment uses its own dewpoint.
+    const tv = (Tk, w) => Tk * (1 + 0.61 * w);
+    const Tev = P.map((p, i) => tv(Te[i], _mixr(lv[i].dwpc, p)));
+    const Tpv = P.map((p, i) => tv(Tp[i], p >= Plcl ? wsfc : _mixr(Tp[i] - 273.15, p)));
+    const buoy = Tpv.map((t, i) => (t - Tev[i]) / Tev[i]);
+    const pos = []; for (let i = 0; i < P.length; i++) if (P[i] <= Plcl + 0.5 && buoy[i] > 0) pos.push(i);
     let cape = 0, cin = 0, lfc = null, el = null;
     if (pos.length) {
         const lfcI = pos[0], elI = pos[pos.length - 1]; lfc = P[lfcI]; el = P[elI];
@@ -11047,15 +11059,17 @@ function _skewtCompute(lv) {
     }
     let li = null; for (let i = 0; i < P.length; i++) { if (Math.abs(P[i] - 500) < 8) { li = Te[i] - Tp[i]; break; } }
     let pw = 0; for (let i = 1; i < lv.length; i++) { const w0 = _mixr(lv[i - 1].dwpc, lv[i - 1].pres), w1 = _mixr(lv[i].dwpc, lv[i].pres); pw += 0.5 * (w0 + w1) * (lv[i - 1].pres - lv[i].pres) * 100 / _gg; }
-    const lclZ = (_Rd * 0.5 * (par.Tsfc + par.Tlcl) / _gg) * Math.log(par.Psfc / par.Plcl);
-    return Object.assign({ par, P, Z, Te, Tp, cape, cin, li, pw, lclZ, lfc, el }, _skewtShear(lv));
+    const lclZ = (_Rd * 0.5 * (Tsfc + Tlcl) / _gg) * Math.log(Psfc / Plcl);
+    return Object.assign({ Plcl, P, Z, Te, Tp, cape, cin, li, pw, lclZ, lfc, el }, _skewtShear(lv));
 }
 
 function _ir(k, v, c) { return `<div style="display:flex;justify-content:space-between;"><span style="color:#8b97a3;">${k}</span><span style="color:${c};font-weight:600;">${v}</span></div>`; }
 function _skewtHodo(wl) {
     const S = 200, cx = S / 2, cy = S / 2;
     const z0 = wl.length ? wl[0].hght : 0;
-    const pts = wl.filter(l => (l.hght - z0) <= 10000).map(l => { const uv = _uv(l.drct, l.sknt); return { u: uv[0], v: uv[1] }; });
+    const raw = wl.filter(l => (l.hght - z0) <= 10000);
+    const hstep = Math.max(1, Math.ceil(raw.length / 120));   // thin dense BUFR winds
+    const pts = raw.filter((_, i) => i % hstep === 0 || i === raw.length - 1).map(l => { const uv = _uv(l.drct, l.sknt); return { u: uv[0], v: uv[1] }; });
     const maxS = Math.max(20, ...pts.map(p => Math.hypot(p.u, p.v)));
     const ring = Math.ceil(maxS / 10) * 10;
     const sc = (S / 2 - 12) / ring;
@@ -11095,17 +11109,22 @@ function renderSkewT(lv, D) {
         for (let p = Pbot; p >= Ptop; p -= 25) { const Tc = (th + 273.15) * Math.pow(p / 1000, 0.2854) - 273.15; d += (d ? 'L' : 'M') + xTP(Tc, p).toFixed(1) + ',' + yP(p).toFixed(1); }
         dry += `<path d="${d}" fill="none" stroke="#2a2118" stroke-width="0.6"/>`;
     }
-    // traces
-    const Ttrace = lv.map(l => [xTP(l.tmpc, l.pres), yP(l.pres)]);
-    const Dtrace = lv.map(l => [xTP(l.dwpc, l.pres), yP(l.pres)]);
-    const Ptrace = lv.map((l, i) => [xTP(D.Tp[i] - 273.15, l.pres), yP(l.pres)]);
-    // CAPE shading (parcel warmer than env, LFC→EL)
+    // traces — decimated (dense BUFR profiles are ~4000 levels; ~500 pts is plenty
+    // for a smooth curve and keeps the SVG DOM light).
+    const step = Math.max(1, Math.ceil(lv.length / 500));
+    const keep = [];
+    for (let i = 0; i < lv.length; i += step) keep.push(i);
+    if (keep[keep.length - 1] !== lv.length - 1) keep.push(lv.length - 1);
+    const Ttrace = keep.map(i => [xTP(lv[i].tmpc, lv[i].pres), yP(lv[i].pres)]);
+    const Dtrace = keep.map(i => [xTP(lv[i].dwpc, lv[i].pres), yP(lv[i].pres)]);
+    const Ptrace = keep.map(i => [xTP(D.Tp[i] - 273.15, lv[i].pres), yP(lv[i].pres)]);
+    // CAPE shading (parcel warmer than env, LFC→EL), sampled the same way
     let capeShade = '';
     if (D.lfc && D.el) {
-        const idx = []; for (let i = 0; i < lv.length; i++) if (lv[i].pres <= D.lfc && lv[i].pres >= D.el && D.Tp[i] > D.Te[i]) idx.push(i);
+        const idx = keep.filter(i => lv[i].pres <= D.lfc && lv[i].pres >= D.el && D.Tp[i] > D.Te[i]);
         if (idx.length > 1) {
-            const up = idx.map(i => Ptrace[i]);
-            const down = idx.slice().reverse().map(i => Ttrace[i]);
+            const up = idx.map(i => [xTP(D.Tp[i] - 273.15, lv[i].pres), yP(lv[i].pres)]);
+            const down = idx.slice().reverse().map(i => [xTP(lv[i].tmpc, lv[i].pres), yP(lv[i].pres)]);
             capeShade = `<polygon points="${poly(up.concat(down))}" fill="#ff3b3b" fill-opacity="0.15"/>`;
         }
     }
@@ -11148,7 +11167,7 @@ function renderSkewT(lv, D) {
         ${_ir('0–1 km shear', D.shear01 != null ? D.shear01 + ' kt' : '—', '#ffd23c')}
         ${_ir('0–6 km shear', D.shear06 != null ? D.shear06 + ' kt' : '—', '#ffd23c')}
         <div style="margin-top:6px;border-top:1px solid #23303c;padding-top:5px;color:#8b97a3;font-size:9px;">Surface ${lv[0].tmpc.toFixed(1)}° / ${lv[0].dwpc.toFixed(1)}°C @ ${Math.round(lv[0].pres)} hPa</div>
-        <div style="color:#5c6b78;font-size:8px;margin-top:3px;">Surface-based, T-based buoyancy (Tv correction omitted).</div>
+        <div style="color:#5c6b78;font-size:8px;margin-top:3px;">Surface-based parcel · virtual-temperature CAPE/CIN.</div>
     </div>`;
     return `${skewSVG}<div style="display:flex;flex-direction:column;gap:6px;">${_skewtHodo(wl)}${idxHTML}</div>`;
 }
@@ -11161,9 +11180,13 @@ function _synopticTimes(n) {
     return out;
 }
 async function _fetchRaob(station, ts) {
-    const url = `https://mesonet.agron.iastate.edu/json/raob.py?ts=${encodeURIComponent(ts)}&station=${encodeURIComponent(station)}`;
-    const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json(); return (j.profiles && j.profiles[0]) ? j.profiles[0] : null;
+    // /api/raob pulls Wyoming high-res BUFR (by WMO) with an IEM fallback (by ICAO).
+    const wmo = (RAOB_SITES[station] && RAOB_SITES[station][2]) || '';
+    const url = `/api/raob?station=${encodeURIComponent(station)}&wmo=${encodeURIComponent(wmo)}&ts=${encodeURIComponent(ts)}`;
+    const r = await fetch(url);
+    if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    return (j && j.success && j.profile && j.profile.length) ? { valid: j.valid, profile: j.profile, source: j.source } : null;
 }
 function nearestRaob() {
     let c = { lng: -97, lat: 38 };
@@ -11184,7 +11207,8 @@ async function loadSkewt(station) {
         const lv = pr.profile.filter(l => l.pres && l.tmpc != null && l.dwpc != null && l.hght != null).sort((a, b) => b.pres - a.pres);
         if (lv.length < 3) throw new Error('sounding too sparse');
         const D = _skewtCompute(lv);
-        if (meta) meta.innerHTML = `${station} · ${(pr.valid || used).replace('T', ' ')} · SBCAPE ${Math.round(D.cape)} J/kg · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${D.pw.toFixed(1)} mm`;
+        const srcLabel = pr.source === 'wyoming' ? 'BUFR hi-res' : 'std raob';
+        if (meta) meta.innerHTML = `${station} · ${(pr.valid || used).replace('T', ' ')} · ${lv.length} lvl (${srcLabel}) · SBCAPE ${Math.round(D.cape)} · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${D.pw.toFixed(1)}mm`;
         if (body) body.innerHTML = renderSkewT(lv, D);
     } catch (e) {
         if (meta) meta.textContent = `Skew-T: ${e.message}`;

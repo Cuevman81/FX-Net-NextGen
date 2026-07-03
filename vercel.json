@@ -22,6 +22,9 @@
     },
     "api/probsevere.py": {
       "maxDuration": 20
+    },
+    "api/raob.py": {
+      "maxDuration": 25
     }
   },
   "rewrites": [

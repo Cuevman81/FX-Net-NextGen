@@ -1,9 +1,11 @@
 import http.server
 import socketserver
 import os
+import re
 import urllib.request
 import urllib.error
 import json
+from urllib.parse import urlparse, parse_qs, quote
 
 PORT = 8888
 LOG_FILE = "fxnet_diagnostic_log.txt"
@@ -98,6 +100,64 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
+
+        elif path == '/api/raob':
+            try:
+                from urllib.parse import urlparse, parse_qs, quote
+                q = parse_qs(urlparse(self.path).query)
+                station = (q.get('station', [''])[0] or '').upper()
+                wmo = q.get('wmo', [''])[0]
+                ts = q.get('ts', [''])[0]
+                dt = ts.replace('T', ' ').replace('Z', '')
+                result = None
+                if wmo:
+                    try:
+                        wurl = f"https://weather.uwyo.edu/wsgi/sounding?datetime={quote(dt)}&id={wmo}&type=TEXT:LIST&src=UNKNOWN"
+                        wreq = urllib.request.Request(wurl, headers={'User-Agent': 'Mozilla/5.0 (FXNet-Proxy)'})
+                        with safe_urlopen(wreq, timeout=22) as wr:
+                            wraw = wr.read().decode('utf-8', 'replace')
+                        m = re.search(r'<PRE>(.*?)</PRE>', wraw, re.S)
+                        if m:
+                            def _num(s):
+                                s = s.strip()
+                                return None if s in ('', '-', '----', '/////') else float(s)
+                            prof = []
+                            for ln in m.group(1).splitlines():
+                                if not re.match(r'^\s*-?\d', ln):
+                                    continue
+                                try:
+                                    pres = _num(ln[0:7]); tmpc = _num(ln[14:21])
+                                    if pres is None or tmpc is None:
+                                        continue
+                                    sped = _num(ln[49:56])
+                                    prof.append({'pres': pres, 'hght': _num(ln[7:14]), 'tmpc': tmpc,
+                                                 'dwpc': _num(ln[21:28]), 'drct': _num(ln[42:49]),
+                                                 'sknt': (sped * 1.94384 if sped is not None else None)})
+                                except (ValueError, IndexError):
+                                    continue
+                            if len(prof) > 10:
+                                result = {'success': True, 'source': 'wyoming', 'station': station, 'valid': dt + 'Z', 'profile': prof}
+                    except Exception:
+                        result = None
+                if result is None:
+                    ireq = urllib.request.Request(f"https://mesonet.agron.iastate.edu/json/raob.py?ts={ts}&station={station}", headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
+                    with safe_urlopen(ireq, timeout=22) as ir:
+                        j = json.loads(ir.read())
+                    profs = j.get('profiles') or []
+                    if profs and profs[0].get('profile'):
+                        result = {'success': True, 'source': 'iem', 'station': station, 'valid': profs[0].get('valid'), 'profile': profs[0]['profile']}
+                    else:
+                        result = {'success': False, 'error': 'no sounding data for that station/time', 'profile': []}
+                self.send_response(200 if result.get('success') else 404)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+            except Exception as e:
+                self.send_response(502)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': str(e), 'profile': []}).encode())
 
         elif path == '/api/probsevere':
             try:
