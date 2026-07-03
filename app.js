@@ -10671,16 +10671,18 @@ function _vadBarbPaths(cx, cy, dirFrom, spd, len) {
 }
 function renderVadSVG(prof) {
     if (!prof || prof.length < 2) return '<div style="color:#6b7a88;font-size:12px;padding:16px;">No VAD wind data in range right now (needs echoes/insects aloft). Try again during precip or a well-mixed afternoon.</div>';
-    const W = 500, H = 30 + prof.length * 0 + 440, top = 30, bot = 420;
-    const alts = prof.map(p => p.alt_ft);
-    const aMin = Math.min(...alts), aMax = Math.max(...alts);
-    const yFor = a => bot - (a - aMin) / (aMax - aMin || 1) * (bot - top);
-    // barb column
+    // Levels cluster tightly at low altitude, so space rows EVENLY by level (each
+    // labeled with its true height) to keep barbs and labels from overlapping.
+    const lv = prof.slice().sort((a, b) => a.alt_ft - b.alt_ft);
+    const W = 500, topM = 34, botM = 16, rowH = 18;
+    const H = Math.max(300, topM + lv.length * rowH + botM);
+    const yFor = i => H - botM - i * rowH;        // i = 0 -> lowest alt at bottom
+    // barb column (evenly spaced)
     let barbs = '';
     const bx = 96;
-    prof.forEach(p => {
-        const y = yFor(p.alt_ft);
-        const { lines, flags } = _vadBarbPaths(bx, y, p.dir, p.spd, 26);
+    lv.forEach((p, i) => {
+        const y = yFor(i);
+        const { lines, flags } = _vadBarbPaths(bx, y, p.dir, p.spd, 22);
         barbs += lines.map(d => `<path d="${d}" stroke="#00e5ff" stroke-width="1.3" fill="none"/>`).join('');
         barbs += flags.map(d => `<path d="${d}" fill="#00e5ff" stroke="#00e5ff" stroke-width="0.6"/>`).join('');
         barbs += `<text x="52" y="${(y + 3).toFixed(1)}" fill="#8b97a3" font-size="8" text-anchor="end">${(p.alt_ft / 1000).toFixed(1)}k</text>`;
@@ -10689,7 +10691,7 @@ function renderVadSVG(prof) {
     // hodograph
     const hx = 250, hy = 40, hw = 230, hh = 230;
     const hcx = hx + hw / 2, hcy = hy + hh / 2;
-    const maxSpd = Math.max(...prof.map(p => p.spd), 20);
+    const maxSpd = Math.max(...lv.map(p => p.spd), 20);
     const ringMax = Math.ceil(maxSpd / 10) * 10;
     const sc = (hw / 2 - 10) / ringMax;
     let hodo = `<rect x="${hx}" y="${hy}" width="${hw}" height="${hh}" fill="#0a0f16" stroke="#1e2a35"/>`;
@@ -10699,7 +10701,7 @@ function renderVadSVG(prof) {
     }
     hodo += `<line x1="${hcx}" y1="${hy}" x2="${hcx}" y2="${hy + hh}" stroke="#1e2a35" stroke-width="0.6"/>`;
     hodo += `<line x1="${hx}" y1="${hcy}" x2="${hx + hw}" y2="${hcy}" stroke="#1e2a35" stroke-width="0.6"/>`;
-    const pts = prof.map(p => {
+    const pts = lv.map(p => {
         const u = -p.spd * Math.sin(p.dir * Math.PI / 180);
         const v = -p.spd * Math.cos(p.dir * Math.PI / 180);
         return [hcx + u * sc, hcy - v * sc];
