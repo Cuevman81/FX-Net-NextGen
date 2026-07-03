@@ -108,11 +108,17 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 station = (q.get('station', [''])[0] or '').upper()
                 wmo = q.get('wmo', [''])[0]
                 ts = q.get('ts', [''])[0]
+                # Guard station/WMO before they reach an upstream URL (fixed host,
+                # so no SSRF, but blocks stray query-param smuggling).
+                if not re.match(r'^[A-Z0-9]{3,5}$', station):
+                    station = ''
+                if not re.match(r'^\d{4,6}$', wmo):
+                    wmo = ''
                 dt = ts.replace('T', ' ').replace('Z', '')
                 result = None
                 if wmo:
                     try:
-                        wurl = f"https://weather.uwyo.edu/wsgi/sounding?datetime={quote(dt)}&id={wmo}&type=TEXT:LIST&src=UNKNOWN"
+                        wurl = f"https://weather.uwyo.edu/wsgi/sounding?datetime={quote(dt)}&id={quote(wmo)}&type=TEXT:LIST&src=UNKNOWN"
                         wreq = urllib.request.Request(wurl, headers={'User-Agent': 'Mozilla/5.0 (FXNet-Proxy)'})
                         with safe_urlopen(wreq, timeout=22) as wr:
                             wraw = wr.read().decode('utf-8', 'replace')
@@ -139,8 +145,10 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                                 result = {'success': True, 'source': 'wyoming', 'station': station, 'valid': dt + 'Z', 'profile': prof}
                     except Exception:
                         result = None
+                if result is None and not station:
+                    result = {'success': False, 'error': 'invalid station', 'profile': []}
                 if result is None:
-                    ireq = urllib.request.Request(f"https://mesonet.agron.iastate.edu/json/raob.py?ts={ts}&station={station}", headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
+                    ireq = urllib.request.Request(f"https://mesonet.agron.iastate.edu/json/raob.py?ts={quote(ts)}&station={quote(station)}", headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
                     with safe_urlopen(ireq, timeout=22) as ir:
                         j = json.loads(ir.read())
                     profs = j.get('profiles') or []

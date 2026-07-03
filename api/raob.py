@@ -12,6 +12,10 @@ import re
 WYO_URL = 'https://weather.uwyo.edu/wsgi/sounding?datetime={dt}&id={wmo}&type=TEXT:LIST&src=UNKNOWN'
 IEM_URL = 'https://mesonet.agron.iastate.edu/json/raob.py?ts={ts}&station={station}'
 _ROW = re.compile(r'^\s*-?\d')
+# Guard station/WMO before they reach an upstream URL — the host is fixed (no
+# SSRF), but this stops stray characters smuggling extra query params.
+_STATION_RE = re.compile(r'^[A-Z0-9]{3,5}$')
+_WMO_RE = re.compile(r'^\d{4,6}$')
 
 
 def _fetch(url, timeout=22):
@@ -53,16 +57,18 @@ def parse_wyoming(text):
 def get_raob(wmo, station, ts):
     # Wyoming wants "YYYY-MM-DD HH:MM:SS"; IEM keeps the ISO "...T..Z".
     dt = ts.replace('T', ' ').replace('Z', '')
-    if wmo:
+    if wmo and _WMO_RE.match(wmo):
         try:
-            raw = _fetch(WYO_URL.format(dt=quote(dt), wmo=wmo))
+            raw = _fetch(WYO_URL.format(dt=quote(dt), wmo=quote(wmo)))
             prof = parse_wyoming(raw)
             if prof:
                 return {'success': True, 'source': 'wyoming', 'station': station,
                         'valid': dt + 'Z', 'profile': prof}
         except Exception:
             pass  # fall through to IEM
-    raw = _fetch(IEM_URL.format(ts=ts, station=station))
+    if not _STATION_RE.match(station):
+        return {'success': False, 'error': 'invalid station', 'profile': []}
+    raw = _fetch(IEM_URL.format(ts=quote(ts), station=quote(station)))
     j = json.loads(raw)
     profs = j.get('profiles') or []
     if profs and profs[0].get('profile'):

@@ -5521,7 +5521,7 @@ async function checkNewWarnings() {
                     const p = f.properties;
                     const threat = p.isEmergency ? 'EMERGENCY' : (p.damageThreat || '').toUpperCase() || (p.isPDS ? 'PDS' : '');
                     const area = (p.areaDesc || '').substring(0, 100);
-                    addLiveLog(`  ⚠ ${p.event} [${threat}] → ${area}`, p.isEmergency || p.damageThreat === 'Catastrophic' ? '#ff0000' : '#ff6600');
+                    addLiveLog(`  ⚠ ${esc(p.event)} [${esc(threat)}] → ${esc(area)}`, p.isEmergency || p.damageThreat === 'Catastrophic' ? '#ff0000' : '#ff6600');
                 });
             } else if (lastIbwCount > 0) {
                 addLiveLog('WATCHDOG: All impact-based warnings have expired', '#00ff88');
@@ -5585,7 +5585,7 @@ async function checkNewWarnings() {
             if (!isFirst) {
                 const threatTag = isEmergency ? ' ⚠ EMERGENCY' : threat === 'Catastrophic' || threat === 'Destructive' ? ` ⚠ ${threat.toUpperCase()}` : threat === 'Considerable' ? ' ⚠ CONSIDERABLE' : isPDS ? ' ⚠ PDS' : '';
                 const color = isEmergency || threat === 'Catastrophic' ? '#ff0000' : threat === 'Considerable' || isPDS ? '#ff6600' : severity === 'Extreme' ? '#ff0000' : severity === 'Severe' ? '#ff3333' : '#ffb300';
-                addLiveLog(`WATCHDOG: NEW ${event}${threatTag} → ${(area || '').substring(0, 80)}`, color);
+                addLiveLog(`WATCHDOG: NEW ${esc(event)}${threatTag} → ${esc((area || '').substring(0, 80))}`, color);
                 // Only pop a corner toast when the alert matches the active state/WFO
                 // filter — nationwide when unfiltered, otherwise only the selected area.
                 if (alertMatchesWatchdogFilter(f.properties, area)) alertVizNotify(f, { isEmergency, threat, isPDS });
@@ -9351,7 +9351,7 @@ function createTab(opts) {
     tabs[id] = { id, name: (opts && opts.name) || `Tab ${Object.keys(tabs).length + 1}`, layout: 1 };
     buildTabGrid(id, 1);
     switchTab(id);   // inits this tab's pane-1 map via applyLayout
-    addLiveLog(`TAB: New workspace "${tabs[id].name}"`, '#00e5ff');
+    addLiveLog(`TAB: New workspace "${esc(tabs[id].name)}"`, '#00e5ff');
     return id;
 }
 
@@ -10349,6 +10349,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 3, 2026', items: [
+        'Security hardening: the sounding proxy (/api/raob) now validates the station and WMO id before building an upstream request, and the live-log escapes alert/warning text — closing two low-severity injection paths found in a code audit.',
         'Data Health now covers everything: the monitor gained an AVIATION section (SIGMET/AIRMET, G-AIRMET, PIREPs, TAF) and a ProbSevere row under SPC Products, each with a live red/amber/green freshness dot — so every auto-refreshing feed on the workstation is accounted for.',
         'AlertViz now follows your WATCHDOG filter: with “All states / All WFOs” selected, a new Tornado, Severe Thunderstorm or Flash Flood Warning anywhere still pops a corner toast; but when you narrow the NWS Warnings filter to a state or a single office, only new warnings for that state/WFO pop up — so you get a targeted heads-up instead of nationwide noise.',
         'Graphical AIRMET fix: G-AIRMET areas now display reliably. The AWC feed issues hazard snapshots at forecast hours 0/3/6 and which hours are present rotates with the issuance cycle; the layer previously showed only hour 0 and came up empty whenever that snapshot wasn’t in the current cycle. It now shows the nearest-term snapshot available.',
@@ -10777,7 +10778,7 @@ function renderProcList() {
         row.querySelector('.proc-del').addEventListener('click', e => {
             e.stopPropagation();
             const s = loadProcStore(); delete s[name]; saveProcStore(s); renderProcList();
-            addLiveLog(`PROCEDURE: deleted "${name}"`, '#ff9e3b');
+            addLiveLog(`PROCEDURE: deleted "${esc(name)}"`, '#ff9e3b');
         });
         list.appendChild(row);
     });
@@ -10801,7 +10802,7 @@ function initProcedures() {
         store[name] = captureProcedure();
         saveProcStore(store);
         renderProcList();
-        addLiveLog(`PROCEDURE: saved "${name}" (${store[name].active.length} layers)`, '#00ff88');
+        addLiveLog(`PROCEDURE: saved "${esc(name)}" (${store[name].active.length} layers)`, '#00ff88');
     });
     renderProcList();
 }
