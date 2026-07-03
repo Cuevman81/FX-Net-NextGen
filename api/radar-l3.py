@@ -89,6 +89,19 @@ SRM_PALETTE = [
     (170, 90, 210), # 15 RF            (range folded)
 ]
 
+# ── All-tilts: elevation variants share their base moment's calibration/palette ──
+# L3 mnemonics are [N][tilt-digit][moment]: N0B/N1B/N2B/N3B are base reflectivity at
+# the first four elevation angles; likewise G(vel), C(CC), X(ZDR), K(KDP), S(SRM).
+# Availability of higher tilts depends on the active VCP.
+for _base, _variants in {'N0B': ('N1B', 'N2B', 'N3B'), 'N0G': ('N1G', 'N2G', 'N3G'),
+                         'N0C': ('N1C', 'N2C', 'N3C'), 'N0X': ('N1X', 'N2X', 'N3X'),
+                         'N0K': ('N1K', 'N2K', 'N3K')}.items():
+    for _v in _variants:
+        CAL[_v] = CAL[_base]
+        STOPS[_v] = STOPS[_base]
+for _v in ('N1S', 'N2S', 'N3S'):
+    V16[_v] = V16['N0S']
+
 
 def fetch_latest_key(station, product):
     st3 = station[1:].upper() if (len(station) == 4 and station[0].upper() == 'K') else station.upper()
@@ -302,6 +315,187 @@ def render_v16(dec):
     return buf.getvalue(), coords
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Graphic-alphanumeric products: storm tracks (NST) and VAD wind profile (NVW).
+# These carry vector/tabular data, not a raster, so they return JSON/GeoJSON.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _pdb_and_buf(raw):
+    """Locate the Product Description Block, return radar lat/lon + decompressed body."""
+    pdb = None
+    for o in range(0, 300):
+        if raw[o:o + 2] == b'\xff\xff':
+            lat = struct.unpack_from('>i', raw, o + 2)[0] / 1000.0
+            lon = struct.unpack_from('>i', raw, o + 6)[0] / 1000.0
+            if 15 < lat < 72 and -170 < lon < -60:
+                pdb = o
+                break
+    if pdb is None:
+        raise ValueError('PDB not found')
+    rlat = struct.unpack_from('>i', raw, pdb + 2)[0] / 1000.0
+    rlon = struct.unpack_from('>i', raw, pdb + 6)[0] / 1000.0
+    bzpos = raw.find(b'BZh', pdb)
+    buf = bz2.BZ2Decompressor().decompress(raw[bzpos:]) if 0 < bzpos else raw[pdb + 102:]
+    return pdb, rlat, rlon, buf
+
+
+def _iter_blocks(buf):
+    """Yield (block_id, start, length) for each contiguous top-level block."""
+    pos, n = 0, 0
+    while pos + 8 <= len(buf) and n < 6:
+        if buf[pos:pos + 2] != b'\xff\xff':
+            break
+        bid = struct.unpack_from('>H', buf, pos + 2)[0]
+        blen = struct.unpack_from('>I', buf, pos + 4)[0]
+        if blen <= 0 or pos + blen > len(buf):
+            break
+        yield bid, pos, blen
+        pos += blen
+        n += 1
+
+
+def _ij_to_lonlat(i, j, rlat, rlon):
+    # Special-symbol coordinates are in 1/4 km east (I) / north (J) of the radar.
+    lat = rlat + (j / 4.0) / 111.32
+    lon = rlon + (i / 4.0) / (111.32 * math.cos(math.radians(rlat)))
+    return lon, lat
+
+
+def _parse_nst_table(text):
+    """Parse the STI attribute table (movement, max dBZ, top) keyed by cell ID."""
+    # Tabular-block lines are length-prefixed (not newline-separated); the count's
+    # high byte is non-printable, so each printable run is one table line.
+    cells, ids = {}, []
+    for ln in re.findall(r'[ -~]{10,}', text):
+        if 'STORM ID' in ln:
+            ids = ln.split('STORM ID', 1)[1].split()
+            for c in ids:
+                cells.setdefault(c, {})
+        elif 'AZ/RAN' in ln and ids:
+            for c, (az, ran) in zip(ids, re.findall(r'(\d+)/\s*(\d+)', ln)):
+                cells[c]['az'], cells[c]['ran'] = int(az), int(ran)
+        elif 'FCST MVT' in ln and ids:
+            for c, tok in zip(ids, re.findall(r'(\d+/\s*\d+|NEW)', ln)):
+                m = re.match(r'(\d+)/\s*(\d+)', tok)
+                if m:
+                    cells[c]['dir'], cells[c]['spd'] = int(m.group(1)), int(m.group(2))
+        elif 'DBZM' in ln and ids:
+            for c, (dz, tp) in zip(ids, re.findall(r'(\d+)\s+(\d+\.\d+)', ln)):
+                cells[c]['dbzm'], cells[c]['top'] = int(dz), float(tp)
+    return cells
+
+
+def build_storm_attr(station):
+    if not _STATION_RE.match(station):
+        raise ValueError('invalid station')
+    key = fetch_latest_key(station, 'NST')
+    if not key:
+        raise ValueError(f'no recent storm-track (NST) data for {station}')
+    raw = urllib.request.urlopen(
+        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), timeout=25).read()
+    pdb, rlat, rlon, buf = _pdb_and_buf(raw)
+    prod_time = _read_prod_time(raw, pdb)
+
+    # Symbology block (id 1): packet 15 carries each cell's ID + current centroid.
+    ids = {}
+    for bid, start, blen in _iter_blocks(buf):
+        if bid != 1:
+            continue
+        layer_len = struct.unpack_from('>I', buf, start + 12)[0]
+        off, end = start + 16, start + 16 + layer_len
+        while off + 4 <= end and off + 4 <= len(buf):
+            code = struct.unpack_from('>H', buf, off)[0]
+            plen = struct.unpack_from('>H', buf, off + 2)[0]
+            d = off + 4
+            if code == 15 and plen >= 6:
+                i, j = struct.unpack_from('>hh', buf, d)
+                sid = buf[d + 4:d + 6].decode('ascii', 'replace').strip()
+                if sid:
+                    ids[sid] = (i, j)
+            off = d + plen
+        break
+
+    # Graphic-alphanumeric block (id 2): the storm attribute table.
+    attrs = {}
+    for bid, start, blen in _iter_blocks(buf):
+        if bid == 2:
+            attrs = _parse_nst_table(buf[start:start + blen].decode('latin-1', 'replace'))
+            break
+
+    features = []
+    for sid, (i, j) in ids.items():
+        lon, lat = _ij_to_lonlat(i, j, rlat, rlon)
+        a = attrs.get(sid, {})
+        features.append({'type': 'Feature',
+                         'properties': {'id': sid, 'kind': 'cell', 'dbzm': a.get('dbzm'),
+                                        'top_kft': a.get('top'), 'mvt_dir': a.get('dir'),
+                                        'mvt_spd': a.get('spd')},
+                         'geometry': {'type': 'Point', 'coordinates': [lon, lat]}})
+        # Forecast track: FCST MVT reports the direction the storm comes FROM, so it
+        # moves toward dir+180 (validated against the product's own forecast points).
+        if a.get('dir') is not None and a.get('spd'):
+            toward = math.radians((a['dir'] + 180) % 360)
+            track = [[lon, lat]]
+            plat, plon = lat, lon
+            for mins in (15, 30, 45, 60):
+                km = a['spd'] * (mins / 60.0) * 1.852     # kt*hr -> nm -> km
+                de, dn = km * math.sin(toward), km * math.cos(toward)
+                track.append([lon + de / (111.32 * math.cos(math.radians(lat))), lat + dn / 111.32])
+            features.append({'type': 'Feature', 'properties': {'id': sid, 'kind': 'forecast'},
+                             'geometry': {'type': 'LineString', 'coordinates': track}})
+
+    return {'success': True, 'type': 'geojson',
+            'geojson': {'type': 'FeatureCollection', 'features': features},
+            'meta': {'station': station, 'product': 'NST', 'name': 'Storm Tracks (STI)',
+                     'time': prod_time, 'count': len(ids), 'key': key}}
+
+
+def _parse_vad_table(text):
+    """Parse the VAD Algorithm Output table -> [{alt_ft, dir, spd, rms}] (lowest-RMS per alt)."""
+    out = {}
+    for ln in re.findall(r'[ -~]{10,}', text):
+        toks = ln.split()
+        # Data row: ALT U V W DIR SPD RMS DIV SRNG ELEV (W/DIV may be 'NA'); a leading
+        # page marker token may precede ALT, so anchor on the first 2-3 digit token.
+        ai = next((k for k, t in enumerate(toks) if re.fullmatch(r'\d{2,3}', t)), None)
+        if ai is None or ai + 6 >= len(toks):
+            continue
+        if not (re.fullmatch(r'\d{1,3}', toks[ai + 4]) and re.fullmatch(r'\d{1,3}', toks[ai + 5])):
+            continue
+        alt = int(toks[ai]) * 100
+        direction, spd = int(toks[ai + 4]), int(toks[ai + 5])
+        if not (0 <= direction <= 360 and 0 <= spd <= 300 and 500 <= alt <= 80000):
+            continue
+        try:
+            rms = float(toks[ai + 6])
+        except ValueError:
+            rms = 99.0
+        if alt not in out or rms < out[alt]['rms']:
+            out[alt] = {'alt_ft': alt, 'dir': direction, 'spd': spd, 'rms': round(rms, 1)}
+    return [out[a] for a in sorted(out)]
+
+
+def build_vad(station):
+    if not _STATION_RE.match(station):
+        raise ValueError('invalid station')
+    key = fetch_latest_key(station, 'NVW')
+    if not key:
+        raise ValueError(f'no recent VAD wind profile (NVW) for {station}')
+    raw = urllib.request.urlopen(
+        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), timeout=25).read()
+    pdb, rlat, rlon, buf = _pdb_and_buf(raw)
+    prod_time = _read_prod_time(raw, pdb)
+    text = ''
+    for bid, start, blen in _iter_blocks(buf):
+        if bid == 3:
+            text = buf[start:start + blen].decode('latin-1', 'replace')
+            break
+    profile = _parse_vad_table(text)
+    return {'success': True, 'type': 'vad', 'profile': profile,
+            'meta': {'station': station, 'product': 'NVW', 'name': 'VAD Wind Profile',
+                     'time': prod_time, 'lat': rlat, 'lon': rlon, 'count': len(profile), 'key': key}}
+
+
 def build_radar(station, product):
     if not _STATION_RE.match(station):
         raise ValueError('invalid station')
@@ -342,7 +536,13 @@ class handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             station = qs.get('station', ['KDGX'])[0].upper()
             product = qs.get('product', ['N0B'])[0].upper()
-            body = json.dumps(build_radar(station, product)).encode()
+            if product in ('NST', 'STORMTRACK'):
+                result = build_storm_attr(station)
+            elif product in ('NVW', 'VAD'):
+                result = build_vad(station)
+            else:
+                result = build_radar(station, product)
+            body = json.dumps(result).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')

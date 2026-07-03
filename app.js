@@ -2040,6 +2040,42 @@ function setupMapLayers(map, paneId) {
         paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1.6 }
     });
 
+    // ─── Layer 7g: Storm Tracks / attributes (NEXRAD L3 STI) ───
+    map.addSource('storm-attr', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'storm-attr-track', type: 'line', source: 'storm-attr',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#ffe14d', 'line-width': 1.8, 'line-dasharray': [2, 1.5], 'line-opacity': 0.9 }
+    });
+    map.addLayer({
+        id: 'storm-attr-fpos', type: 'circle', source: 'storm-attr',
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'ftick']],
+        layout: { visibility: 'none' },
+        paint: { 'circle-radius': 2.4, 'circle-color': '#ffe14d', 'circle-opacity': 0.9 }
+    });
+    map.addLayer({
+        id: 'storm-attr-cell', type: 'circle', source: 'storm-attr',
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'cell']],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': 6,
+            'circle-color': 'rgba(255,43,208,0.15)',
+            'circle-stroke-color': '#ff2bd0', 'circle-stroke-width': 2
+        }
+    });
+    map.addLayer({
+        id: 'storm-attr-label', type: 'symbol', source: 'storm-attr',
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'cell']],
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'tag'],
+            'text-font': ['Noto Sans Regular'], 'text-size': 10,
+            'text-offset': [0, -1.2], 'text-anchor': 'bottom', 'text-allow-overlap': true
+        },
+        paint: { 'text-color': '#ffd0f4', 'text-halo-color': '#000000', 'text-halo-width': 1.5 }
+    });
+
 function getRadarSitesGeoJSON() {
     const features = [];
     for (const [id, coords] of Object.entries(RADAR_LOCATIONS)) {
@@ -3181,6 +3217,24 @@ function initFrontalPipIcons(map) {
     });
     map.on('mouseenter', 'probsevere-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'probsevere-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── Storm-track cell click ───
+    map.on('click', 'storm-attr-cell', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const toward = (p.mvt_dir != null && p.mvt_dir !== '') ? Math.round((Number(p.mvt_dir) + 180) % 360) : null;
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:240px;">
+            <div style="font-weight:bold;color:#ff2bd0;font-size:13px;margin-bottom:4px;">Storm Cell ${esc(p.id)}</div>
+            <div style="line-height:1.6;">
+                <div><span style="color:#888;">Max reflectivity:</span> ${p.dbzm != null ? esc(p.dbzm) + ' dBZ' : '—'}</div>
+                <div><span style="color:#888;">Storm top:</span> ${p.top_kft != null ? esc(p.top_kft) + ' kft' : '—'}</div>
+                <div><span style="color:#888;">Movement:</span> ${toward != null ? 'toward ' + toward + '° @ ' + esc(p.mvt_spd) + ' kt' : 'new / stationary'}</div>
+            </div>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'storm-attr-cell', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'storm-attr-cell', () => { map.getCanvas().style.cursor = ''; });
 
     // SPC LSR click
     map.on('click', 'spc-lsr-icons', e => {
@@ -7046,7 +7100,8 @@ function updateSidebarToActivePane() {
         let isActive = false;
         if (layer === 'airnow-aqi') isActive = isLayerVisible(map, 'airnow-aqi-layer');
         else if (layer === 'metars') isActive = isLayerVisible(map, 'metars-temp');
-        else if (layer === 'radar-l3') isActive = isLayerVisible(map, 'radar-l3-layer') && paneL3[activePaneId] && paneL3[activePaneId].product === item.getAttribute('data-l3');
+        else if (layer === 'radar-l3') isActive = isLayerVisible(map, 'radar-l3-layer') && paneL3[activePaneId] && paneL3[activePaneId].product.charAt(2) === (item.getAttribute('data-l3') || '').charAt(2);
+        else if (layer === 'storm-attr') isActive = isLayerVisible(map, 'storm-attr-cell');
         else if (layer === 'radar-ref') isActive = isLayerVisible(map, 'radar-layer') || isLayerVisible(map, 'site-bref-layer');
         else if (layer === 'radar-vel') isActive = isLayerVisible(map, 'site-bvel-layer');
         else if (layer === 'radar-hc') isActive = isLayerVisible(map, 'site-bdhc-layer');
@@ -7149,6 +7204,7 @@ function updateSidebarToActivePane() {
     }
 
     // Keep the per-pane legend stack in sync with whatever is toggled (no-op while looping)
+    if (typeof updateL3TiltControl === 'function') updateL3TiltControl();
     refreshTimestampLabel();
 }
 
@@ -7438,6 +7494,29 @@ function initProductSidebar() {
                     }
                     await loadL3Radar(activePaneId, station, product);
                 }
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Storm Tracks (STI / NST) ───
+            if (layer === 'storm-attr') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) {
+                    let station = (paneRadarSites[activePaneId] || '').toUpperCase();
+                    if (!station || station.includes('NEXRAD')) {
+                        station = 'DGX';
+                        paneRadarSites[activePaneId] = 'DGX';
+                        const sel = document.getElementById('radar-site-select');
+                        if (sel) sel.value = 'DGX';
+                        addLiveLog('STI: no SITE selected — defaulting to DGX (Jackson MS)', '#ffb300');
+                    }
+                    await fetchStormAttr(activePaneId, station);
+                } else {
+                    delete paneStormAttr[activePaneId];
+                }
+                const vis = isActive ? 'visible' : 'none';
+                ['storm-attr-track', 'storm-attr-fpos', 'storm-attr-cell', 'storm-attr-label']
+                    .forEach(l => map.setLayoutProperty(l, 'visibility', vis));
                 updateSidebarToActivePane();
                 return;
             }
@@ -8391,7 +8470,7 @@ async function loadL3Radar(paneId, station, product) {
         map.setLayoutProperty('radar-l3-layer', 'visibility', 'visible');
         paneL3[paneId] = { station, product, meta: data.meta };
         updateHealth('radarL3');
-        if (paneId === activePaneId) refreshTimestampLabel();
+        if (paneId === activePaneId) { refreshTimestampLabel(); updateL3TiltControl(); }
         addLiveLog(`L3 NODD: ${station} ${data.meta.name} @ ${data.meta.time} (el ${data.meta.elevation}°)`, '#00ff88');
     } catch (e) {
         addLiveLog(`L3 NODD ERROR: ${e.message}`, '#ff3333');
@@ -8402,7 +8481,7 @@ function clearL3Radar(paneId) {
     const map = maps[paneId];
     if (map && map.getLayer('radar-l3-layer')) map.setLayoutProperty('radar-l3-layer', 'visibility', 'none');
     delete paneL3[paneId];
-    if (paneId === activePaneId) refreshTimestampLabel();
+    if (paneId === activePaneId) { refreshTimestampLabel(); updateL3TiltControl(); }
 }
 
 // ─── GIBS live satellite (newest available frame; tiles, browser-direct) ───
@@ -8883,6 +8962,7 @@ function clearPane(map, paneId) {
         'drought-fill', 'drought-outline', 'cpc-drought-layer',
         'probsevere-fill', 'probsevere-outline', 'probsevere-label',
         'airsigmet-fill', 'airsigmet-outline', 'airsigmet-label', 'pireps-layer',
+        'storm-attr-track', 'storm-attr-fpos', 'storm-attr-cell', 'storm-attr-label',
         'nws-cwa-layer', 'nws-cwa-label-layer'
     ];
     allToggleLayers.forEach(l => {
@@ -10036,6 +10116,11 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 3, 2026', items: [
+        'Radar all-tilts: NODD Level III products (SRM, CC, ZDR, KDP) can now be stepped through the lowest four elevation angles. When one is active, an “Elevation tilt” control appears under the NODD list — ▲/▼ moves up/down the volume, and the pane legend shows the actual beam angle.',
+        'Storm Tracks (STI): a new NODD item plots the radar’s storm-cell centroids with their ID and max reflectivity, plus each cell’s forecast track (15/30/45/60-minute positions). Click a cell for max dBZ, storm-top height, and movement.',
+        'VAD Wind Profile: a new NODD item opens a panel showing the winds aloft over the selected radar as a stack of wind barbs by altitude, alongside a hodograph — quick read on shear and veering without leaving the workstation.'
+    ]},
+    { date: 'Jul 3, 2026', items: [
         'ProbSevere (CIMSS): NOAA\'s machine-learning storm-object guidance is now a layer under SPC PRODUCTS. Each tracked storm is outlined and labeled with its probability of becoming severe; click it for the Severe / Tornado / Wind / Hail probabilities plus the environment behind them (MUCAPE, effective shear, MESH hail size, VIL, reflectivity and storm motion). Updates about every 2 minutes.',
         'Aviation hazards: a new AVIATION group adds SIGMETs / AIRMETs (convective, turbulence, icing, IFR, mountain obscuration — color-coded by hazard, click for the full text and valid times) and PIREPs (pilot reports; click for the raw report, aircraft, flight level, temperature and wind).',
         'Analysis tools (AWIPS-style interrogation): Distance / Bearing (click two points for great-circle range and heading), Range Rings (25/50/100/150/200 nm around the active radar site or map center), and Storm Motion & ETA (click a storm\'s previous and current position to get its speed and direction, then click any location for its estimated time of arrival).',
@@ -10481,6 +10566,218 @@ function initProcedures() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 29: NEXRAD L3 — STORM TRACKS (STI), ALL-TILTS, VAD WIND PROFILE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const paneStormAttr = {};   // paneId -> { station, meta }
+
+// Storm Track Information (STI / product NST): storm cell centroids + forecast
+// tracks + attributes, fetched through the existing L3 endpoint (returns GeoJSON).
+async function fetchStormAttr(paneId, station) {
+    const map = maps[paneId];
+    if (!map) return;
+    addLiveLog(`STI: Loading ${station} storm tracks...`, '#ff2bd0');
+    try {
+        const res = await fetch(`/api/radar-l3?station=${station}&product=NST&_=${Date.now()}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'STI failed');
+        const feats = [];
+        (data.geojson && data.geojson.features || []).forEach(f => {
+            const kind = f.properties && f.properties.kind;
+            if (kind === 'cell') {
+                f.properties.tag = f.properties.dbzm != null ? `${f.properties.id} · ${f.properties.dbzm}dBZ` : f.properties.id;
+                feats.push(f);
+            } else if (kind === 'forecast') {
+                feats.push(f);
+                (f.geometry && f.geometry.coordinates || []).slice(1).forEach(c =>
+                    feats.push({ type: 'Feature', properties: { kind: 'ftick', id: f.properties.id }, geometry: { type: 'Point', coordinates: c } }));
+            }
+        });
+        const fc = { type: 'FeatureCollection', features: feats };
+        Object.values(maps).forEach(m => { if (m.getSource('storm-attr')) m.getSource('storm-attr').setData(fc); });
+        paneStormAttr[paneId] = { station, meta: data.meta };
+        addLiveLog(`STI: ${data.meta.count} cells @ ${data.meta.time} (${station})`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`STI ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// ── All-tilts: step the active pane's L3 product through elevation angles ──
+function updateL3TiltControl() {
+    const ctrl = document.getElementById('l3-tilt-control');
+    const label = document.getElementById('l3-tilt-label');
+    if (!ctrl || !label) return;
+    const st = paneL3[activePaneId];
+    const map = maps[activePaneId];
+    if (st && map && isLayerVisible(map, 'radar-l3-layer')) {
+        ctrl.style.display = 'flex';
+        const tilt = parseInt(st.product.charAt(1), 10) || 0;
+        const el = st.meta && st.meta.elevation;
+        label.textContent = (el != null ? el + '°' : ['0.5°', '0.9°', '1.3°', '1.8°'][tilt]) + ` · T${tilt}`;
+    } else {
+        ctrl.style.display = 'none';
+    }
+}
+async function stepL3Tilt(delta) {
+    const pid = activePaneId;
+    const st = paneL3[pid];
+    if (!st) return;
+    const cur = parseInt(st.product.charAt(1), 10) || 0;
+    const next = Math.max(0, Math.min(3, cur + delta));
+    if (next === cur) return;
+    const newProduct = st.product.charAt(0) + String(next) + st.product.charAt(2);
+    addLiveLog(`L3 TILT: requesting T${next} (${newProduct})…`, '#33c27a');
+    await loadL3Radar(pid, st.station, newProduct);
+    updateL3TiltControl();
+}
+function initL3Tilt() {
+    document.getElementById('l3-tilt-up')?.addEventListener('click', () => stepL3Tilt(1));
+    document.getElementById('l3-tilt-down')?.addEventListener('click', () => stepL3Tilt(-1));
+}
+
+// ── VAD Wind Profile (product NVW): wind barbs vs height + hodograph ──
+function _vadBarbPaths(cx, cy, dirFrom, spd, len) {
+    // Shaft points toward the direction the wind comes FROM (met convention, N=up).
+    const a = dirFrom * Math.PI / 180;
+    const ux = Math.sin(a), uy = -Math.cos(a);
+    const ex = cx + ux * len, ey = cy + uy * len;       // free end
+    const bx = -uy, by = ux;                             // perpendicular (barb side)
+    const lines = [`M${cx.toFixed(1)},${cy.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)}`];
+    const flags = [];
+    let s = Math.round(spd / 5) * 5;
+    let n50 = Math.floor(s / 50); s -= n50 * 50;
+    let n10 = Math.floor(s / 10); s -= n10 * 10;
+    let n5 = Math.floor(s / 5);
+    let d = 0; const step = 4.6, bl = 9;
+    for (let i = 0; i < n50; i++) {
+        const p1x = ex - ux * d, p1y = ey - uy * d;
+        const p2x = ex - ux * (d + step) + bx * bl, p2y = ey - uy * (d + step) + by * bl;
+        const p3x = ex - ux * (d + step), p3y = ey - uy * (d + step);
+        flags.push(`M${p1x.toFixed(1)},${p1y.toFixed(1)} L${p2x.toFixed(1)},${p2y.toFixed(1)} L${p3x.toFixed(1)},${p3y.toFixed(1)} Z`);
+        d += step + 1.6;
+    }
+    for (let i = 0; i < n10; i++) {
+        const p1x = ex - ux * d, p1y = ey - uy * d;
+        lines.push(`M${p1x.toFixed(1)},${p1y.toFixed(1)} L${(p1x + bx * bl).toFixed(1)},${(p1y + by * bl).toFixed(1)}`);
+        d += step;
+    }
+    for (let i = 0; i < n5; i++) {
+        if (d === 0) d += step;
+        const p1x = ex - ux * d, p1y = ey - uy * d;
+        lines.push(`M${p1x.toFixed(1)},${p1y.toFixed(1)} L${(p1x + bx * bl * 0.5).toFixed(1)},${(p1y + by * bl * 0.5).toFixed(1)}`);
+        d += step;
+    }
+    return { lines, flags };
+}
+function renderVadSVG(prof) {
+    if (!prof || prof.length < 2) return '<div style="color:#6b7a88;font-size:12px;padding:16px;">No VAD wind data in range right now (needs echoes/insects aloft). Try again during precip or a well-mixed afternoon.</div>';
+    const W = 500, H = 30 + prof.length * 0 + 440, top = 30, bot = 420;
+    const alts = prof.map(p => p.alt_ft);
+    const aMin = Math.min(...alts), aMax = Math.max(...alts);
+    const yFor = a => bot - (a - aMin) / (aMax - aMin || 1) * (bot - top);
+    // barb column
+    let barbs = '';
+    const bx = 96;
+    prof.forEach(p => {
+        const y = yFor(p.alt_ft);
+        const { lines, flags } = _vadBarbPaths(bx, y, p.dir, p.spd, 26);
+        barbs += lines.map(d => `<path d="${d}" stroke="#00e5ff" stroke-width="1.3" fill="none"/>`).join('');
+        barbs += flags.map(d => `<path d="${d}" fill="#00e5ff" stroke="#00e5ff" stroke-width="0.6"/>`).join('');
+        barbs += `<text x="52" y="${(y + 3).toFixed(1)}" fill="#8b97a3" font-size="8" text-anchor="end">${(p.alt_ft / 1000).toFixed(1)}k</text>`;
+        barbs += `<text x="120" y="${(y + 3).toFixed(1)}" fill="#cfcfcf" font-size="8">${String(p.dir).padStart(3, '0')}/${p.spd}</text>`;
+    });
+    // hodograph
+    const hx = 250, hy = 40, hw = 230, hh = 230;
+    const hcx = hx + hw / 2, hcy = hy + hh / 2;
+    const maxSpd = Math.max(...prof.map(p => p.spd), 20);
+    const ringMax = Math.ceil(maxSpd / 10) * 10;
+    const sc = (hw / 2 - 10) / ringMax;
+    let hodo = `<rect x="${hx}" y="${hy}" width="${hw}" height="${hh}" fill="#0a0f16" stroke="#1e2a35"/>`;
+    for (let r = 10; r <= ringMax; r += 10) {
+        hodo += `<circle cx="${hcx}" cy="${hcy}" r="${(r * sc).toFixed(1)}" fill="none" stroke="#1e2a35" stroke-width="0.7"/>`;
+        hodo += `<text x="${hcx + r * sc}" y="${hcy - 2}" fill="#5c6b78" font-size="7">${r}</text>`;
+    }
+    hodo += `<line x1="${hcx}" y1="${hy}" x2="${hcx}" y2="${hy + hh}" stroke="#1e2a35" stroke-width="0.6"/>`;
+    hodo += `<line x1="${hx}" y1="${hcy}" x2="${hx + hw}" y2="${hcy}" stroke="#1e2a35" stroke-width="0.6"/>`;
+    const pts = prof.map(p => {
+        const u = -p.spd * Math.sin(p.dir * Math.PI / 180);
+        const v = -p.spd * Math.cos(p.dir * Math.PI / 180);
+        return [hcx + u * sc, hcy - v * sc];
+    });
+    hodo += `<polyline points="${pts.map(pt => pt[0].toFixed(1) + ',' + pt[1].toFixed(1)).join(' ')}" fill="none" stroke="#ffe14d" stroke-width="1.8"/>`;
+    pts.forEach((pt, i) => { hodo += `<circle cx="${pt[0].toFixed(1)}" cy="${pt[1].toFixed(1)}" r="2" fill="${i === 0 ? '#33c27a' : i === pts.length - 1 ? '#ff3b3b' : '#ffe14d'}"/>`; });
+    hodo += `<text x="${hx}" y="${hy - 4}" fill="#8b97a3" font-size="8">Hodograph (kt) — ● sfc  ● top</text>`;
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="background:transparent;">
+        <text x="52" y="20" fill="#8b97a3" font-size="8" text-anchor="end">ALT</text>
+        <text x="96" y="20" fill="#8b97a3" font-size="8" text-anchor="middle">WIND</text>
+        ${barbs}${hodo}
+    </svg>`;
+}
+async function loadVad(station) {
+    const meta = document.getElementById('vad-meta');
+    const body = document.getElementById('vad-body');
+    if (meta) meta.textContent = `Fetching VAD wind profile for ${station}…`;
+    try {
+        const res = await fetch(`/api/radar-l3?station=${station}&product=NVW&_=${Date.now()}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'VAD failed');
+        const prof = data.profile || [];
+        if (meta) meta.textContent = `${station} · VAD Wind Profile · ${data.meta.time} · ${prof.length} levels`;
+        if (body) body.innerHTML = renderVadSVG(prof);
+    } catch (e) {
+        if (meta) meta.textContent = `VAD error: ${e.message}`;
+        if (body) body.innerHTML = `<div style="color:#ff6666;font-size:11px;padding:16px;">Could not load VAD (${esc(e.message)}). This product needs radar returns aloft over the site.</div>`;
+    }
+}
+function vadStation() {
+    let s = (paneRadarSites[activePaneId] || '').toUpperCase();
+    if (!s || s.includes('NEXRAD')) {
+        s = 'DGX';
+        paneRadarSites[activePaneId] = 'DGX';
+        const sel = document.getElementById('radar-site-select');
+        if (sel) sel.value = 'DGX';
+    }
+    return s;
+}
+async function openVadPanel() {
+    const panel = document.getElementById('vad-panel');
+    if (!panel) return;
+    panel.style.display = 'block';
+    panel.dataset.station = vadStation();
+    await loadVad(panel.dataset.station);
+}
+function initVadPanel() {
+    document.getElementById('btn-vad')?.addEventListener('click', openVadPanel);
+    document.getElementById('close-vad-panel')?.addEventListener('click', () => {
+        const p = document.getElementById('vad-panel'); if (p) p.style.display = 'none';
+    });
+    document.getElementById('vad-refresh')?.addEventListener('click', () => {
+        const p = document.getElementById('vad-panel');
+        loadVad((p && p.dataset.station) || vadStation());
+    });
+    // simple drag on the header
+    const panel = document.getElementById('vad-panel');
+    const handle = document.getElementById('vad-drag');
+    if (panel && handle) {
+        let dx = 0, dy = 0, drag = false;
+        handle.style.cursor = 'move';
+        handle.addEventListener('mousedown', e => {
+            if (e.target.closest('button')) return;
+            drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop;
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', e => {
+            if (!drag) return;
+            panel.style.left = Math.max(0, e.clientX - dx) + 'px';
+            panel.style.top = Math.max(0, e.clientY - dy) + 'px';
+            panel.style.right = 'auto';
+        });
+        window.addEventListener('mouseup', () => { drag = false; });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 25: INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -10526,6 +10823,8 @@ function init() {
     initInterrogationTools();
     initAlertViz();
     initProcedures();
+    initL3Tilt();
+    initVadPanel();
 
     // Start warning watchdog (check every 15 seconds for rapid convective updates)
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');
@@ -10538,6 +10837,12 @@ function init() {
             const st = paneL3[pid];
             if (st && maps[pid] && isLayerVisible(maps[pid], 'radar-l3-layer')) {
                 loadL3Radar(pid, st.station, st.product);
+            }
+        });
+        // Storm tracks (STI) follow the same volume-scan cadence.
+        Object.keys(paneStormAttr).forEach(pid => {
+            if (maps[pid] && isLayerVisible(maps[pid], 'storm-attr-cell')) {
+                fetchStormAttr(pid, paneStormAttr[pid].station);
             }
         });
         if (!isPlaying) refreshTimestampLabel();   // update L3 time on all panes

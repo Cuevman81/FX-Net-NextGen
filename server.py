@@ -273,7 +273,12 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     'radar_l3', os.path.join(os.path.dirname(__file__), 'api', 'radar-l3.py'))
                 rl3 = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(rl3)
-                result = rl3.build_radar(station, product)
+                if product in ('NST', 'STORMTRACK'):
+                    result = rl3.build_storm_attr(station)
+                elif product in ('NVW', 'VAD'):
+                    result = rl3.build_vad(station)
+                else:
+                    result = rl3.build_radar(station, product)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
