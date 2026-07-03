@@ -34,6 +34,63 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
+
+        elif path == '/api/airsigmet':
+            try:
+                req = urllib.request.Request('https://aviationweather.gov/api/data/airsigmet?format=geojson')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
+
+        elif path == '/api/pirep':
+            try:
+                req = urllib.request.Request('https://aviationweather.gov/api/data/pirep?format=geojson&age=3&bbox=20,-130,55,-60')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
+
+        elif path == '/api/probsevere':
+            try:
+                import re as _re
+                base = 'https://mrms.ncep.noaa.gov/data/ProbSevere/PROBSEVERE/'
+                lreq = urllib.request.Request(base, headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
+                with safe_urlopen(lreq, timeout=15) as lr:
+                    listing = lr.read().decode('utf-8', 'replace')
+                names = _re.findall(r'MRMS_PROBSEVERE_\d{8}_\d{6}\.json', listing)
+                if not names:
+                    raise ValueError('no ProbSevere files found')
+                newest = sorted(set(names))[-1]
+                freq = urllib.request.Request(base + newest, headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
+                with safe_urlopen(freq, timeout=15) as fr:
+                    data = fr.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as e:
+                self.send_response(502)
+                self.end_headers()
+                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
+
         elif path == '/api/wpc-isobars':
             try:
                 req = urllib.request.Request('https://ftp-wpc.ncep.noaa.gov/sfcanl_isobars/isobars_latest.txt')

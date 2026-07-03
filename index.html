@@ -158,7 +158,16 @@
                     <div class="product-item" data-layer="spc-prob" data-day="2" data-hazard="hail"><span>Hail Probability</span></div>
                     <div class="product-item" data-layer="spc-md"><span>Mesoscale Discussions</span> <span class="badge red">LIVE</span></div>
                     <div class="product-item" data-layer="spc-lsr"><span>Local Storm Reports</span> <span class="badge orange">LIVE</span></div>
+                    <div class="product-item" data-layer="probsevere"><span>ProbSevere (CIMSS)</span> <span class="badge red">LIVE</span></div>
                     <div class="product-item" id="btn-soundings"><span>Skew-T Soundings</span></div>
+                </div>
+
+                <!-- AVIATION -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="plane"></i> AVIATION</div>
+                    <div class="product-item" data-layer="airsigmet"><span>SIGMETs / AIRMETs</span> <span class="badge orange">AWC</span></div>
+                    <div class="product-item" data-layer="pireps"><span>Pilot Reports (PIREPs)</span> <span class="badge green">AWC</span></div>
+                    <div class="sub-category">Click a hazard area or PIREP for detail</div>
                 </div>
 
                 <!-- SURFACE ANALYSIS -->
@@ -261,6 +270,17 @@
                     <div class="product-item" data-layer="overlay-cities"><span>Cities & Labels</span></div>
                     <div class="product-item" data-layer="overlay-roads"><span>Interstates & Roads</span></div>
                     <div class="product-item" data-layer="overlay-cwa"><span>NWS CWA Boundaries</span></div>
+                </div>
+
+                <!-- ANALYSIS TOOLS -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="ruler"></i> ANALYSIS TOOLS</div>
+                    <div class="product-item" id="tool-measure"><span>Distance / Bearing</span> <span class="badge blue">TOOL</span></div>
+                    <div class="product-item" id="tool-range-rings"><span>Range Rings (site)</span> <span class="badge blue">TOOL</span></div>
+                    <div class="product-item" id="tool-storm-eta"><span>Storm Motion &amp; ETA</span> <span class="badge orange">TOOL</span></div>
+                    <div class="sub-category">Procedures (saved display bundles)</div>
+                    <div class="product-item" id="proc-save"><span>Save Current Display…</span></div>
+                    <div id="proc-list" class="proc-list"></div>
                 </div>
 
                 <!-- NWS TEXT PRODUCTS -->
@@ -927,7 +947,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=211"></script>
+    <script src="app.js?v=212"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

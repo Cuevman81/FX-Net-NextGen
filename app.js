@@ -1943,6 +1943,103 @@ function setupMapLayers(map, paneId) {
         });
     });
 
+    // ─── Layer 7c: Aviation — SIGMETs / AIRMETs (AWC) ───
+    const AV_HAZARD_COLOR = ['match', ['get', 'hazard'],
+        'CONVECTIVE', '#ff3b3b',
+        'TURB', '#ff9e3b',
+        'ICE', '#3bd4ff',
+        'IFR', '#c46bff',
+        'MTN OBSCN', '#b98a5a',
+        'ASH', '#ff5ac4',
+        '#ffd23c'];
+    map.addSource('airsigmet', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'airsigmet-fill', type: 'fill', source: 'airsigmet',
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': AV_HAZARD_COLOR, 'fill-opacity': 0.12 }
+    });
+    map.addLayer({
+        id: 'airsigmet-outline', type: 'line', source: 'airsigmet',
+        layout: { visibility: 'none', 'line-join': 'round' },
+        paint: { 'line-color': AV_HAZARD_COLOR, 'line-width': 2, 'line-dasharray': [3, 2] }
+    });
+    map.addLayer({
+        id: 'airsigmet-label', type: 'symbol', source: 'airsigmet',
+        layout: {
+            visibility: 'none',
+            'text-field': ['coalesce', ['get', 'hazard'], 'SIGMET'],
+            'text-font': ['Noto Sans Regular'], 'text-size': 10,
+            'symbol-placement': 'point', 'text-allow-overlap': false
+        },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1.4 }
+    });
+
+    // ─── Layer 7d: Aviation — Pilot Reports (PIREPs) ───
+    map.addSource('pireps', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'pireps-layer', type: 'circle', source: 'pireps',
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': 5,
+            'circle-color': ['match', ['get', 'airepType'], 'Urgent PIREP', '#ff3b3b', '#00e5ff'],
+            'circle-stroke-color': '#001018', 'circle-stroke-width': 1.2, 'circle-opacity': 0.9
+        }
+    });
+
+    // ─── Layer 7e: ProbSevere storm objects (CIMSS via NCEP) ───
+    const PS_COLOR = ['interpolate', ['linear'], ['to-number', ['coalesce', ['get', 'ProbSevere'], 0]],
+        0, '#00e5ff', 30, '#ffe14d', 50, '#ff9900', 70, '#ff3b3b', 90, '#ff2bd0'];
+    map.addSource('probsevere', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'probsevere-fill', type: 'fill', source: 'probsevere',
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': PS_COLOR, 'fill-opacity': 0.08 }
+    });
+    map.addLayer({
+        id: 'probsevere-outline', type: 'line', source: 'probsevere',
+        layout: { visibility: 'none', 'line-join': 'round' },
+        paint: { 'line-color': PS_COLOR, 'line-width': 2.4 }
+    });
+    map.addLayer({
+        id: 'probsevere-label', type: 'symbol', source: 'probsevere',
+        layout: {
+            visibility: 'none',
+            'text-field': ['concat', ['to-string', ['coalesce', ['get', 'ProbSevere'], 0]], '%'],
+            'text-font': ['Noto Sans Regular'], 'text-size': 11,
+            'symbol-placement': 'point', 'text-allow-overlap': true
+        },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1.6 }
+    });
+
+    // ─── Layer 7f: Interrogation tools (measure / range rings / storm ETA) ───
+    // One shared overlay per pane; features are pushed in by the tools module.
+    map.addSource('tool-geo', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'tool-rings', type: 'line', source: 'tool-geo',
+        filter: ['==', ['geometry-type'], 'Polygon'],
+        paint: { 'line-color': '#ffcc00', 'line-width': 1.3, 'line-opacity': 0.85, 'line-dasharray': [2, 2] }
+    });
+    map.addLayer({
+        id: 'tool-line', type: 'line', source: 'tool-geo',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': ['coalesce', ['get', 'color'], '#00e5ff'], 'line-width': 2, 'line-dasharray': [2, 1] }
+    });
+    map.addSource('tool-pts', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'tool-pts-dot', type: 'circle', source: 'tool-pts',
+        paint: { 'circle-radius': 4, 'circle-color': ['coalesce', ['get', 'color'], '#00e5ff'], 'circle-stroke-color': '#001018', 'circle-stroke-width': 1.5 }
+    });
+    map.addLayer({
+        id: 'tool-pts-label', type: 'symbol', source: 'tool-pts',
+        layout: {
+            'text-field': ['coalesce', ['get', 'label'], ''],
+            'text-font': ['Noto Sans Regular'], 'text-size': 11,
+            'text-offset': [0, -1.1], 'text-anchor': 'bottom', 'text-allow-overlap': true
+        },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1.6 }
+    });
+
 function getRadarSitesGeoJSON() {
     const features = [];
     for (const [id, coords] of Object.entries(RADAR_LOCATIONS)) {
@@ -2897,7 +2994,12 @@ function initFrontalPipIcons(map) {
     map.on('mouseleave', 'drought-fill', () => { map.getCanvas().style.cursor = ''; });
 
     // NWS Alert map click (Universal Point Query for Warnings, Watches, Advisories)
+    // Interrogation tools intercept clicks/moves when a tool mode is active.
+    map.on('click', e => { if (window.interrogationMode) handleToolClick(map, paneId, e); });
+    map.on('mousemove', e => { if (window.interrogationMode === 'measure') updateMeasurePreview(map, paneId, e.lngLat); });
+
     map.on('click', async e => {
+        if (window.interrogationMode) return;   // tool mode owns the click
         // Track each alert class separately so the point query surfaces only the
         // classes whose layer is actually on — matching the map's warnings /
         // advisories / watches split. (The legacy combined WWA WMS counts for
@@ -3010,6 +3112,75 @@ function initFrontalPipIcons(map) {
     });
     map.on('mouseenter', 'wpc-mpd-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'wpc-mpd-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── SIGMET / AIRMET click ───
+    map.on('click', 'airsigmet-fill', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const hazColor = { CONVECTIVE: '#ff3b3b', TURB: '#ff9e3b', ICE: '#3bd4ff', IFR: '#c46bff', 'MTN OBSCN': '#b98a5a', ASH: '#ff5ac4' }[p.hazard] || '#ffd23c';
+        const fmt = s => s ? String(s).replace('T', ' ').replace(/:\d{2}\.\d+Z?$/, 'Z').slice(5, 16) + 'Z' : '';
+        const alt = (p.altitudeLow1 || p.altitudeHi1)
+            ? `<div><span style="color:#888;">Altitude:</span> ${p.altitudeLow1 ? esc(p.altitudeLow1) : 'SFC'} – ${esc(p.altitudeHi1 || '?')} ft</div>` : '';
+        const mov = (p.movementDir != null && p.movementDir !== '')
+            ? `<div><span style="color:#888;">Movement:</span> ${esc(p.movementDir)}° @ ${esc(p.movementSpd || 0)} kt</div>` : '';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:340px;">
+            <div style="font-weight:bold;color:${hazColor};font-size:13px;margin-bottom:3px;">${esc(p.airSigmetType || 'SIGMET')} · ${esc(p.hazard || '')}</div>
+            <div style="color:#888;margin-bottom:4px;">Valid ${fmt(p.validTimeFrom)} – ${fmt(p.validTimeTo)}</div>
+            ${alt}${mov}
+            ${p.rawAirSigmet ? `<pre style="white-space:pre-wrap;color:#9fd3ff;font-size:10px;margin:6px 0 0;border-top:1px solid #333;padding-top:5px;">${esc(p.rawAirSigmet)}</pre>` : ''}
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'airsigmet-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'airsigmet-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── PIREP click ───
+    map.on('click', 'pireps-layer', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const urgent = p.airepType === 'Urgent PIREP';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
+            <div style="font-weight:bold;color:${urgent ? '#ff3b3b' : '#00e5ff'};font-size:12px;margin-bottom:3px;">${urgent ? '⚠ URGENT PIREP' : 'PILOT REPORT'} · ${esc(p.icaoId || '')}</div>
+            <div style="color:#888;margin-bottom:2px;">${esc(p.acType || 'Unknown aircraft')}${p.fltlvl ? ' · FL' + esc(p.fltlvl) : ''}</div>
+            ${(p.temp != null && p.temp !== '') ? `<div><span style="color:#888;">Temp:</span> ${esc(p.temp)}°C</div>` : ''}
+            ${(p.wdir != null && p.wdir !== '') ? `<div><span style="color:#888;">Wind:</span> ${esc(p.wdir)}° @ ${esc(p.wspd || 0)} kt</div>` : ''}
+            ${p.rawOb ? `<pre style="white-space:pre-wrap;color:#9fd3ff;font-size:10px;margin:6px 0 0;border-top:1px solid #333;padding-top:5px;">${esc(p.rawOb)}</pre>` : ''}
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'pireps-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'pireps-layer', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── ProbSevere storm-object click ───
+    map.on('click', 'probsevere-fill', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const bar = (label, val, color) => {
+            const v = Math.max(0, Math.min(100, parseFloat(val) || 0));
+            return `<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">
+                <span style="width:64px;color:#aaa;">${label}</span>
+                <span style="flex:1;height:9px;background:#1a2230;border-radius:2px;overflow:hidden;"><span style="display:block;height:100%;width:${v}%;background:${color};"></span></span>
+                <span style="width:34px;text-align:right;color:${color};font-weight:bold;">${v}%</span></div>`;
+        };
+        const mE = parseFloat(p.MOTION_EAST) || 0, mS = parseFloat(p.MOTION_SOUTH) || 0;
+        const spd = Math.round(Math.hypot(mE, mS) * 1.94384);            // m/s → kt
+        const dir = ((Math.atan2(-mE, mS) * 180 / Math.PI) + 360) % 360; // toward-direction of storm motion
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:9px;border-radius:4px;max-width:290px;">
+            <div style="font-weight:bold;color:#ff9900;font-size:13px;margin-bottom:5px;">ProbSevere · Storm ${esc(p.ID || '')}</div>
+            ${bar('Severe', p.ProbSevere, '#ff9900')}
+            ${bar('Tornado', p.ProbTor, '#ff2bd0')}
+            ${bar('Wind', p.ProbWind, '#3bd4ff')}
+            ${bar('Hail', p.ProbHail, '#ffe14d')}
+            <div style="border-top:1px solid #333;margin-top:6px;padding-top:5px;color:#cfcfcf;line-height:1.5;">
+                <div><span style="color:#888;">MUCAPE:</span> ${esc(p.MUCAPE || '–')} J/kg &nbsp; <span style="color:#888;">EBShear:</span> ${esc(p.EBSHEAR || '–')} kt</div>
+                <div><span style="color:#888;">MESH:</span> ${esc(p.MESH || '–')} in &nbsp; <span style="color:#888;">VIL:</span> ${esc(p.VIL || '–')} &nbsp; <span style="color:#888;">Ref:</span> ${esc(p.COMPREF || '–')} dBZ</div>
+                <div><span style="color:#888;">Motion:</span> ${Math.round(dir)}° @ ${spd} kt</div>
+            </div>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'probsevere-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'probsevere-fill', () => { map.getCanvas().style.cursor = ''; });
 
     // SPC LSR click
     map.on('click', 'spc-lsr-icons', e => {
@@ -4754,13 +4925,12 @@ async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
             html += '</table>';
         }
 
-        // Hydrograph image
-        if (images.default) {
-            html += `<div style="border-top:1px solid rgba(0,229,255,0.15); padding-top:4px; margin-bottom:3px;">
-                <span style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">Hydrograph</span>
+        // Native observed+forecast hydrograph (rendered async from the NWPS stageflow
+        // series). Falls back to the AHPS image if the series can't be drawn.
+        html += `<div style="border-top:1px solid rgba(0,229,255,0.15); padding-top:4px; margin-bottom:3px;">
+                <span style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">Hydrograph — Observed + Forecast</span>
             </div>
-            <img src="${esc(images.default)}" style="width:100%; max-width:420px; border-radius:3px; border:1px solid rgba(0,229,255,0.15);" onerror="this.style.display='none'" />`;
-        }
+            <div id="hydro-chart-slot" data-img="${esc(images.default || '')}" style="width:100%; min-height:150px; color:#6b7a88; font-size:10px;">Loading stage/flow series…</div>`;
 
         // Link to water.weather.gov
         html += `<div style="margin-top:4px;"><a href="https://water.weather.gov/ahps2/hydrograph.php?gage=${encodeURIComponent(gaugeId.toLowerCase())}&wfo=${encodeURIComponent(wfo.toLowerCase())}" target="_blank" style="color:#00e5ff; font-size:8px; text-decoration:none;">Open on water.weather.gov &rarr;</a></div>`;
@@ -4774,10 +4944,85 @@ async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
             panel.style.left = Math.min(px, window.innerWidth - 480) + 'px';
             panel.style.top = Math.max(10, Math.min(py, window.innerHeight - 500)) + 'px';
             panel.style.display = 'block';
+            renderGaugeHydrograph(gaugeId, cats);
         }
     } catch (e) {
         addLiveLog(`GAUGE DETAIL ERROR: ${e.message}`, '#ff3333');
     }
+}
+
+// Fetch the NWPS stage/flow series and draw a compact observed+forecast hydrograph
+// with flood-category threshold lines. CORS-clean, so no proxy needed.
+async function renderGaugeHydrograph(gaugeId, cats) {
+    const slot = document.getElementById('hydro-chart-slot');
+    if (!slot) return;
+    try {
+        const res = await fetch(`https://api.water.noaa.gov/nwps/v1/gauges/${encodeURIComponent(gaugeId)}/stageflow`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const sf = await res.json();
+        const parse = arr => (arr || [])
+            .map(d => ({ t: new Date(d.validTime).getTime(), v: d.primary }))
+            .filter(d => isFinite(d.t) && typeof d.v === 'number' && d.v > -900);
+        const now = Date.now();
+        const obs = parse(sf.observed?.data).filter(d => d.t >= now - 3 * 864e5 && d.t <= now + 36e5);
+        const fcst = parse(sf.forecast?.data);
+        const unit = sf.observed?.primaryUnits || sf.forecast?.primaryUnits || 'ft';
+        if (obs.length < 2 && fcst.length < 2) throw new Error('no series');
+
+        const svg = buildHydrographSVG(obs, fcst, cats, unit, now);
+        slot.innerHTML = svg;
+        slot.style.color = '';
+    } catch (e) {
+        // Fall back to the AHPS-rendered image if we have one.
+        const img = slot.getAttribute('data-img');
+        slot.innerHTML = img
+            ? `<img src="${esc(img)}" style="width:100%; max-width:420px; border-radius:3px; border:1px solid rgba(0,229,255,0.15);" onerror="this.style.display='none'" />`
+            : `<span style="color:#6b7a88;">Hydrograph unavailable.</span>`;
+    }
+}
+
+function buildHydrographSVG(obs, fcst, cats, unit, now) {
+    const W = 420, H = 158, mL = 34, mR = 10, mT = 10, mB = 20;
+    const all = obs.concat(fcst);
+    const tMin = Math.min(...all.map(d => d.t));
+    const tMax = Math.max(...all.map(d => d.t));
+    const thr = ['action', 'minor', 'moderate', 'major']
+        .map(k => cats?.[k]?.stage).filter(v => v > 0);
+    let vMin = Math.min(...all.map(d => d.v));
+    let vMax = Math.max(...all.map(d => d.v), ...thr);
+    const pad = (vMax - vMin) * 0.12 || 1;
+    vMin -= pad; vMax += pad;
+    const x = t => mL + (tMax === tMin ? 0 : (t - tMin) / (tMax - tMin)) * (W - mL - mR);
+    const y = v => mT + (1 - (vMax === vMin ? 0.5 : (v - vMin) / (vMax - vMin))) * (H - mT - mB);
+    const path = pts => pts.map((d, i) => `${i ? 'L' : 'M'}${x(d.t).toFixed(1)},${y(d.v).toFixed(1)}`).join(' ');
+
+    const thrLines = [['action', '#ffff00'], ['minor', '#ff8800'], ['moderate', '#ff3b3b'], ['major', '#ff2bd0']]
+        .map(([k, c]) => {
+            const s = cats?.[k]?.stage;
+            if (!(s > 0) || s < vMin || s > vMax) return '';
+            return `<line x1="${mL}" y1="${y(s).toFixed(1)}" x2="${W - mR}" y2="${y(s).toFixed(1)}" stroke="${c}" stroke-width="0.8" stroke-dasharray="4 3" opacity="0.7"/>
+                    <text x="${W - mR}" y="${(y(s) - 2).toFixed(1)}" fill="${c}" font-size="7" text-anchor="end">${k[0].toUpperCase() + k.slice(1)}</text>`;
+        }).join('');
+
+    const nowX = x(now);
+    const gy0 = mT, gy1 = H - mB;
+    const yticks = [vMin + pad, (vMin + vMax) / 2, vMax - pad].map(v =>
+        `<text x="${mL - 4}" y="${(y(v) + 3).toFixed(1)}" fill="#6b7a88" font-size="7" text-anchor="end">${v.toFixed(1)}</text>
+         <line x1="${mL}" y1="${y(v).toFixed(1)}" x2="${W - mR}" y2="${y(v).toFixed(1)}" stroke="#1e2a35" stroke-width="0.5"/>`).join('');
+
+    const obsPath = obs.length >= 2 ? `<path d="${path(obs)}" fill="none" stroke="#00e5ff" stroke-width="1.6"/>` : '';
+    const fcstPath = fcst.length >= 2 ? `<path d="${path(fcst)}" fill="none" stroke="#ffe14d" stroke-width="1.6" stroke-dasharray="5 3"/>` : '';
+
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;background:#0a0f16;border:1px solid rgba(0,229,255,0.15);border-radius:3px;">
+        ${yticks}
+        ${thrLines}
+        <line x1="${nowX.toFixed(1)}" y1="${gy0}" x2="${nowX.toFixed(1)}" y2="${gy1}" stroke="#5c6b78" stroke-width="0.8" stroke-dasharray="2 2"/>
+        <text x="${nowX.toFixed(1)}" y="${gy0 + 7}" fill="#8b97a3" font-size="7" text-anchor="middle">now</text>
+        ${obsPath}${fcstPath}
+        <text x="${mL}" y="${H - 6}" fill="#00e5ff" font-size="7">● Observed</text>
+        <text x="${mL + 62}" y="${H - 6}" fill="#ffe14d" font-size="7">╍ Forecast</text>
+        <text x="${W - mR}" y="${H - 6}" fill="#6b7a88" font-size="7" text-anchor="end">${unit}</text>
+    </svg>`;
 }
 
 function aqiCategory(val) {
@@ -4848,6 +5093,65 @@ function concToAqi(conc, pollutant) {
         }
     }
     return c > bp[bp.length - 1].cHigh ? 500 : -1; // Beyond scale
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 9b: AVIATION HAZARDS & PROBSEVERE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// SIGMETs and AIRMETs (Aviation Weather Center) — one feed carries both, styled by
+// hazard. Proxied through /api/airsigmet (AWC sends no CORS header).
+async function fetchAirSigmet(show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    addLiveLog('AVIATION: Fetching SIGMETs/AIRMETs...', '#ff9e3b');
+    try {
+        const res = await fetch('/api/airsigmet');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const fc = await res.json();
+        const feats = (fc.features || []).filter(f => f.geometry &&
+            (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'));
+        const clean = { type: 'FeatureCollection', features: feats };
+        Object.values(maps).forEach(m => { if (m.getSource('airsigmet')) m.getSource('airsigmet').setData(clean); });
+        addLiveLog(`AVIATION: ${feats.length} SIGMET/AIRMET areas loaded`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`AVIATION SIGMET ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// Pilot reports (turbulence, icing, sky cover) — CONUS bbox, last 3 hours.
+async function fetchPireps(show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    addLiveLog('AVIATION: Fetching pilot reports...', '#00e5ff');
+    try {
+        const res = await fetch('/api/pirep');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const fc = await res.json();
+        const feats = (fc.features || []).filter(f => f.geometry && f.geometry.type === 'Point');
+        const clean = { type: 'FeatureCollection', features: feats };
+        Object.values(maps).forEach(m => { if (m.getSource('pireps')) m.getSource('pireps').setData(clean); });
+        addLiveLog(`AVIATION: ${feats.length} PIREPs loaded`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`AVIATION PIREP ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// CIMSS ProbSevere storm objects (ProbSevere/Hail/Wind/Tor). Proxied through
+// /api/probsevere which finds the newest MRMS_PROBSEVERE_*.json (published ~2 min).
+async function fetchProbSevere(show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    addLiveLog('PROBSEVERE: Fetching CIMSS storm objects...', '#ff3b3b');
+    try {
+        const res = await fetch('/api/probsevere');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const fc = await res.json();
+        const feats = (fc.features || []).filter(f => f.geometry);
+        const clean = { type: 'FeatureCollection', features: feats };
+        Object.values(maps).forEach(m => { if (m.getSource('probsevere')) m.getSource('probsevere').setData(clean); });
+        addLiveLog(`PROBSEVERE: ${feats.length} storm objects loaded`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`PROBSEVERE ERROR: ${e.message}`, '#ff3333');
+    }
 }
 
 
@@ -5055,6 +5359,7 @@ async function checkNewWarnings() {
                 const threatTag = isEmergency ? ' ⚠ EMERGENCY' : threat === 'Catastrophic' || threat === 'Destructive' ? ` ⚠ ${threat.toUpperCase()}` : threat === 'Considerable' ? ' ⚠ CONSIDERABLE' : isPDS ? ' ⚠ PDS' : '';
                 const color = isEmergency || threat === 'Catastrophic' ? '#ff0000' : threat === 'Considerable' || isPDS ? '#ff6600' : severity === 'Extreme' ? '#ff0000' : severity === 'Severe' ? '#ff3333' : '#ffb300';
                 addLiveLog(`WATCHDOG: NEW ${event}${threatTag} → ${(area || '').substring(0, 80)}`, color);
+                alertVizNotify(f, { isEmergency, threat, isPDS });
             }
         }
         if (newItems.length > 0) {
@@ -6762,6 +7067,9 @@ function updateSidebarToActivePane() {
         else if (layer === 'spc-md') isActive = isLayerVisible(map, 'spc-md-fill');
         else if (layer === 'wpc-mpd') isActive = isLayerVisible(map, 'wpc-mpd-fill');
         else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-icons');
+        else if (layer === 'probsevere') isActive = isLayerVisible(map, 'probsevere-fill');
+        else if (layer === 'airsigmet') isActive = isLayerVisible(map, 'airsigmet-fill');
+        else if (layer === 'pireps') isActive = isLayerVisible(map, 'pireps-layer');
         else if (layer === 'spc-outlook') {
             const day = item.getAttribute('data-day');
             isActive = isLayerVisible(map, `spc-day${day}-fill`);
@@ -7043,6 +7351,35 @@ function initProductSidebar() {
                 if (isActive) await fetchLSRs(true);
                 map.setLayoutProperty('spc-lsr-icons', 'visibility', isActive ? 'visible' : 'none');
                 map.setLayoutProperty('spc-lsr-mag', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── ProbSevere (CIMSS storm objects) ───
+            if (layer === 'probsevere') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchProbSevere(true);
+                const vis = isActive ? 'visible' : 'none';
+                ['probsevere-fill', 'probsevere-outline', 'probsevere-label'].forEach(l => map.setLayoutProperty(l, 'visibility', vis));
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Aviation: SIGMETs / AIRMETs ───
+            if (layer === 'airsigmet') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchAirSigmet(true);
+                const vis = isActive ? 'visible' : 'none';
+                ['airsigmet-fill', 'airsigmet-outline', 'airsigmet-label'].forEach(l => map.setLayoutProperty(l, 'visibility', vis));
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Aviation: PIREPs ───
+            if (layer === 'pireps') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchPireps(true);
+                map.setLayoutProperty('pireps-layer', 'visibility', isActive ? 'visible' : 'none');
                 updateSidebarToActivePane();
                 return;
             }
@@ -8544,6 +8881,8 @@ function clearPane(map, paneId) {
         'nhc-warn-fill', 'nhc-warn-outline', 'nhc-outlook-fill', 'nhc-outlook-outline',
         'cpc-temp-layer', 'cpc-precip-layer',
         'drought-fill', 'drought-outline', 'cpc-drought-layer',
+        'probsevere-fill', 'probsevere-outline', 'probsevere-label',
+        'airsigmet-fill', 'airsigmet-outline', 'airsigmet-label', 'pireps-layer',
         'nws-cwa-layer', 'nws-cwa-label-layer'
     ];
     allToggleLayers.forEach(l => {
@@ -8914,13 +9253,25 @@ function startUTCClock() {
 function startAutoRefresh() {
     // 1. Critical Tactical Data (60 seconds)
     setInterval(() => {
+        if (isPlaying) return;
         // Mesoscale Discussions
         const mcdActive = Object.values(maps).some(m => isLayerVisible(m, 'spc-md-fill'));
         if (mcdActive) fetchMesoscaleDiscussions(true);
 
         const mpdActive = Object.values(maps).some(m => isLayerVisible(m, 'wpc-mpd-fill'));
         if (mpdActive) fetchMPDs(true);
+
+        // ProbSevere storm objects update ~every 2 min; CDN shields upstream for 90s.
+        const psActive = Object.values(maps).some(m => isLayerVisible(m, 'probsevere-fill'));
+        if (psActive) fetchProbSevere(true);
     }, 60 * 1000);
+
+    // Aviation hazards (SIGMET/AIRMET hourly-ish, PIREPs continuous) — 5 min cadence.
+    setInterval(() => {
+        if (isPlaying) return;
+        if (Object.values(maps).some(m => isLayerVisible(m, 'airsigmet-fill'))) fetchAirSigmet(true);
+        if (Object.values(maps).some(m => isLayerVisible(m, 'pireps-layer'))) fetchPireps(true);
+    }, 5 * 60 * 1000);
 
     // 2. High Frequency (5 minutes)
     // Site radar — fast poll (60s). NEXRAD volume scans complete every ~4-6 min
@@ -9684,6 +10035,14 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 3, 2026', items: [
+        'ProbSevere (CIMSS): NOAA\'s machine-learning storm-object guidance is now a layer under SPC PRODUCTS. Each tracked storm is outlined and labeled with its probability of becoming severe; click it for the Severe / Tornado / Wind / Hail probabilities plus the environment behind them (MUCAPE, effective shear, MESH hail size, VIL, reflectivity and storm motion). Updates about every 2 minutes.',
+        'Aviation hazards: a new AVIATION group adds SIGMETs / AIRMETs (convective, turbulence, icing, IFR, mountain obscuration — color-coded by hazard, click for the full text and valid times) and PIREPs (pilot reports; click for the raw report, aircraft, flight level, temperature and wind).',
+        'Analysis tools (AWIPS-style interrogation): Distance / Bearing (click two points for great-circle range and heading), Range Rings (25/50/100/150/200 nm around the active radar site or map center), and Storm Motion & ETA (click a storm\'s previous and current position to get its speed and direction, then click any location for its estimated time of arrival).',
+        'AlertViz notifications: when a new Tornado, Severe Thunderstorm or Flash Flood Warning is issued, a corner toast pops up (with an optional alert tone) so you don\'t have to be watching the ticker.',
+        'Procedures: save the current display — every active layer, the map view and the pane layout — as a named bundle under ANALYSIS TOOLS, and reload it in one click later.',
+        'Live river-gauge popups now draw a native observed-plus-forecast hydrograph with the flood-stage thresholds marked, instead of a static image.'
+    ]},
     { date: 'Jul 1, 2026', items: [
         'Warnings and Advisories are now separate toggles under NWS WARNINGS — "Active Warnings" shows only true warnings (Tornado, Severe Thunderstorm, Flash Flood, etc.), and a new "Advisories & Statements" item shows advisories, statements, alerts and outlooks on their own — just like Active Watches already worked. Turn on either or both; each gets its own pane-legend row, and clicking an area still pops up the full bulletin. The click-to-query popup now respects the split too: with only Warnings on it lists just the warnings at that spot (no advisories mixed in), and vice-versa.',
         'Much fresher live satellite for Clean IR and Red Visible — the live (non-looping) view of these two products now comes from IEM\'s per-channel GOES-East cache, typically 5–10 minutes behind the actual scan instead of the ~45–60 minute publication lag of the NASA GIBS feed. The pane legend shows the exact image valid time. Loops still run on GIBS timestamped frames (IEM has no time history), so animation quality is unchanged — you get the fresh frame live and the clean loop when animating.',
@@ -9767,6 +10126,361 @@ function initWhatsNew() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 26: INTERROGATION TOOLS (measure / range rings / storm ETA)
+// ═══════════════════════════════════════════════════════════════════════════════
+// AWIPS-style point interrogation. One shared 'tool-geo'/'tool-pts' overlay per
+// pane (created in setupMapLayers); the active mode owns map clicks via the guard
+// in the generic click handler. All math is great-circle (nautical miles).
+
+window.interrogationMode = null;          // 'measure' | 'rings' | 'eta' | null
+const _measure = { pts: [], map: null };
+const _eta = { pts: [], head: null, speedKt: 0, dirDeg: 0 };
+const _EARTH_NM = 3440.065;
+
+function _nm(a, b) {
+    const toRad = d => d * Math.PI / 180;
+    const dLat = toRad(b[1] - a[1]), dLon = toRad(b[0] - a[0]);
+    const s = Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLon / 2) ** 2;
+    return 2 * _EARTH_NM * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+function _bearing(a, b) {
+    const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+    const y = Math.sin(toRad(b[0] - a[0])) * Math.cos(toRad(b[1]));
+    const x = Math.cos(toRad(a[1])) * Math.sin(toRad(b[1])) -
+        Math.sin(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.cos(toRad(b[0] - a[0]));
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+function _pointAtBearing(center, distNm, brgDeg) {
+    const d = distNm / _EARTH_NM, brg = brgDeg * Math.PI / 180;
+    const lat1 = center[1] * Math.PI / 180, lon1 = center[0] * Math.PI / 180;
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brg));
+    const lon2 = lon1 + Math.atan2(Math.sin(brg) * Math.sin(d) * Math.cos(lat1),
+        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+    return [lon2 * 180 / Math.PI, lat2 * 180 / Math.PI];
+}
+function _geoCircle(center, radiusNm, n = 96) {
+    const coords = [];
+    for (let i = 0; i <= n; i++) coords.push(_pointAtBearing(center, radiusNm, (i / n) * 360));
+    return coords;
+}
+function _setToolData(map, geoFeatures, ptFeatures) {
+    if (map && map.getSource('tool-geo')) map.getSource('tool-geo').setData({ type: 'FeatureCollection', features: geoFeatures });
+    if (map && map.getSource('tool-pts')) map.getSource('tool-pts').setData({ type: 'FeatureCollection', features: ptFeatures });
+}
+function _clearAllToolOverlays() { Object.values(maps).forEach(m => _setToolData(m, [], [])); }
+
+function handleToolClick(map, paneId, e) {
+    const p = [e.lngLat.lng, e.lngLat.lat];
+    if (window.interrogationMode === 'measure') {
+        if (_measure.map !== map) { _measure.pts = []; _measure.map = map; }
+        _measure.pts.push(p);
+        renderMeasure(map);
+    } else if (window.interrogationMode === 'rings') {
+        drawRangeRings(map, p);
+    } else if (window.interrogationMode === 'eta') {
+        handleEtaClick(map, p);
+    }
+}
+function updateMeasurePreview(map, paneId, lngLat) {
+    if (_measure.map !== map || _measure.pts.length === 0) return;
+    renderMeasure(map, [lngLat.lng, lngLat.lat]);
+}
+function renderMeasure(map, preview) {
+    const pts = preview ? _measure.pts.concat([preview]) : _measure.pts.slice();
+    if (pts.length === 0) { _setToolData(map, [], []); return; }
+    let cum = 0;
+    const ptFeats = pts.map((pt, i) => {
+        let label = 'START';
+        if (i > 0) {
+            cum += _nm(pts[i - 1], pt);
+            label = `${cum.toFixed(1)} nm  ·  ${Math.round(_bearing(pts[i - 1], pt))}°`;
+        }
+        return { type: 'Feature', properties: { label, color: '#00e5ff' }, geometry: { type: 'Point', coordinates: pt } };
+    });
+    const line = pts.length >= 2
+        ? [{ type: 'Feature', properties: { color: '#00e5ff' }, geometry: { type: 'LineString', coordinates: pts } }] : [];
+    _setToolData(map, line, ptFeats);
+}
+function drawRangeRings(map, center) {
+    const radii = [25, 50, 100, 150, 200];
+    const rings = radii.map(r => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [_geoCircle(center, r)] } }));
+    const labels = radii.map(r => ({ type: 'Feature', properties: { label: `${r} nm`, color: '#ffcc00' }, geometry: { type: 'Point', coordinates: _pointAtBearing(center, r, 0) } }));
+    labels.push({ type: 'Feature', properties: { label: '', color: '#ffcc00' }, geometry: { type: 'Point', coordinates: center } });
+    _setToolData(map, rings, labels);
+}
+function handleEtaClick(map, p) {
+    if (_eta.pts.length < 2) {
+        _eta.pts.push(p);
+        if (_eta.pts.length === 2) {
+            const dt = parseInt(document.getElementById('loop-step')?.value || '5', 10) || 5;   // min between the two positions
+            const dist = _nm(_eta.pts[0], _eta.pts[1]);
+            _eta.speedKt = dist / (dt / 60);
+            _eta.dirDeg = _bearing(_eta.pts[0], _eta.pts[1]);
+            _eta.head = _eta.pts[1];
+            addLiveLog(`STORM ETA: motion ${Math.round(_eta.dirDeg)}° @ ${Math.round(_eta.speedKt)} kt (Δt ${dt} min from loop STEP). Now click any location for its ETA.`, '#ff9e3b');
+        } else {
+            addLiveLog('STORM ETA: now click the storm\'s CURRENT position.', '#ff9e3b');
+        }
+        renderEta(map, null);
+    } else {
+        renderEta(map, p);   // target click → ETA
+    }
+}
+function renderEta(map, target) {
+    const geo = [], pts = [];
+    if (_eta.pts[0]) pts.push({ type: 'Feature', properties: { label: 't₀', color: '#ff9e3b' }, geometry: { type: 'Point', coordinates: _eta.pts[0] } });
+    if (_eta.pts[1]) {
+        geo.push({ type: 'Feature', properties: { color: '#ff9e3b' }, geometry: { type: 'LineString', coordinates: [_eta.pts[0], _eta.pts[1]] } });
+        pts.push({ type: 'Feature', properties: { label: `${Math.round(_eta.dirDeg)}° @ ${Math.round(_eta.speedKt)} kt`, color: '#ff9e3b' }, geometry: { type: 'Point', coordinates: _eta.pts[1] } });
+    }
+    if (target && _eta.head && _eta.speedKt > 0) {
+        const d = _nm(_eta.head, target);
+        const etaMin = d / _eta.speedKt * 60;
+        geo.push({ type: 'Feature', properties: { color: '#ff3b3b' }, geometry: { type: 'LineString', coordinates: [_eta.head, target] } });
+        pts.push({ type: 'Feature', properties: { label: `ETA ${Math.round(etaMin)} min  (${d.toFixed(0)} nm)`, color: '#ff3b3b' }, geometry: { type: 'Point', coordinates: target } });
+    }
+    _setToolData(map, geo, pts);
+}
+function ringCenterForPane(paneId, map) {
+    const site = (paneRadarSites[paneId] || '').toUpperCase();
+    if (site && !site.includes('NEXRAD') && RADAR_LOCATIONS[site]) return RADAR_LOCATIONS[site].slice();
+    const c = map.getCenter();
+    return [c.lng, c.lat];
+}
+function setInterrogationMode(mode) {
+    const newMode = (window.interrogationMode === mode) ? null : mode;
+    window.interrogationMode = newMode;
+    _measure.pts = []; _measure.map = null;
+    _eta.pts = []; _eta.head = null; _eta.speedKt = 0; _eta.dirDeg = 0;
+    _clearAllToolOverlays();
+    [['tool-measure', 'measure'], ['tool-range-rings', 'rings'], ['tool-storm-eta', 'eta']].forEach(([id, md]) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('active', newMode === md);
+    });
+    const map = maps[activePaneId];
+    if (map) map.getCanvas().style.cursor = newMode ? 'crosshair' : '';
+    if (newMode === 'rings' && map) {
+        drawRangeRings(map, ringCenterForPane(activePaneId, map));
+        addLiveLog('RANGE RINGS: 25 / 50 / 100 / 150 / 200 nm from the active site (click map to recenter).', '#ffcc00');
+    } else if (newMode === 'measure') {
+        addLiveLog('MEASURE: click two or more points for great-circle range & bearing. Re-click the tool to exit.', '#00e5ff');
+    } else if (newMode === 'eta') {
+        addLiveLog('STORM ETA: click the storm\'s PREVIOUS position, then its CURRENT position (Δt = loop STEP).', '#ff9e3b');
+    } else {
+        addLiveLog('TOOL: off', '#888');
+    }
+}
+function initInterrogationTools() {
+    document.getElementById('tool-measure')?.addEventListener('click', () => setInterrogationMode('measure'));
+    document.getElementById('tool-range-rings')?.addEventListener('click', () => setInterrogationMode('rings'));
+    document.getElementById('tool-storm-eta')?.addEventListener('click', () => setInterrogationMode('eta'));
+    // Esc exits any active tool.
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && window.interrogationMode) setInterrogationMode(window.interrogationMode); });
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 27: ALERTVIZ (new-warning toast + optional tone)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Fires only for high-urgency, action-forcing warnings as they are issued. Hooked
+// off the watchdog's existing new-alert detection (no extra polling).
+
+window.alertVizTone = (localStorage.getItem('fxnet_alertviz_tone') !== '0');
+
+function _geomCentroid(geom) {
+    if (!geom) return null;
+    let ring = null;
+    if (geom.type === 'Polygon') ring = geom.coordinates[0];
+    else if (geom.type === 'MultiPolygon') ring = geom.coordinates[0][0];
+    if (!ring || !ring.length) return null;
+    let x = 0, y = 0;
+    ring.forEach(c => { x += c[0]; y += c[1]; });
+    return [x / ring.length, y / ring.length];
+}
+function alertVizQualifies(evt, flags) {
+    if (flags && flags.isEmergency) return true;
+    return /(Tornado Warning|Severe Thunderstorm Warning|Flash Flood Warning|Tornado Emergency|Flash Flood Emergency)/i.test(evt || '');
+}
+function _alertTone() {
+    if (!window.alertVizTone) return;
+    try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        const ac = new Ctx();
+        const o = ac.createOscillator(), g = ac.createGain();
+        o.type = 'sine'; o.frequency.value = 880;
+        g.gain.setValueAtTime(0.0001, ac.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.15, ac.currentTime + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.5);
+        o.connect(g); g.connect(ac.destination);
+        o.start(); o.stop(ac.currentTime + 0.52);
+        o.onended = () => ac.close();
+    } catch (_) {}
+}
+function alertVizNotify(f, flags) {
+    const p = f.properties || {};
+    const evt = p.event || 'Warning';
+    if (!alertVizQualifies(evt, flags)) return;
+
+    const container = document.getElementById('alertviz-container');
+    if (!container) return;
+
+    const isEmergency = flags && flags.isEmergency;
+    let accent = '#ffb300';
+    if (/tornado/i.test(evt)) accent = '#ff2b2b';
+    else if (/severe thunderstorm/i.test(evt)) accent = '#ff7a1a';
+    else if (/flash flood/i.test(evt)) accent = '#2bd4c4';
+    if (isEmergency) accent = '#ff0000';
+
+    const area = (p.areaDesc || '').split(';').slice(0, 2).join(';');
+    const toast = document.createElement('div');
+    toast.className = 'alertviz-toast';
+    toast.style.borderLeftColor = accent;
+    toast.innerHTML =
+        `<div class="alertviz-title" style="color:${accent};">${isEmergency ? '⚠ ' : ''}${esc(evt)}</div>
+         <div class="alertviz-area">${esc(area)}</div>
+         <div class="alertviz-src">${esc(p.senderName || '')}</div>`;
+
+    const centroid = _geomCentroid(f.geometry);
+    toast.addEventListener('click', () => {
+        if (centroid && maps[activePaneId]) maps[activePaneId].flyTo({ center: centroid, zoom: 8 });
+        toast.remove();
+    });
+    container.appendChild(toast);
+    while (container.children.length > 5) container.firstChild.remove();
+    if (isEmergency || /tornado/i.test(evt)) _alertTone();
+
+    const ttl = isEmergency ? 30000 : 14000;
+    setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 400); }, ttl);
+}
+function initAlertViz() {
+    if (!document.getElementById('alertviz-container')) {
+        const c = document.createElement('div');
+        c.id = 'alertviz-container';
+        document.body.appendChild(c);
+    }
+    const css = `
+        #alertviz-container{position:fixed;top:64px;right:14px;z-index:9500;display:flex;flex-direction:column;gap:8px;max-width:320px;pointer-events:none;}
+        .alertviz-toast{pointer-events:auto;cursor:pointer;background:rgba(10,14,20,0.96);border:1px solid #1e2a35;border-left:4px solid #ffb300;border-radius:5px;padding:9px 12px;box-shadow:0 6px 22px rgba(0,0,0,0.6);font-family:Inter,sans-serif;transition:opacity .4s;animation:alertviz-in .35s ease;}
+        .alertviz-title{font-size:12px;font-weight:800;letter-spacing:.3px;margin-bottom:2px;}
+        .alertviz-area{font-size:10.5px;color:#dfe6ee;line-height:1.35;}
+        .alertviz-src{font-size:9px;color:#7d8b98;margin-top:3px;}
+        @keyframes alertviz-in{from{transform:translateX(24px);opacity:0;}to{transform:translateX(0);opacity:1;}}`;
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+    addLiveLog(`ALERTVIZ: active (tone ${window.alertVizTone ? 'on' : 'off'})`, '#00ff88');
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 28: PROCEDURES (saved display bundles)
+// ═══════════════════════════════════════════════════════════════════════════════
+// A "procedure" = the set of active product toggles + the active pane's view +
+// radar site. Reloading re-clicks the recorded sidebar items so all the existing
+// fetch/visibility logic is reused verbatim.
+
+const PROC_KEY = 'fxnet_procedures';
+const PROC_ATTRS = ['day', 'hazard', 'channel', 'gibs', 'qpf', 'qpe', 'period', 'l3'];
+
+function loadProcStore() {
+    try { return JSON.parse(localStorage.getItem(PROC_KEY) || '{}'); } catch (_) { return {}; }
+}
+function saveProcStore(s) { localStorage.setItem(PROC_KEY, JSON.stringify(s)); }
+
+function captureProcedure() {
+    const active = [];
+    document.querySelectorAll('.product-item.active').forEach(it => {
+        const layer = it.getAttribute('data-layer');
+        if (!layer) return;
+        const rec = { layer };
+        PROC_ATTRS.forEach(k => { const v = it.getAttribute('data-' + k); if (v != null) rec[k] = v; });
+        active.push(rec);
+    });
+    const map = maps[activePaneId];
+    const c = map ? map.getCenter() : { lng: -95, lat: 38 };
+    return {
+        active,
+        center: [c.lng, c.lat],
+        zoom: map ? map.getZoom() : 4,
+        site: (paneRadarSites[activePaneId] && !String(paneRadarSites[activePaneId]).includes('nexrad')) ? paneRadarSites[activePaneId] : null
+    };
+}
+function _procItemSelector(rec) {
+    let s = `.product-item[data-layer="${rec.layer}"]`;
+    PROC_ATTRS.forEach(k => { if (rec[k] != null) s += `[data-${k}="${rec[k]}"]`; });
+    return s;
+}
+async function applyProcedure(proc) {
+    const map = maps[activePaneId];
+    if (!map || !proc) return;
+    if (proc.site) {
+        const sel = document.getElementById('radar-site-select');
+        if (sel && Array.from(sel.options).some(o => o.value === proc.site)) {
+            sel.value = proc.site;
+            sel.dispatchEvent(new Event('change'));
+        }
+    }
+    if (proc.center) map.jumpTo({ center: proc.center, zoom: proc.zoom || map.getZoom() });
+    // Turn OFF anything currently on that the procedure doesn't include, then turn ON the rest.
+    const want = new Set(proc.active.map(_procItemSelector));
+    document.querySelectorAll('.product-item.active').forEach(it => {
+        if (!it.getAttribute('data-layer')) return;
+        const isWanted = [...want].some(sel => it.matches(sel));
+        if (!isWanted) it.click();
+    });
+    for (const rec of proc.active) {
+        const item = document.querySelector(_procItemSelector(rec));
+        if (item && !item.classList.contains('active')) { item.click(); await new Promise(r => setTimeout(r, 120)); }
+    }
+    addLiveLog('PROCEDURE: display restored', '#00e5ff');
+}
+function renderProcList() {
+    const list = document.getElementById('proc-list');
+    if (!list) return;
+    const store = loadProcStore();
+    const names = Object.keys(store).sort();
+    list.innerHTML = names.length ? '' : '<div class="proc-empty">No saved procedures yet.</div>';
+    names.forEach(name => {
+        const row = document.createElement('div');
+        row.className = 'proc-row';
+        row.innerHTML = `<span class="proc-name" title="Load this display">${esc(name)}</span><span class="proc-del" title="Delete">✕</span>`;
+        row.querySelector('.proc-name').addEventListener('click', () => applyProcedure(store[name]));
+        row.querySelector('.proc-del').addEventListener('click', e => {
+            e.stopPropagation();
+            const s = loadProcStore(); delete s[name]; saveProcStore(s); renderProcList();
+            addLiveLog(`PROCEDURE: deleted "${name}"`, '#ff9e3b');
+        });
+        list.appendChild(row);
+    });
+}
+function initProcedures() {
+    const css = `
+        #proc-list{margin:2px 0 4px;}
+        .proc-row{display:flex;align-items:center;justify-content:space-between;padding:4px 10px;font-size:11px;color:#cdd6df;cursor:default;border-radius:3px;}
+        .proc-row:hover{background:#141c26;}
+        .proc-name{cursor:pointer;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+        .proc-name:hover{color:#00e5ff;}
+        .proc-del{cursor:pointer;color:#ff6666;padding-left:8px;font-size:11px;}
+        .proc-empty{padding:4px 10px;font-size:10px;color:#5c6b78;font-style:italic;}`;
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+    document.getElementById('proc-save')?.addEventListener('click', () => {
+        const name = (window.prompt('Save current display as… (name):') || '').trim();
+        if (!name) return;
+        const store = loadProcStore();
+        store[name] = captureProcedure();
+        saveProcStore(store);
+        renderProcList();
+        addLiveLog(`PROCEDURE: saved "${name}" (${store[name].active.length} layers)`, '#00ff88');
+    });
+    renderProcList();
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 25: INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -9809,6 +10523,9 @@ function init() {
     initSidebarCollapse();
     initSolarClickHandler();
     initRiverGaugePanel();
+    initInterrogationTools();
+    initAlertViz();
+    initProcedures();
 
     // Start warning watchdog (check every 15 seconds for rapid convective updates)
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');

@@ -19,6 +19,9 @@
     },
     "api/gibs-times.py": {
       "maxDuration": 20
+    },
+    "api/probsevere.py": {
+      "maxDuration": 20
     }
   },
   "rewrites": [
@@ -45,6 +48,14 @@
     {
       "source": "/api/nhc-two-epac",
       "destination": "https://www.nhc.noaa.gov/text/MIATWOEP.shtml"
+    },
+    {
+      "source": "/api/airsigmet",
+      "destination": "https://aviationweather.gov/api/data/airsigmet?format=geojson"
+    },
+    {
+      "source": "/api/pirep",
+      "destination": "https://aviationweather.gov/api/data/pirep?format=geojson&age=3&bbox=20,-130,55,-60"
     }
   ],
   "headers": [
