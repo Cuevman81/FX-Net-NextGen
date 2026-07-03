@@ -27,18 +27,20 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 - **National Watchdog**: Polls official NWS feeds every 15 seconds for rapid convective updates. A live scrolling ticker surfaces new Tornado, Severe Thunderstorm, and Flash Flood warnings.
 - **High-Fidelity Watch Vectors**: Integrates NOAA's REST MapServer feature service to draw county-precise polygon boundaries for Severe Thunderstorm and Tornado watches, with Impact-Based-Warning (IBW) pulse styling for Considerable/Catastrophic tags.
 - **Universal Point Query**: Click anywhere inside an alert to query the NWS active-alerts database and render color-coded, stacked HTML bulletins with full precautionary actions.
+- **AlertViz Notifications**: New Tornado, Severe Thunderstorm, and Flash Flood Warnings raise a corner toast (with an optional alert tone) so you don't have to watch the ticker. The toasts honor the Warnings state/WFO filter — nationwide when unfiltered, or only your selected state/office when narrowed. Warnings and Advisories/Statements are independent toggles.
 
 ### 📡 Full Radar Suite
 - **National Reflectivity (MRMS)**: Seamless CONUS base-reflectivity mosaic.
 - **Single-Site Products (NCEP)**: Per-site Reflectivity, Base Velocity, Hydrometeor Classification, Storm Total Precip, and One-Hour Precip pinned to the latest volume scan.
-- **Dual-Pol & Velocity (NODD Level III)**: A **dependency-free, stdlib-only decoder** (`api/radar-l3.py`, validated byte-for-byte against MetPy) renders Correlation Coefficient (CC), Differential Reflectivity (ZDR), Specific Differential Phase (KDP), and true **Storm Relative Velocity (SRM, product 56)** — at the 0.5° tilt, georeferenced as transparent PNG overlays with AWIPS-style color tables.
+- **Dual-Pol, Velocity & Storm Tracks (NODD Level III)**: A **dependency-free, stdlib-only decoder** (`api/radar-l3.py`, validated byte-for-byte against MetPy) renders Correlation Coefficient (CC), Differential Reflectivity (ZDR), Specific Differential Phase (KDP), and **Storm Relative Velocity** — the last derived on the fly from the super-resolution base velocity (0.25 km / 0.5° / 256-level) for ~8× the detail of the legacy product-56 image. Products step through the lowest four elevation tilts, georeferenced as transparent PNG overlays with AWIPS-style color tables. Includes **Storm Tracks (STI)** with forecast positions and **VAD Wind Profiles** (winds aloft + hodograph).
 
 ### 🛰️ Satellite & Lightning
 - **GOES-East (NASA GIBS)**: All ABI visible/water-vapor/infrared channels plus GeoColor composites, with smooth time-looping driven by real published frame times.
 - **Lightning**: Near-real-time strike density (NLDN via nowCOAST).
 
 ### 🔥 Severe, Fire & Hydro Guidance
-- **Storm Prediction Center (SPC)**: Day 1–3 Convective Outlooks (categorical), Day 1–2 probabilistic Tornado/Wind/Hail with significant-severe hatching, **Fire Weather Outlooks Day 1–8**, and Mesoscale Discussions (MCDs).
+- **Storm Prediction Center (SPC)**: Day 1–3 Convective Outlooks (categorical), Day 1–2 probabilistic Tornado/Wind/Hail with significant-severe hatching, **Fire Weather Outlooks Day 1–8**, Mesoscale Discussions (MCDs), and Local Storm Reports (LSRs).
+- **ProbSevere (CIMSS)**: Machine-learning storm objects colored by severe/hail/wind/tornado probability, refreshed every ~2 minutes; click a cell for the model's readout.
 - **Weather Prediction Center (WPC)**: Surface isobars, high/low centers, coded fronts, QPF, **Excessive Rainfall Outlooks (ERO)**, and Mesoscale Precipitation Discussions (MPDs).
 - **NHC-Style Discussion Popups**: Click any SPC/fire-weather/tropical area to open the official text discussion for that hazard in an in-app browser.
 - **Fire & Smoke / Air Quality**: HMS smoke plumes, FIRMS active-fire detections, and AQI.
@@ -46,8 +48,9 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 
 ### 🌐 Observations, Soundings & Tools
 - **National Hurricane Center (NHC)**: Tropical weather outlook areas, active storm cones, and forecast track points.
-- **Surface Observations**: Real-time METAR plotting (temperature, dew point, pressure, wind barbs) plus isobar/isotherm/isodrosotherm analysis.
-- **Interactive Soundings**: Clickable Skew-T log-P viewer across US sounding sites.
+- **Aviation Weather (AWC)**: SIGMETs/AIRMETs, **Graphical AIRMETs (G-AIRMET)** hazard areas, Pilot Reports (PIREPs), and **Terminal Forecasts (TAF)** plotted by prevailing flight category (VFR/MVFR/IFR/LIFR) — click any for detail.
+- **Surface Observations & Forecast Grids**: Real-time METAR plotting (temperature, dew point, pressure, wind barbs) with isobar/isotherm/isodrosotherm analysis, plus the **NDFD** surface-temperature forecast grid.
+- **Interactive Skew-T (NSHARP-lite)**: A full radiosonde sounding for the site nearest the pane — high-resolution BUFR profile (thousands of levels) with standard-RAOB fallback, a lifted surface parcel with shaded CAPE on a real skew-T/log-P grid, wind barbs, and a 0–10 km hodograph. Computes SBCAPE/SBCIN (virtual-temperature corrected), Lifted Index, PWAT, LCL/LFC/EL, and 0–1 / 0–6 km bulk shear — all in-browser.
 - **Solar Tools**: Day/Night terminator with a click-anywhere solar calculator (sunrise/sunset, twilight, solar noon, day length, declination).
 
 ---
@@ -56,11 +59,14 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 This project is configured for instant cloud hosting on **Vercel** with no managed backend:
 - **Edge Rewrites (`vercel.json`)**: Bypass strict CORS on government servers by proxying NOAA/NWS/Aviation Weather Center endpoints at the global edge.
 - **Serverless Python (`api/`)** — lightweight, dependency-light functions:
-  - `radar-l3.py` — decodes NEXRAD Level III (NODD) dual-pol & storm-relative velocity to georeferenced PNGs (stdlib + numpy/Pillow only; no MetPy).
+  - `radar-l3.py` — decodes NEXRAD Level III (NODD) dual-pol, storm-relative velocity, storm tracks & VAD to georeferenced PNGs/GeoJSON (stdlib + numpy/Pillow only; no MetPy).
+  - `raob.py` — fetches the high-resolution BUFR radiosonde profile (University of Wyoming) with a decoded-RAOB fallback for the interactive Skew-T.
   - `spc-fire-wx.py`, `wpc-ero.py`, `wpc-mpd.py` — convert SPC/WPC KMZ products to GeoJSON on the fly (stdlib KML parser with XXE guards).
+  - `probsevere.py` — locates and serves the newest CIMSS ProbSevere storm-object GeoJSON.
   - `nhc-two-atl.py`, `nhc-two-epac.py` — NHC Tropical Weather Outlook areas for the Atlantic & East Pacific.
   - `river-gauges.py`, `drought-monitor.py`, `gibs-times.py` — hydrology, drought GeoJSON, and live satellite frame-time discovery.
   - `log.py` — captures client diagnostics into the Vercel runtime console.
+- **Edge-proxied feeds** — SIGMET/AIRMET, G-AIRMET, PIREP, TAF, METAR, WPC isobars/fronts, and NHC outlooks are proxied at the edge (`vercel.json` rewrites) to add the CORS headers those government servers omit.
 
 ---
 

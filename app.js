@@ -208,7 +208,12 @@ const HEALTH_THRESHOLDS = {
     solar:        { label: 'Solar/Terminator', thresholdMs: 10 * 60 * 1000 },
     sfcIsobars2mb:    { label: 'Isobars 2mb',       thresholdMs: 15 * 60 * 1000 },
     sfcIsotherms:     { label: 'Isotherms',          thresholdMs: 15 * 60 * 1000 },
-    sfcIsodrosotherms:{ label: 'Isodrosotherms',     thresholdMs: 15 * 60 * 1000 }
+    sfcIsodrosotherms:{ label: 'Isodrosotherms',     thresholdMs: 15 * 60 * 1000 },
+    probSevere:  { label: 'ProbSevere',       thresholdMs: 5 * 60 * 1000 },
+    airSigmet:   { label: 'SIGMET/AIRMET',    thresholdMs: 20 * 60 * 1000 },
+    gairmet:     { label: 'G-AIRMET',         thresholdMs: 20 * 60 * 1000 },
+    pireps:      { label: 'PIREPs',           thresholdMs: 20 * 60 * 1000 },
+    taf:         { label: 'TAF',              thresholdMs: 30 * 60 * 1000 }
 };
 
 // Data-health feeds organized into collapsible sections that mirror the left
@@ -219,7 +224,8 @@ const HEALTH_GROUPS = [
     { name: 'SATELLITE',         ids: ['sat', 'gibsSat'] },
     { name: 'SURFACE ANALYSIS',  ids: ['metar', 'sfcIsobars2mb', 'sfcIsotherms', 'sfcIsodrosotherms', 'wpcIsobars', 'wpcFronts'] },
     { name: 'WARNINGS & WATCHES',ids: ['warnings', 'watches'] },
-    { name: 'SPC PRODUCTS',      ids: ['spcOutlook', 'spcMd', 'spcLsr'] },
+    { name: 'SPC PRODUCTS',      ids: ['spcOutlook', 'spcMd', 'spcLsr', 'probSevere'] },
+    { name: 'AVIATION',          ids: ['airSigmet', 'gairmet', 'pireps', 'taf'] },
     { name: 'WPC PRODUCTS',      ids: ['wpcQpf', 'wpcEro', 'wpcMpd'] },
     { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook'] },
     { name: 'CLIMATE & OUTLOOKS',ids: ['cpcTemp', 'cpcPrecip', 'drought'] },
@@ -5279,6 +5285,7 @@ async function fetchAirSigmet(show) {
             (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'));
         const clean = { type: 'FeatureCollection', features: feats };
         Object.values(maps).forEach(m => { if (m.getSource('airsigmet')) m.getSource('airsigmet').setData(clean); });
+        updateHealth('airSigmet');
         addLiveLog(`AVIATION: ${feats.length} SIGMET/AIRMET areas loaded`, '#00ff88');
     } catch (e) {
         addLiveLog(`AVIATION SIGMET ERROR: ${e.message}`, '#ff3333');
@@ -5296,6 +5303,7 @@ async function fetchPireps(show) {
         const feats = (fc.features || []).filter(f => f.geometry && f.geometry.type === 'Point');
         const clean = { type: 'FeatureCollection', features: feats };
         Object.values(maps).forEach(m => { if (m.getSource('pireps')) m.getSource('pireps').setData(clean); });
+        updateHealth('pireps');
         addLiveLog(`AVIATION: ${feats.length} PIREPs loaded`, '#00ff88');
     } catch (e) {
         addLiveLog(`AVIATION PIREP ERROR: ${e.message}`, '#ff3333');
@@ -5314,6 +5322,7 @@ async function fetchProbSevere(show) {
         const feats = (fc.features || []).filter(f => f.geometry);
         const clean = { type: 'FeatureCollection', features: feats };
         Object.values(maps).forEach(m => { if (m.getSource('probsevere')) m.getSource('probsevere').setData(clean); });
+        updateHealth('probSevere');
         addLiveLog(`PROBSEVERE: ${feats.length} storm objects loaded`, '#00ff88');
     } catch (e) {
         addLiveLog(`PROBSEVERE ERROR: ${e.message}`, '#ff3333');
@@ -5334,6 +5343,7 @@ async function fetchTaf(show) {
             (f.properties && (f.properties.timeGroup === 0 || f.properties.timeGroup === '0')));
         const clean = { type: 'FeatureCollection', features: feats };
         Object.values(maps).forEach(m => { if (m.getSource('taf')) m.getSource('taf').setData(clean); });
+        updateHealth('taf');
         addLiveLog(`AVIATION: ${feats.length} TAF sites loaded`, '#00ff88');
     } catch (e) {
         addLiveLog(`AVIATION TAF ERROR: ${e.message}`, '#ff3333');
@@ -5364,6 +5374,7 @@ async function fetchGairmet(show) {
         }
         const clean = { type: 'FeatureCollection', features: feats };
         Object.values(maps).forEach(m => { if (m.getSource('gairmet')) m.getSource('gairmet').setData(clean); });
+        updateHealth('gairmet');
         addLiveLog(`AVIATION: ${feats.length} G-AIRMET areas loaded`, '#00ff88');
     } catch (e) {
         addLiveLog(`AVIATION G-AIRMET ERROR: ${e.message}`, '#ff3333');
@@ -10338,6 +10349,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 3, 2026', items: [
+        'Data Health now covers everything: the monitor gained an AVIATION section (SIGMET/AIRMET, G-AIRMET, PIREPs, TAF) and a ProbSevere row under SPC Products, each with a live red/amber/green freshness dot — so every auto-refreshing feed on the workstation is accounted for.',
         'AlertViz now follows your WATCHDOG filter: with “All states / All WFOs” selected, a new Tornado, Severe Thunderstorm or Flash Flood Warning anywhere still pops a corner toast; but when you narrow the NWS Warnings filter to a state or a single office, only new warnings for that state/WFO pop up — so you get a targeted heads-up instead of nationwide noise.',
         'Graphical AIRMET fix: G-AIRMET areas now display reliably. The AWC feed issues hazard snapshots at forecast hours 0/3/6 and which hours are present rotates with the issuance cycle; the layer previously showed only hour 0 and came up empty whenever that snapshot wasn’t in the current cycle. It now shows the nearest-term snapshot available.',
         'Sharper Storm-Relative Velocity: SRM is now derived on the fly from the super-resolution base velocity (0.25 km range, 0.5° azimuth, 256 levels) with the mean storm motion removed — roughly 8× the detail of the old 16-color product-56 image, so velocity couplets and mesocyclones read cleanly instead of blocky. It matches the official product’s inbound/outbound pattern ~93% and still labels the storm motion it subtracted (e.g. “SM 246°/26 kt”). If a tilt’s base velocity isn’t in the current scan strategy, it falls back to the legacy SRM automatically.',
