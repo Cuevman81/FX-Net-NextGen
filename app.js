@@ -5349,9 +5349,19 @@ async function fetchGairmet(show) {
         const res = await fetch('/api/gairmet');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const fc = await res.json();
-        const feats = (fc.features || []).filter(f => f.geometry &&
-            (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') &&
-            (f.properties && (f.properties.forecast === 0 || f.properties.forecast === '0')));
+        const areas = (fc.features || []).filter(f => f.geometry &&
+            (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') && f.properties);
+        // G-AIRMET issuances carry snapshots at forecast hours 0/3/6; which hours are
+        // present depends on the issuance cycle — right after an issuance the hour-0
+        // snapshot is often gone and only +3/+6 remain. Show the nearest-term snapshot
+        // (the minimum forecast hour actually present) so areas never stack and we
+        // never end up empty just because hour-0 isn't in this cycle.
+        let feats = areas;
+        if (areas.length) {
+            const hours = areas.map(f => Number(f.properties.forecast)).filter(Number.isFinite);
+            const minH = hours.length ? Math.min(...hours) : 0;
+            feats = areas.filter(f => Number(f.properties.forecast) === minH);
+        }
         const clean = { type: 'FeatureCollection', features: feats };
         Object.values(maps).forEach(m => { if (m.getSource('gairmet')) m.getSource('gairmet').setData(clean); });
         addLiveLog(`AVIATION: ${feats.length} G-AIRMET areas loaded`, '#00ff88');
@@ -5565,7 +5575,9 @@ async function checkNewWarnings() {
                 const threatTag = isEmergency ? ' ⚠ EMERGENCY' : threat === 'Catastrophic' || threat === 'Destructive' ? ` ⚠ ${threat.toUpperCase()}` : threat === 'Considerable' ? ' ⚠ CONSIDERABLE' : isPDS ? ' ⚠ PDS' : '';
                 const color = isEmergency || threat === 'Catastrophic' ? '#ff0000' : threat === 'Considerable' || isPDS ? '#ff6600' : severity === 'Extreme' ? '#ff0000' : severity === 'Severe' ? '#ff3333' : '#ffb300';
                 addLiveLog(`WATCHDOG: NEW ${event}${threatTag} → ${(area || '').substring(0, 80)}`, color);
-                alertVizNotify(f, { isEmergency, threat, isPDS });
+                // Only pop a corner toast when the alert matches the active state/WFO
+                // filter — nationwide when unfiltered, otherwise only the selected area.
+                if (alertMatchesWatchdogFilter(f.properties, area)) alertVizNotify(f, { isEmergency, threat, isPDS });
             }
         }
         if (newItems.length > 0) {
@@ -5662,6 +5674,54 @@ const ALL_WFOS = [
 
 // Builds a single ticker DOM node WITHOUT touching the list — caller batch-inserts.
 // (Avoids per-alert reflow + per-alert applyWatchdogFilter churn on bulk updates.)
+// Derive the affected US state codes from an alert's properties (UGC/SAME geocodes
+// first, then areaDesc "County, ST" pairs, then the sender's state as a last resort).
+// Shared by the ticker's data-state attribute and the AlertViz toast filter so both
+// judge location identically.
+function deriveAlertStates(props, area) {
+    const affectedStates = new Set();
+    const ugcCodes = props?.geocode?.UGC || props?.geocode?.SAME || [];
+    ugcCodes.forEach(code => {
+        const st = code.substring(0, 2);
+        if (/^[A-Z]{2}$/.test(st)) affectedStates.add(st);
+    });
+    if (affectedStates.size === 0 && area) {
+        const stMatches = area.match(/,\s*([A-Z]{2})(?:\s*;|$)/g);
+        if (stMatches) stMatches.forEach(m => {
+            const st = m.replace(/[,;\s]/g, '');
+            if (/^[A-Z]{2}$/.test(st)) affectedStates.add(st);
+        });
+    }
+    if (affectedStates.size === 0) {
+        const stMatch = (props?.senderName || '').match(/\b([A-Z]{2})$/);
+        if (stMatch) affectedStates.add(stMatch[1]);
+    }
+    return [...affectedStates];
+}
+
+// Derive the issuing office (WFO) city name from an alert's senderName, matching the
+// ticker's data-wfo attribute (e.g. "NWS Kansas City/Pleasant Hill MO" → "Kansas City").
+function deriveAlertWfo(props) {
+    const senderName = props?.senderName || '';
+    const wfoMatch = senderName.match(/^NWS\s+(.+?)(?:\s+[A-Z]{2})?$/);
+    let wfo = wfoMatch ? wfoMatch[1].replace(/\/$/, '').trim() : senderName.replace(/^NWS\s*/, '').trim();
+    if (wfo.includes('/')) wfo = wfo.split('/')[0].trim();
+    return wfo.replace(/\s+[A-Z]{2}$/, '');
+}
+
+// Whether an alert matches the current WATCHDOG state/WFO filter selection. Gates the
+// AlertViz corner toasts: with "All states / All WFOs" every new warning notifies; when
+// the user narrows to a state or office, only matching warnings pop up.
+function alertMatchesWatchdogFilter(props, area) {
+    const stateFilter = document.getElementById('watchdog-filter-state')?.value || 'all';
+    const wfoFilter = document.getElementById('watchdog-filter-wfo')?.value || 'all';
+    if (stateFilter === 'all' && wfoFilter === 'all') return true;
+    const matchState = stateFilter === 'all' || deriveAlertStates(props, area).includes(stateFilter);
+    const matchWfo = wfoFilter === 'all' ||
+        deriveAlertWfo(props).trim().toLowerCase() === wfoFilter.trim().toLowerCase();
+    return matchState && matchWfo;
+}
+
 function buildWarningItem(event, area, severity, props) {
     const item = document.createElement('div');
     let type = 'advisory';
@@ -5684,40 +5744,15 @@ function buildWarningItem(event, area, severity, props) {
     else if (severity === 'Extreme' || severity === 'Severe') type = 'warning';
 
     const senderName = props?.senderName || '';
+    const wfo = deriveAlertWfo(props);
 
-    // Extract WFO city name from senderName (e.g., "NWS Omaha/Valley NE" → "Omaha")
-    const wfoMatch = senderName.match(/^NWS\s+(.+?)(?:\s+[A-Z]{2})?$/);
-    let wfo = wfoMatch ? wfoMatch[1].replace(/\/$/, '').trim() : senderName.replace(/^NWS\s*/, '').trim();
-    // Take first city before "/" (e.g., "Kansas City/Pleasant Hill" → "Kansas City")
-    if (wfo.includes('/')) wfo = wfo.split('/')[0].trim();
-    // Strip trailing state abbreviation (e.g., "Baltimore MD" → "Baltimore")
-    wfo = wfo.replace(/\s+[A-Z]{2}$/, '');
+    // State derived from the AFFECTED AREA (UGC/SAME → areaDesc → sender), not just
+    // the sender's location — see deriveAlertStates.
+    const affectedStates = deriveAlertStates(props, area);
+    const stateStr = affectedStates.join(',');
+    const primaryState = affectedStates[0] || '';
 
-    // Extract state from the AFFECTED AREA, not the sender's location
-    // Use UGC geocodes (e.g., "NEZ024") or parse areaDesc (e.g., "Douglas, KS; Johnson, KS")
-    const affectedStates = new Set();
-    const ugcCodes = props?.geocode?.UGC || props?.geocode?.SAME || [];
-    ugcCodes.forEach(code => {
-        const st = code.substring(0, 2);
-        if (/^[A-Z]{2}$/.test(st)) affectedStates.add(st);
-    });
-    // Fallback: parse state codes from areaDesc (format: "County, ST; County, ST")
-    if (affectedStates.size === 0 && area) {
-        const stMatches = area.match(/,\s*([A-Z]{2})(?:\s*;|$)/g);
-        if (stMatches) stMatches.forEach(m => {
-            const st = m.replace(/[,;\s]/g, '');
-            if (/^[A-Z]{2}$/.test(st)) affectedStates.add(st);
-        });
-    }
-    // Last fallback: sender state
-    if (affectedStates.size === 0) {
-        const stMatch = senderName.match(/\b([A-Z]{2})$/);
-        if (stMatch) affectedStates.add(stMatch[1]);
-    }
-    const stateStr = [...affectedStates].join(',');
-    const primaryState = [...affectedStates][0] || '';
-
-    const stateTag = primaryState ? `<span style="color:#00e5ff;font-weight:bold;">[${[...affectedStates].join('/')}]</span> ` : '';
+    const stateTag = primaryState ? `<span style="color:#00e5ff;font-weight:bold;">[${affectedStates.join('/')}]</span> ` : '';
     item.className = `warning-item ${type}`;
     item.style.cursor = 'pointer';
     item.dataset.state = stateStr;  // Comma-separated for multi-state alerts
@@ -10303,6 +10338,8 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 3, 2026', items: [
+        'AlertViz now follows your WATCHDOG filter: with “All states / All WFOs” selected, a new Tornado, Severe Thunderstorm or Flash Flood Warning anywhere still pops a corner toast; but when you narrow the NWS Warnings filter to a state or a single office, only new warnings for that state/WFO pop up — so you get a targeted heads-up instead of nationwide noise.',
+        'Graphical AIRMET fix: G-AIRMET areas now display reliably. The AWC feed issues hazard snapshots at forecast hours 0/3/6 and which hours are present rotates with the issuance cycle; the layer previously showed only hour 0 and came up empty whenever that snapshot wasn’t in the current cycle. It now shows the nearest-term snapshot available.',
         'Sharper Storm-Relative Velocity: SRM is now derived on the fly from the super-resolution base velocity (0.25 km range, 0.5° azimuth, 256 levels) with the mean storm motion removed — roughly 8× the detail of the old 16-color product-56 image, so velocity couplets and mesocyclones read cleanly instead of blocky. It matches the official product’s inbound/outbound pattern ~93% and still labels the storm motion it subtracted (e.g. “SM 246°/26 kt”). If a tilt’s base velocity isn’t in the current scan strategy, it falls back to the legacy SRM automatically.',
         'Interactive Skew-T upgrade: soundings now pull the high-resolution BUFR profile (thousands of levels, ~1–2 s radiosonde data) from the University of Wyoming — much smoother, more detailed temperature/dewpoint traces — and fall back to the standard decoded RAOB when high-res isn’t available. The panel header shows the level count and which source it used. CAPE/CIN are now computed with the virtual-temperature correction (the SPC/SHARPpy convention), so instability values line up with the numbers you’d see on an SPC sounding instead of reading systematically low. PWAT was cross-checked to within 0.1 mm of the official value.',
         'Interactive Skew-T (NSHARP-lite): a new SPC-PRODUCTS item, “Interactive Skew-T (RAOB),” opens a live radiosonde sounding for the upper-air site nearest the pane center (pick any of ~55 sites, or an earlier 00/12Z cycle). It draws the temperature and dewpoint traces on a real skew-T/log-P grid with a lifted surface parcel and shaded CAPE, wind barbs up the right margin, and a 0–10 km hodograph — plus computed SBCAPE, SBCIN, Lifted Index, PWAT, LCL/LFC/EL and 0–1 / 0–6 km bulk shear. All the thermodynamics run in your browser.',
