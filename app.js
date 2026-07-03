@@ -2011,6 +2011,63 @@ function setupMapLayers(map, paneId) {
         paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1.6 }
     });
 
+    // ─── Layer 7e2: Aviation — Graphical AIRMETs (G-AIRMET, AWC) ───
+    const GA_HAZARD_COLOR = ['match', ['get', 'hazard'],
+        'TURB', '#ff9e3b', 'TURB-HI', '#ff9e3b', 'TURB-LO', '#ffc07a',
+        'ICE', '#3bd4ff',
+        'IFR', '#c46bff',
+        'MT_OBSC', '#b98a5a',
+        'SFC_WND', '#ffd23c',
+        'LLWS', '#ff5ac4',
+        'FZLVL', '#7fbfff', 'M_FZLVL', '#7fbfff',
+        '#ffd23c'];
+    map.addSource('gairmet', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'gairmet-fill', type: 'fill', source: 'gairmet',
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': GA_HAZARD_COLOR, 'fill-opacity': 0.10 }
+    });
+    map.addLayer({
+        id: 'gairmet-outline', type: 'line', source: 'gairmet',
+        layout: { visibility: 'none', 'line-join': 'round' },
+        paint: { 'line-color': GA_HAZARD_COLOR, 'line-width': 1.6, 'line-dasharray': [2, 2] }
+    });
+    map.addLayer({
+        id: 'gairmet-label', type: 'symbol', source: 'gairmet',
+        layout: {
+            visibility: 'none',
+            'text-field': ['coalesce', ['get', 'hazard'], 'G-AIRMET'],
+            'text-font': ['Noto Sans Regular'], 'text-size': 9,
+            'symbol-placement': 'point', 'text-allow-overlap': false
+        },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1.2 }
+    });
+
+    // ─── Layer 7e3: Aviation — Terminal Forecasts (TAF, AWC) colored by flight cat ───
+    const TAF_CAT_COLOR = ['match', ['get', 'fltcat'],
+        'VFR', '#33c27a', 'MVFR', '#4d9fff', 'IFR', '#ff3b3b', 'LIFR', '#ff2bd0',
+        '#8b97a3'];
+    map.addSource('taf', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'taf-layer', type: 'circle', source: 'taf',
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': 5,
+            'circle-color': TAF_CAT_COLOR,
+            'circle-stroke-color': '#001018', 'circle-stroke-width': 1.2, 'circle-opacity': 0.9
+        }
+    });
+    map.addLayer({
+        id: 'taf-label', type: 'symbol', source: 'taf',
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'id'],
+            'text-font': ['Noto Sans Regular'], 'text-size': 9,
+            'text-offset': [0, -1.1], 'text-anchor': 'bottom', 'text-allow-overlap': false
+        },
+        paint: { 'text-color': '#cfe6ff', 'text-halo-color': '#000000', 'text-halo-width': 1.2 }
+    });
+
     // ─── Layer 7f: Interrogation tools (measure / range rings / storm ETA) ───
     // One shared overlay per pane; features are pushed in by the tools module.
     map.addSource('tool-geo', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -2499,6 +2556,21 @@ function initFrontalPipIcons(map) {
         id: 'cpc-precip-layer', type: 'raster', source: 'cpc-precip',
         layout: { visibility: 'none' },
         paint: { 'raster-opacity': 0.65 }
+    });
+
+    // ─── Layer 7i2: NDFD gridded forecast — surface temperature (°F) ───
+    // NWS mapservices only publishes the NDFD temperature grid as a live raster
+    // service; wind/sky/QPF grids are no longer served publicly. WMS tiles are
+    // loaded directly (no proxy needed — same-origin not required for <img> tiles).
+    map.addSource('ndfd-temp', {
+        type: 'raster',
+        tiles: ['https://mapservices.weather.noaa.gov/raster/services/NDFD/NDFD_temp/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&layers=1&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}'],
+        tileSize: 256
+    });
+    map.addLayer({
+        id: 'ndfd-temp-layer', type: 'raster', source: 'ndfd-temp',
+        layout: { visibility: 'none' },
+        paint: { 'raster-opacity': 0.6 }
     });
 
     // ─── Layer 7j: US Drought Monitor (GeoJSON) ───
@@ -3217,6 +3289,46 @@ function initFrontalPipIcons(map) {
     });
     map.on('mouseenter', 'probsevere-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'probsevere-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── G-AIRMET hazard-area click ───
+    map.on('click', 'gairmet-fill', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const gaColor = { TURB: '#ff9e3b', 'TURB-HI': '#ff9e3b', 'TURB-LO': '#ffc07a', ICE: '#3bd4ff', IFR: '#c46bff', MT_OBSC: '#b98a5a', SFC_WND: '#ffd23c', LLWS: '#ff5ac4', FZLVL: '#7fbfff', M_FZLVL: '#7fbfff' }[p.hazard] || '#ffd23c';
+        const fmt = s => s ? String(s).replace('T', ' ').replace(/:\d{2}(\.\d+)?Z?$/, 'Z').slice(5, 16) + 'Z' : '';
+        const fh = (p.forecast != null && p.forecast !== '') ? `+${esc(p.forecast)}h` : '';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
+            <div style="font-weight:bold;color:${gaColor};font-size:13px;margin-bottom:3px;">G-AIRMET ${esc(p.hazard || '')} <span style="color:#888;font-weight:normal;">${esc(p.product || '')} ${fh}</span></div>
+            <div style="color:#888;margin-bottom:4px;">Valid ${fmt(p.validTime)}</div>
+            ${p.dueTo ? `<div style="color:#cfcfcf;line-height:1.5;">${esc(p.dueTo)}</div>` : ''}
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'gairmet-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'gairmet-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── TAF (terminal forecast) click ───
+    map.on('click', 'taf-layer', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const catColor = { VFR: '#33c27a', MVFR: '#4d9fff', IFR: '#ff3b3b', LIFR: '#ff2bd0' }[p.fltcat] || '#8b97a3';
+        const fmt = s => s ? String(s).replace('T', ' ').replace(/:\d{2}(\.\d+)?Z?$/, 'Z').slice(5, 16) + 'Z' : '';
+        const wind = (p.wdir != null && p.wdir !== '') ? `${String(p.wdir).padStart(3, '0')}° @ ${esc(p.wspd || 0)}${p.wgst ? 'G' + esc(p.wgst) : ''} kt` : '—';
+        let clouds = '';
+        try { const cl = typeof p.clouds === 'string' ? JSON.parse(p.clouds) : p.clouds; if (Array.isArray(cl)) clouds = cl.map(c => `${esc(c.cover)}${c.base != null ? Math.round(c.base / 100).toString().padStart(3, '0') : ''}`).join(' '); } catch (_) {}
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:300px;">
+            <div style="font-weight:bold;color:${catColor};font-size:13px;margin-bottom:3px;">TAF ${esc(p.id || '')} · ${esc(p.fltcat || '')}</div>
+            <div style="color:#888;margin-bottom:4px;">${esc(p.site || '')} · valid ${fmt(p.validTimeFrom)}–${fmt(p.validTimeTo)}</div>
+            <div style="line-height:1.6;">
+                <div><span style="color:#888;">Wind:</span> ${wind}</div>
+                <div><span style="color:#888;">Vis:</span> ${esc(p.visib || '—')} sm &nbsp; <span style="color:#888;">Ceil:</span> ${p.ceil != null && p.ceil !== '' ? esc(p.ceil) * 100 + ' ft' : '—'}</div>
+                ${clouds ? `<div><span style="color:#888;">Sky:</span> ${clouds}</div>` : ''}
+            </div>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'taf-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'taf-layer', () => { map.getCanvas().style.cursor = ''; });
 
     // ─── Storm-track cell click ───
     map.on('click', 'storm-attr-cell', e => {
@@ -5208,6 +5320,46 @@ async function fetchProbSevere(show) {
     }
 }
 
+// Terminal Aerodrome Forecasts — plotted as one point per station colored by the
+// current prevailing flight category (timeGroup 0). Proxied via /api/taf.
+async function fetchTaf(show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    addLiveLog('AVIATION: Fetching terminal forecasts (TAF)...', '#33c27a');
+    try {
+        const res = await fetch('/api/taf');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const fc = await res.json();
+        // Keep the prevailing period per site (timeGroup 0) so each airport is one dot.
+        const feats = (fc.features || []).filter(f => f.geometry && f.geometry.type === 'Point' &&
+            (f.properties && (f.properties.timeGroup === 0 || f.properties.timeGroup === '0')));
+        const clean = { type: 'FeatureCollection', features: feats };
+        Object.values(maps).forEach(m => { if (m.getSource('taf')) m.getSource('taf').setData(clean); });
+        addLiveLog(`AVIATION: ${feats.length} TAF sites loaded`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`AVIATION TAF ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// Graphical AIRMETs — hazard polygons (SIERRA/TANGO/ZULU). Shows the current
+// snapshot (forecast hour 0) so areas don't stack. Proxied via /api/gairmet.
+async function fetchGairmet(show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    addLiveLog('AVIATION: Fetching graphical AIRMETs...', '#ff9e3b');
+    try {
+        const res = await fetch('/api/gairmet');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const fc = await res.json();
+        const feats = (fc.features || []).filter(f => f.geometry &&
+            (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') &&
+            (f.properties && (f.properties.forecast === 0 || f.properties.forecast === '0')));
+        const clean = { type: 'FeatureCollection', features: feats };
+        Object.values(maps).forEach(m => { if (m.getSource('gairmet')) m.getSource('gairmet').setData(clean); });
+        addLiveLog(`AVIATION: ${feats.length} G-AIRMET areas loaded`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`AVIATION G-AIRMET ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 10: WARNING WATCHDOG
@@ -7124,7 +7276,10 @@ function updateSidebarToActivePane() {
         else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-icons');
         else if (layer === 'probsevere') isActive = isLayerVisible(map, 'probsevere-fill');
         else if (layer === 'airsigmet') isActive = isLayerVisible(map, 'airsigmet-fill');
+        else if (layer === 'gairmet') isActive = isLayerVisible(map, 'gairmet-fill');
         else if (layer === 'pireps') isActive = isLayerVisible(map, 'pireps-layer');
+        else if (layer === 'taf') isActive = isLayerVisible(map, 'taf-layer');
+        else if (layer === 'ndfd-temp') isActive = isLayerVisible(map, 'ndfd-temp-layer');
         else if (layer === 'spc-outlook') {
             const day = item.getAttribute('data-day');
             isActive = isLayerVisible(map, `spc-day${day}-fill`);
@@ -7436,6 +7591,34 @@ function initProductSidebar() {
                 const isActive = !item.classList.contains('active');
                 if (isActive) await fetchPireps(true);
                 map.setLayoutProperty('pireps-layer', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Aviation: Graphical AIRMETs (G-AIRMET) ───
+            if (layer === 'gairmet') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchGairmet(true);
+                const vis = isActive ? 'visible' : 'none';
+                ['gairmet-fill', 'gairmet-outline', 'gairmet-label'].forEach(l => map.setLayoutProperty(l, 'visibility', vis));
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Aviation: Terminal Forecasts (TAF) ───
+            if (layer === 'taf') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchTaf(true);
+                const vis = isActive ? 'visible' : 'none';
+                ['taf-layer', 'taf-label'].forEach(l => map.setLayoutProperty(l, 'visibility', vis));
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── NDFD gridded forecast — surface temperature ───
+            if (layer === 'ndfd-temp') {
+                const isActive = !item.classList.contains('active');
+                map.setLayoutProperty('ndfd-temp-layer', 'visibility', isActive ? 'visible' : 'none');
                 updateSidebarToActivePane();
                 return;
             }
@@ -8962,6 +9145,8 @@ function clearPane(map, paneId) {
         'drought-fill', 'drought-outline', 'cpc-drought-layer',
         'probsevere-fill', 'probsevere-outline', 'probsevere-label',
         'airsigmet-fill', 'airsigmet-outline', 'airsigmet-label', 'pireps-layer',
+        'gairmet-fill', 'gairmet-outline', 'gairmet-label', 'taf-layer', 'taf-label',
+        'ndfd-temp-layer',
         'storm-attr-track', 'storm-attr-fpos', 'storm-attr-cell', 'storm-attr-label',
         'nws-cwa-layer', 'nws-cwa-label-layer'
     ];
@@ -9351,6 +9536,8 @@ function startAutoRefresh() {
         if (isPlaying) return;
         if (Object.values(maps).some(m => isLayerVisible(m, 'airsigmet-fill'))) fetchAirSigmet(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'pireps-layer'))) fetchPireps(true);
+        if (Object.values(maps).some(m => isLayerVisible(m, 'gairmet-fill'))) fetchGairmet(true);
+        if (Object.values(maps).some(m => isLayerVisible(m, 'taf-layer'))) fetchTaf(true);
     }, 5 * 60 * 1000);
 
     // 2. High Frequency (5 minutes)
@@ -10116,6 +10303,10 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 3, 2026', items: [
+        'Interactive Skew-T (NSHARP-lite): a new SPC-PRODUCTS item, “Interactive Skew-T (RAOB),” opens a live radiosonde sounding for the upper-air site nearest the pane center (pick any of ~55 sites, or an earlier 00/12Z cycle). It draws the temperature and dewpoint traces on a real skew-T/log-P grid with a lifted surface parcel and shaded CAPE, wind barbs up the right margin, and a 0–10 km hodograph — plus computed SBCAPE, SBCIN, Lifted Index, PWAT, LCL/LFC/EL and 0–1 / 0–6 km bulk shear. All the thermodynamics run in your browser.',
+        'Graphical AIRMETs (G-AIRMET): the AVIATION group now plots the AWC’s gridded AIRMET hazard areas (turbulence, icing, IFR, mountain obscuration, surface winds, low-level wind shear, freezing level) as color-coded polygons; click one for the hazard, product, forecast hour and cause.',
+        'Terminal Forecasts (TAF): airports now plot as dots colored by the current prevailing flight category (VFR/MVFR/IFR/LIFR). Click a site for its wind, visibility, ceiling, sky cover and valid period.',
+        'NDFD forecast grid: a “Surface Temperature (°F)” raster under SURFACE ANALYSIS → Forecast Grids overlays the National Digital Forecast Database temperature grid (the one gridded NDFD parameter NWS still serves publicly).',
         'Radar all-tilts: NODD Level III products (SRM, CC, ZDR, KDP) can now be stepped through the lowest four elevation angles. When one is active, an “Elevation tilt” control appears under the NODD list — ▲/▼ moves up/down the volume, and the pane legend shows the actual beam angle.',
         'Storm Tracks (STI): a new NODD item plots the radar’s storm-cell centroids with their ID and max reflectivity, plus each cell’s forecast track (15/30/45/60-minute positions). Click a cell for max dBZ, storm-top height, and movement.',
         'VAD Wind Profile: a new NODD item opens a panel showing the winds aloft over the selected radar as a stack of wind barbs by altitude, alongside a hodograph — quick read on shear and veering without leaving the workstation.'
@@ -10780,6 +10971,262 @@ function initVadPanel() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 30: INTERACTIVE SKEW-T / LOG-P (RAOB, NSHARP-lite)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Pulls a real radiosonde profile (IEM JSON, CORS-open), renders a skew-T diagram
+// with parcel ascent + hodograph in an SVG, and computes surface-based instability
+// indices client-side. All math is in JS — negligible runtime weight, no server work.
+
+// Curated US/nearby upper-air (RAOB) sites: id -> [lat, lon].
+const RAOB_SITES = {
+    KOUN: [35.18, -97.44], KLZK: [34.83, -92.26], KBMX: [33.10, -86.70], KFWD: [32.83, -97.30],
+    KJAN: [32.32, -90.08], KLIX: [30.34, -89.83], KTAE: [30.44, -84.30], KJAX: [30.48, -81.70],
+    KTBW: [27.70, -82.40], KMFL: [25.75, -80.38], KEYW: [24.55, -81.75], KCRP: [27.77, -97.50],
+    KBRO: [25.90, -97.42], KDRT: [29.37, -100.92], KMAF: [31.94, -102.19], KEPZ: [31.87, -106.70],
+    KABQ: [35.04, -106.62], KAMA: [35.23, -101.70], KDDC: [37.76, -99.97], KTOP: [39.07, -95.62],
+    KOAX: [41.32, -96.37], KLBF: [41.13, -100.68], KDNR: [39.77, -104.88], KRIW: [43.06, -108.48],
+    KBIS: [46.77, -100.75], KABR: [45.45, -98.41], KMPX: [44.85, -93.56], KDVN: [41.61, -90.58],
+    KILX: [40.15, -89.34], KGRB: [44.50, -88.11], KDTX: [42.70, -83.47], KILN: [39.42, -83.82],
+    KBNA: [36.25, -86.57], KGSO: [36.08, -79.95], KRNK: [37.20, -80.41], KIAD: [38.98, -77.47],
+    KWAL: [37.93, -75.48], KOKX: [40.87, -72.86], KALB: [42.70, -73.83], KBUF: [42.94, -78.72],
+    KPIT: [40.53, -80.23], KGYX: [43.89, -70.25], KCHH: [41.65, -69.96], KUNR: [44.07, -103.21],
+    KLKN: [40.87, -115.73], KSLC: [40.77, -111.95], KBOI: [43.56, -116.21], KGGW: [48.21, -106.62],
+    KTFX: [47.46, -111.38], KOTX: [47.68, -117.63], KSLE: [44.91, -123.00], KMFR: [42.37, -122.87],
+    KREV: [39.57, -119.80], KVEF: [36.05, -115.18], KNKX: [32.87, -117.15], KVBG: [34.75, -120.52],
+    KOAK: [37.73, -122.22], KTUS: [32.23, -110.96]
+};
+
+// ── Thermodynamics (Bolton 1980; pseudoadiabatic parcel). T in °C unless noted K. ──
+const _Rd = 287.04, _cpd = 1004, _Lv = 2.5e6, _epsw = 0.622, _gg = 9.81;
+function _esat(Tc) { return 6.112 * Math.exp(17.67 * Tc / (Tc + 243.5)); }        // hPa
+function _mixr(Tc, p) { const e = _esat(Tc); return _epsw * e / (p - e); }          // kg/kg
+function _lclTempK(Tk, Tdk) { return 56 + 1 / (1 / (Tdk - 56) + Math.log(Tk / Tdk) / 800); }
+function _moistLapse(Tk, p) {                                                        // dT/dp (K/hPa)
+    const ws = _mixr(Tk - 273.15, p);
+    const num = _Rd * Tk + _Lv * ws;
+    const den = _cpd + (_Lv * _Lv * ws * _epsw) / (_Rd * Tk * Tk);
+    return (num / den) / p;
+}
+function _uv(dir, spd) { const a = dir * Math.PI / 180; return [-spd * Math.sin(a), -spd * Math.cos(a)]; }
+
+function _skewtParcel(lv) {
+    const sfc = lv[0], Psfc = sfc.pres, Tsfc = sfc.tmpc + 273.15, Tdsfc = sfc.dwpc + 273.15;
+    const Tlcl = _lclTempK(Tsfc, Tdsfc);
+    const Plcl = Psfc * Math.pow(Tlcl / Tsfc, 1 / 0.2854);
+    const TkLcl = Tsfc * Math.pow(Plcl / Psfc, 0.2854);
+    function pT(p) {
+        if (p >= Plcl) return Tsfc * Math.pow(p / Psfc, 0.2854);   // dry adiabat below LCL
+        let Tk = TkLcl, pp = Plcl;                                  // moist adiabat above
+        while (pp > p) { const dp = Math.max(-2, p - pp); Tk += _moistLapse(Tk, pp) * dp; pp += dp; }
+        return Tk;
+    }
+    return { Psfc, Tsfc, Tlcl, Plcl, pT };
+}
+function _skewtShear(lv) {
+    const w = lv.filter(l => l.drct != null && l.sknt != null && l.hght != null);
+    if (w.length < 2) return { shear01: null, shear06: null };
+    const z0 = w[0].hght;
+    const nearest = agl => { let best = w[0], bd = 1e18; for (const l of w) { const d = Math.abs((l.hght - z0) - agl); if (d < bd) { bd = d; best = l; } } return best; };
+    const s = _uv(w[0].drct, w[0].sknt);
+    const u1 = _uv(nearest(1000).drct, nearest(1000).sknt);
+    const u6 = _uv(nearest(6000).drct, nearest(6000).sknt);
+    const mag = (a, b) => Math.round(Math.hypot(a[0] - b[0], a[1] - b[1]));
+    return { shear01: mag(s, u1), shear06: mag(s, u6) };
+}
+function _skewtCompute(lv) {
+    const par = _skewtParcel(lv);
+    const P = lv.map(l => l.pres), Z = lv.map(l => l.hght), Te = lv.map(l => l.tmpc + 273.15);
+    const Tp = P.map(p => par.pT(p));
+    const buoy = Tp.map((t, i) => (t - Te[i]) / Te[i]);
+    const pos = []; for (let i = 0; i < P.length; i++) if (P[i] <= par.Plcl + 0.5 && buoy[i] > 0) pos.push(i);
+    let cape = 0, cin = 0, lfc = null, el = null;
+    if (pos.length) {
+        const lfcI = pos[0], elI = pos[pos.length - 1]; lfc = P[lfcI]; el = P[elI];
+        for (let i = lfcI + 1; i <= elI; i++) { const dz = Z[i] - Z[i - 1]; cape += _gg * 0.5 * (Math.max(buoy[i - 1], 0) + Math.max(buoy[i], 0)) * dz; }
+        for (let i = 1; i <= lfcI; i++) { const dz = Z[i] - Z[i - 1]; cin += _gg * 0.5 * (Math.min(buoy[i - 1], 0) + Math.min(buoy[i], 0)) * dz; }
+    }
+    let li = null; for (let i = 0; i < P.length; i++) { if (Math.abs(P[i] - 500) < 8) { li = Te[i] - Tp[i]; break; } }
+    let pw = 0; for (let i = 1; i < lv.length; i++) { const w0 = _mixr(lv[i - 1].dwpc, lv[i - 1].pres), w1 = _mixr(lv[i].dwpc, lv[i].pres); pw += 0.5 * (w0 + w1) * (lv[i - 1].pres - lv[i].pres) * 100 / _gg; }
+    const lclZ = (_Rd * 0.5 * (par.Tsfc + par.Tlcl) / _gg) * Math.log(par.Psfc / par.Plcl);
+    return Object.assign({ par, P, Z, Te, Tp, cape, cin, li, pw, lclZ, lfc, el }, _skewtShear(lv));
+}
+
+function _ir(k, v, c) { return `<div style="display:flex;justify-content:space-between;"><span style="color:#8b97a3;">${k}</span><span style="color:${c};font-weight:600;">${v}</span></div>`; }
+function _skewtHodo(wl) {
+    const S = 200, cx = S / 2, cy = S / 2;
+    const z0 = wl.length ? wl[0].hght : 0;
+    const pts = wl.filter(l => (l.hght - z0) <= 10000).map(l => { const uv = _uv(l.drct, l.sknt); return { u: uv[0], v: uv[1] }; });
+    const maxS = Math.max(20, ...pts.map(p => Math.hypot(p.u, p.v)));
+    const ring = Math.ceil(maxS / 10) * 10;
+    const sc = (S / 2 - 12) / ring;
+    let g = `<rect x="0" y="0" width="${S}" height="${S}" fill="#0a0f16" stroke="#1e2a35"/>`;
+    for (let r = 10; r <= ring; r += 10) { g += `<circle cx="${cx}" cy="${cy}" r="${(r * sc).toFixed(1)}" fill="none" stroke="#1e2a35" stroke-width="0.7"/><text x="${cx + r * sc}" y="${cy - 2}" fill="#5c6b78" font-size="7">${r}</text>`; }
+    g += `<line x1="${cx}" y1="0" x2="${cx}" y2="${S}" stroke="#1e2a35" stroke-width="0.6"/><line x1="0" y1="${cy}" x2="${S}" y2="${cy}" stroke="#1e2a35" stroke-width="0.6"/>`;
+    const XY = pts.map(p => [cx + p.u * sc, cy - p.v * sc]);
+    if (XY.length) g += `<polyline points="${XY.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}" fill="none" stroke="#ffe14d" stroke-width="1.8"/>`;
+    XY.forEach((p, i) => { const col = i === 0 ? '#33c27a' : i === XY.length - 1 ? '#ff3b3b' : '#ffe14d'; g += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2" fill="${col}"/>`; });
+    return `<svg viewBox="0 0 ${S} ${S}" width="200" height="200" style="flex:0 0 auto;"><text x="2" y="9" fill="#8b97a3" font-size="8">Hodograph (kt, 0–10 km) ● sfc ● top</text>${g}</svg>`;
+}
+function renderSkewT(lv, D) {
+    const PL = 46, PT = 16, PW = 372, PH = 520, PB = PT + PH, PR = PL + PW;
+    const Ptop = 100, Pbot = 1050, Tmin = -45, Tmax = 45, SKEW = 0.62;
+    const yP = p => PT + Math.log(p / Ptop) / Math.log(Pbot / Ptop) * PH;
+    const xTP = (Tc, p) => PL + ((Tc - Tmin) / (Tmax - Tmin)) * PW + (PB - yP(p)) * SKEW;
+    const poly = a => a.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    // isobars + labels
+    let grid = '';
+    [1000, 850, 700, 500, 400, 300, 250, 200, 150, 100].forEach(p => {
+        const y = yP(p);
+        grid += `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${PR}" y2="${y.toFixed(1)}" stroke="#243040" stroke-width="0.7"/>`;
+        grid += `<text x="${PL - 4}" y="${(y + 3).toFixed(1)}" fill="#7f8c99" font-size="8" text-anchor="end">${p}</text>`;
+    });
+    // isotherms (clipped)
+    let iso = '';
+    for (let T = -100; T <= 50; T += 10) {
+        const x1 = xTP(T, Pbot), y1 = yP(Pbot), x2 = xTP(T, Ptop), y2 = yP(Ptop);
+        const c = T === 0 ? '#4a6a55' : '#26333f';
+        iso += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${c}" stroke-width="${T === 0 ? 1.1 : 0.6}"/>`;
+        if (x1 >= PL - 2 && x1 <= PR + 2) iso += `<text x="${x1.toFixed(1)}" y="${(PB + 11).toFixed(1)}" fill="#6b7a88" font-size="7" text-anchor="middle">${T}</text>`;
+    }
+    // dry adiabats (faint, clipped)
+    let dry = '';
+    for (let th = -20; th <= 160; th += 20) {
+        let d = '';
+        for (let p = Pbot; p >= Ptop; p -= 25) { const Tc = (th + 273.15) * Math.pow(p / 1000, 0.2854) - 273.15; d += (d ? 'L' : 'M') + xTP(Tc, p).toFixed(1) + ',' + yP(p).toFixed(1); }
+        dry += `<path d="${d}" fill="none" stroke="#2a2118" stroke-width="0.6"/>`;
+    }
+    // traces
+    const Ttrace = lv.map(l => [xTP(l.tmpc, l.pres), yP(l.pres)]);
+    const Dtrace = lv.map(l => [xTP(l.dwpc, l.pres), yP(l.pres)]);
+    const Ptrace = lv.map((l, i) => [xTP(D.Tp[i] - 273.15, l.pres), yP(l.pres)]);
+    // CAPE shading (parcel warmer than env, LFC→EL)
+    let capeShade = '';
+    if (D.lfc && D.el) {
+        const idx = []; for (let i = 0; i < lv.length; i++) if (lv[i].pres <= D.lfc && lv[i].pres >= D.el && D.Tp[i] > D.Te[i]) idx.push(i);
+        if (idx.length > 1) {
+            const up = idx.map(i => Ptrace[i]);
+            const down = idx.slice().reverse().map(i => Ttrace[i]);
+            capeShade = `<polygon points="${poly(up.concat(down))}" fill="#ff3b3b" fill-opacity="0.15"/>`;
+        }
+    }
+    // wind barbs at right margin (standard levels)
+    let barbs = ''; const bx = PR + 22;
+    const wl = lv.filter(l => l.drct != null && l.sknt != null);
+    const chosen = [];
+    [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150].forEach(tp => {
+        let best = null, bd = 1e9; wl.forEach(l => { const d = Math.abs(l.pres - tp); if (d < bd && d < 25) { bd = d; best = l; } });
+        if (best && !chosen.includes(best)) chosen.push(best);
+    });
+    chosen.forEach(l => {
+        const y = yP(l.pres); const bp = _vadBarbPaths(bx, y, l.drct, l.sknt, 20);
+        barbs += bp.lines.map(d => `<path d="${d}" stroke="#cfe0ee" stroke-width="1" fill="none"/>`).join('');
+        barbs += bp.flags.map(d => `<path d="${d}" fill="#cfe0ee" stroke="#cfe0ee" stroke-width="0.5"/>`).join('');
+    });
+    const svgW = PR + 46, svgH = PB + 22;
+    const skewSVG = `<svg viewBox="0 0 ${svgW} ${svgH}" width="470" style="background:#0a0f16;border:1px solid #1e2a35;flex:0 0 auto;">
+        <defs><clipPath id="skewtclip"><rect x="${PL}" y="${PT}" width="${PW}" height="${PH}"/></clipPath></defs>
+        ${grid}
+        <g clip-path="url(#skewtclip)">${dry}${iso}${capeShade}
+            <polyline points="${poly(Dtrace)}" fill="none" stroke="#33c27a" stroke-width="2"/>
+            <polyline points="${poly(Ttrace)}" fill="none" stroke="#ff4444" stroke-width="2"/>
+            <polyline points="${poly(Ptrace)}" fill="none" stroke="#ffe14d" stroke-width="1.4" stroke-dasharray="4,3"/>
+        </g>
+        <rect x="${PL}" y="${PT}" width="${PW}" height="${PH}" fill="none" stroke="#2e3d4c" stroke-width="1"/>
+        ${barbs}
+        <text x="${PL}" y="11" fill="#8b97a3" font-size="8">Skew-T / Log-P (°C) — ▬ T ▬ Td ┈ parcel</text>
+    </svg>`;
+    const fx = v => v == null ? '—' : Math.round(v);
+    const idxHTML = `<div style="font-size:10px;color:#cdd6df;font-family:Inter,sans-serif;line-height:1.85;min-width:190px;">
+        <div style="color:#8b97a3;text-transform:uppercase;letter-spacing:.5px;font-size:9px;margin-bottom:2px;">Parcel indices (surface-based)</div>
+        ${_ir('SBCAPE', fx(D.cape) + ' J/kg', D.cape > 1000 ? '#ff6a6a' : '#9fd3ff')}
+        ${_ir('SBCIN', fx(D.cin) + ' J/kg', '#7fbfff')}
+        ${_ir('Lifted Index', D.li != null ? D.li.toFixed(1) : '—', D.li < 0 ? '#ff6a6a' : '#9fd3ff')}
+        ${_ir('PWAT', D.pw.toFixed(1) + ' mm', '#33c27a')}
+        ${_ir('LCL', fx(D.lclZ) + ' m AGL', '#cdd6df')}
+        ${_ir('LFC', D.lfc ? Math.round(D.lfc) + ' hPa' : '—', '#cdd6df')}
+        ${_ir('EL', D.el ? Math.round(D.el) + ' hPa' : '—', '#cdd6df')}
+        ${_ir('0–1 km shear', D.shear01 != null ? D.shear01 + ' kt' : '—', '#ffd23c')}
+        ${_ir('0–6 km shear', D.shear06 != null ? D.shear06 + ' kt' : '—', '#ffd23c')}
+        <div style="margin-top:6px;border-top:1px solid #23303c;padding-top:5px;color:#8b97a3;font-size:9px;">Surface ${lv[0].tmpc.toFixed(1)}° / ${lv[0].dwpc.toFixed(1)}°C @ ${Math.round(lv[0].pres)} hPa</div>
+        <div style="color:#5c6b78;font-size:8px;margin-top:3px;">Surface-based, T-based buoyancy (Tv correction omitted).</div>
+    </div>`;
+    return `${skewSVG}<div style="display:flex;flex-direction:column;gap:6px;">${_skewtHodo(wl)}${idxHTML}</div>`;
+}
+
+// ── Data + panel plumbing ──
+function _synopticTimes(n) {
+    const out = []; const now = new Date();
+    let d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours() >= 12 ? 12 : 0, 0, 0));
+    for (let i = 0; i < n; i++) { out.push(d.toISOString().replace(/\.\d+Z$/, 'Z')); d = new Date(d.getTime() - 12 * 3600 * 1000); }
+    return out;
+}
+async function _fetchRaob(station, ts) {
+    const url = `https://mesonet.agron.iastate.edu/json/raob.py?ts=${encodeURIComponent(ts)}&station=${encodeURIComponent(station)}`;
+    const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(); return (j.profiles && j.profiles[0]) ? j.profiles[0] : null;
+}
+function nearestRaob() {
+    let c = { lng: -97, lat: 38 };
+    try { const m = maps[activePaneId]; if (m) { const cc = m.getCenter(); c = { lng: cc.lng, lat: cc.lat }; } } catch (_) {}
+    let best = 'KOUN', bd = 1e18;
+    for (const id in RAOB_SITES) { const s = RAOB_SITES[id]; const dx = (s[1] - c.lng) * Math.cos(c.lat * Math.PI / 180), dy = s[0] - c.lat; const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = id; } }
+    return best;
+}
+async function loadSkewt(station) {
+    const meta = document.getElementById('skewt-meta'), body = document.getElementById('skewt-body');
+    const timeSel = document.getElementById('skewt-time');
+    if (meta) meta.textContent = `Fetching sounding for ${station}…`;
+    const wanted = (timeSel && timeSel.value) ? [timeSel.value] : _synopticTimes(4);
+    try {
+        let pr = null, used = null;
+        for (const ts of wanted) { const p = await _fetchRaob(station, ts); if (p && p.profile && p.profile.filter(l => l.tmpc != null).length > 5) { pr = p; used = ts; break; } }
+        if (!pr) throw new Error('no data for recent cycles');
+        const lv = pr.profile.filter(l => l.pres && l.tmpc != null && l.dwpc != null && l.hght != null).sort((a, b) => b.pres - a.pres);
+        if (lv.length < 3) throw new Error('sounding too sparse');
+        const D = _skewtCompute(lv);
+        if (meta) meta.innerHTML = `${station} · ${(pr.valid || used).replace('T', ' ')} · SBCAPE ${Math.round(D.cape)} J/kg · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${D.pw.toFixed(1)} mm`;
+        if (body) body.innerHTML = renderSkewT(lv, D);
+    } catch (e) {
+        if (meta) meta.textContent = `Skew-T: ${e.message}`;
+        if (body) body.innerHTML = `<div style="color:#ff6666;font-size:11px;padding:16px;">Could not load a sounding for ${esc(station)} (${esc(e.message)}). Launches are 00Z & 12Z — try another site or an earlier time.</div>`;
+    }
+}
+let skewtStation = null;
+function _fillSkewtStations(sel) {
+    if (!sel || sel.options.length) return;
+    Object.keys(RAOB_SITES).sort().forEach(id => { const o = document.createElement('option'); o.value = id; o.textContent = id; sel.appendChild(o); });
+}
+function _fillSkewtTimes(sel) {
+    if (!sel || sel.options.length) return;
+    const auto = document.createElement('option'); auto.value = ''; auto.textContent = 'Auto (latest)'; sel.appendChild(auto);
+    _synopticTimes(6).forEach(ts => { const o = document.createElement('option'); o.value = ts; o.textContent = ts.slice(5, 16).replace('T', ' ') + 'Z'; sel.appendChild(o); });
+}
+async function openSkewtPanel() {
+    const panel = document.getElementById('skewt-panel'); if (!panel) return;
+    panel.style.display = 'block';
+    const stSel = document.getElementById('skewt-station'), tSel = document.getElementById('skewt-time');
+    _fillSkewtStations(stSel); _fillSkewtTimes(tSel);
+    skewtStation = nearestRaob();
+    if (stSel) stSel.value = skewtStation;
+    await loadSkewt(skewtStation);
+}
+function initSkewtPanel() {
+    document.getElementById('btn-skewt')?.addEventListener('click', openSkewtPanel);
+    document.getElementById('close-skewt-panel')?.addEventListener('click', () => { const p = document.getElementById('skewt-panel'); if (p) p.style.display = 'none'; });
+    document.getElementById('skewt-refresh')?.addEventListener('click', () => { const s = document.getElementById('skewt-station'); loadSkewt((s && s.value) || nearestRaob()); });
+    document.getElementById('skewt-station')?.addEventListener('change', e => loadSkewt(e.target.value));
+    document.getElementById('skewt-time')?.addEventListener('change', () => { const s = document.getElementById('skewt-station'); loadSkewt((s && s.value) || nearestRaob()); });
+    const panel = document.getElementById('skewt-panel'), handle = document.getElementById('skewt-drag');
+    if (panel && handle) {
+        let dx = 0, dy = 0, drag = false; handle.style.cursor = 'move';
+        handle.addEventListener('mousedown', e => { if (e.target.closest('button') || e.target.closest('select')) return; drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop; e.preventDefault(); });
+        window.addEventListener('mousemove', e => { if (!drag) return; panel.style.left = Math.max(0, e.clientX - dx) + 'px'; panel.style.top = Math.max(0, e.clientY - dy) + 'px'; panel.style.right = 'auto'; });
+        window.addEventListener('mouseup', () => { drag = false; });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 25: INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -10827,6 +11274,7 @@ function init() {
     initProcedures();
     initL3Tilt();
     initVadPanel();
+    initSkewtPanel();
 
     // Start warning watchdog (check every 15 seconds for rapid convective updates)
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');

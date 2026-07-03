@@ -169,15 +169,18 @@
                     <div class="product-item" data-layer="spc-md"><span>Mesoscale Discussions</span> <span class="badge red">LIVE</span></div>
                     <div class="product-item" data-layer="spc-lsr"><span>Local Storm Reports</span> <span class="badge orange">LIVE</span></div>
                     <div class="product-item" data-layer="probsevere"><span>ProbSevere (CIMSS)</span> <span class="badge red">LIVE</span></div>
-                    <div class="product-item" id="btn-soundings"><span>Skew-T Soundings</span></div>
+                    <div class="product-item" id="btn-soundings"><span>Skew-T Soundings (SPC img)</span></div>
+                    <div class="product-item" id="btn-skewt"><span>Interactive Skew-T (RAOB)</span> <span class="badge green">NSHARP</span></div>
                 </div>
 
                 <!-- AVIATION -->
                 <div class="category-group">
                     <div class="category-label"><i data-lucide="plane"></i> AVIATION</div>
                     <div class="product-item" data-layer="airsigmet"><span>SIGMETs / AIRMETs</span> <span class="badge orange">AWC</span></div>
+                    <div class="product-item" data-layer="gairmet"><span>Graphical AIRMETs (G-AIRMET)</span> <span class="badge orange">AWC</span></div>
                     <div class="product-item" data-layer="pireps"><span>Pilot Reports (PIREPs)</span> <span class="badge green">AWC</span></div>
-                    <div class="sub-category">Click a hazard area or PIREP for detail</div>
+                    <div class="product-item" data-layer="taf"><span>Terminal Forecasts (TAF)</span> <span class="badge green">AWC</span></div>
+                    <div class="sub-category">Click a hazard area, PIREP, or TAF site for detail</div>
                 </div>
 
                 <!-- SURFACE ANALYSIS -->
@@ -200,6 +203,8 @@
                     <div class="product-item" data-layer="wpc-ero" data-day="2"><span>ERO Day 2</span> <span class="badge blue">WPC</span></div>
                     <div class="product-item" data-layer="wpc-ero" data-day="3"><span>ERO Day 3</span> <span class="badge blue">WPC</span></div>
                     <div class="product-item" data-layer="wpc-mpd"><span>Mesoscale Precip Discussions</span> <span class="badge blue">WPC</span></div>
+                    <div class="sub-category">Forecast Grids (NDFD)</div>
+                    <div class="product-item" data-layer="ndfd-temp"><span>Surface Temperature (°F)</span> <span class="badge blue">NDFD</span></div>
                 </div>
 
                 <!-- NHC TROPICAL -->
@@ -972,7 +977,24 @@
         </div>
     </div>
 
-    <script src="app.js?v=214"></script>
+    <!-- INTERACTIVE SKEW-T / LOG-P (RAOB, NSHARP-lite) -->
+    <div id="skewt-panel" class="floating-panel" style="display:none; width:760px; height:640px;">
+        <div class="floating-panel-header" id="skewt-drag">
+            <span><i data-lucide="git-commit"></i> INTERACTIVE SKEW-T (RAOB)</span>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <select id="skewt-station" title="Upper-air site" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <select id="skewt-time" title="Sounding time" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <button id="skewt-refresh" class="btn-primary" style="height:24px; padding:0 10px; font-weight:700; font-size:10px;">Load</button>
+                <button id="close-skewt-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+            </div>
+        </div>
+        <div id="skewt-meta" style="font-size:10px; color:#8b97a3; padding:6px 12px; border-bottom:1px solid var(--border);">Pick a site and click Load. Defaults to the RAOB nearest the active pane's center.</div>
+        <div class="floating-panel-body" id="skewt-body" style="padding:6px; overflow:auto; display:flex; gap:6px;">
+            <div style="color:#6b7a88; font-size:12px; padding:20px;">Loading sounding…</div>
+        </div>
+    </div>
+
+    <script src="app.js?v=215"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

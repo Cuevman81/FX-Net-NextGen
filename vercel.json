@@ -56,6 +56,14 @@
     {
       "source": "/api/pirep",
       "destination": "https://aviationweather.gov/api/data/pirep?format=geojson&age=3&bbox=20,-130,55,-60"
+    },
+    {
+      "source": "/api/taf",
+      "destination": "https://aviationweather.gov/api/data/taf?format=geojson&bbox=20,-130,55,-60"
+    },
+    {
+      "source": "/api/gairmet",
+      "destination": "https://aviationweather.gov/api/data/gairmet?format=geojson"
     }
   ],
   "headers": [

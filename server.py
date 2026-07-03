@@ -67,6 +67,38 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
 
+        elif path == '/api/taf':
+            try:
+                req = urllib.request.Request('https://aviationweather.gov/api/data/taf?format=geojson&bbox=20,-130,55,-60')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
+
+        elif path == '/api/gairmet':
+            try:
+                req = urllib.request.Request('https://aviationweather.gov/api/data/gairmet?format=geojson')
+                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                with safe_urlopen(req, timeout=15) as response:
+                    data = response.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
+
         elif path == '/api/probsevere':
             try:
                 import re as _re
