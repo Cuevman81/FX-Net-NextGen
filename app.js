@@ -210,10 +210,13 @@ const HEALTH_THRESHOLDS = {
     sfcIsotherms:     { label: 'Isotherms',          thresholdMs: 15 * 60 * 1000 },
     sfcIsodrosotherms:{ label: 'Isodrosotherms',     thresholdMs: 15 * 60 * 1000 },
     probSevere:  { label: 'ProbSevere',       thresholdMs: 5 * 60 * 1000 },
+    ndfdTemp:    { label: 'NDFD Temp',        thresholdMs: 2 * 60 * 60 * 1000 },
     airSigmet:   { label: 'SIGMET/AIRMET',    thresholdMs: 20 * 60 * 1000 },
     gairmet:     { label: 'G-AIRMET',         thresholdMs: 20 * 60 * 1000 },
     pireps:      { label: 'PIREPs',           thresholdMs: 20 * 60 * 1000 },
-    taf:         { label: 'TAF',              thresholdMs: 30 * 60 * 1000 }
+    taf:         { label: 'TAF',              thresholdMs: 30 * 60 * 1000 },
+    cwa:         { label: 'CWAs',             thresholdMs: 20 * 60 * 1000 },
+    ndbc:        { label: 'NDBC Buoys',       thresholdMs: 30 * 60 * 1000 }
 };
 
 // Data-health feeds organized into collapsible sections that mirror the left
@@ -222,10 +225,10 @@ const HEALTH_THRESHOLDS = {
 const HEALTH_GROUPS = [
     { name: 'RADAR & LIGHTNING', ids: ['radar', 'radarL3', 'mrmsEchotops', 'mrmsQpe', 'lightning'] },
     { name: 'SATELLITE',         ids: ['sat', 'gibsSat'] },
-    { name: 'SURFACE ANALYSIS',  ids: ['metar', 'sfcIsobars2mb', 'sfcIsotherms', 'sfcIsodrosotherms', 'wpcIsobars', 'wpcFronts'] },
+    { name: 'SURFACE ANALYSIS',  ids: ['metar', 'ndbc', 'sfcIsobars2mb', 'sfcIsotherms', 'sfcIsodrosotherms', 'wpcIsobars', 'wpcFronts', 'ndfdTemp'] },
     { name: 'WARNINGS & WATCHES',ids: ['warnings', 'watches'] },
     { name: 'SPC PRODUCTS',      ids: ['spcOutlook', 'spcMd', 'spcLsr', 'probSevere'] },
-    { name: 'AVIATION',          ids: ['airSigmet', 'gairmet', 'pireps', 'taf'] },
+    { name: 'AVIATION',          ids: ['airSigmet', 'gairmet', 'pireps', 'taf', 'cwa'] },
     { name: 'WPC PRODUCTS',      ids: ['wpcQpf', 'wpcEro', 'wpcMpd'] },
     { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook'] },
     { name: 'CLIMATE & OUTLOOKS',ids: ['cpcTemp', 'cpcPrecip', 'drought'] },
@@ -504,6 +507,10 @@ function lightningUrl(isoTimeStr) {
     if (isoTimeStr) u += `&TIME=${isoTimeStr}`;
     return u;
 }
+
+// NDFD gridded surface-temperature forecast (the one NDFD parameter NWS still
+// serves as a public raster). Shared by the layer source and the 30-min refresh.
+const NDFD_TEMP_URL = 'https://mapservices.weather.noaa.gov/raster/services/NDFD/NDFD_temp/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&layers=1&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}';
 
 function iemRadarAnimUrl(layerName) {
     return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/${layerName}/{z}/{x}/{y}.png`;
@@ -1142,6 +1149,73 @@ function setupMapLayers(map, paneId) {
                 'line-width': 2
             }
         });
+    });
+
+    // ─── Layer 4a1b: SPC Day 4-8 Severe Weather Outlook (15%/30% probability) ───
+    // One merged source for all five days; each feature is tagged d4-d8 and
+    // carries SPC's own fill/stroke colors like the D1-3 products.
+    map.addSource('spc-d48', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'spc-d48-fill', type: 'fill', source: 'spc-d48',
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': ['coalesce', ['get', 'fill'], '#b87aff'], 'fill-opacity': 0.25 }
+    });
+    map.addLayer({
+        id: 'spc-d48-line', type: 'line', source: 'spc-d48',
+        layout: { visibility: 'none' },
+        paint: { 'line-color': ['coalesce', ['get', 'stroke'], '#b87aff'], 'line-width': 2 }
+    });
+    map.addLayer({
+        id: 'spc-d48-label', type: 'symbol', source: 'spc-d48',
+        layout: {
+            visibility: 'none', 'symbol-placement': 'line',
+            'text-field': ['get', 'dayTag'], 'text-font': ['Noto Sans Regular'], 'text-size': 11
+        },
+        paint: { 'text-color': '#e8d5ff', 'text-halo-color': '#000', 'text-halo-width': 1.5 }
+    });
+
+    // ─── Layer 7e3: Center Weather Advisories (CWSU CWA — short-fuse aviation) ───
+    map.addSource('cwa', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'cwa-fill', type: 'fill', source: 'cwa',
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': '#ff5ac4', 'fill-opacity': 0.10 }
+    });
+    map.addLayer({
+        id: 'cwa-outline', type: 'line', source: 'cwa',
+        layout: { visibility: 'none' },
+        paint: { 'line-color': '#ff5ac4', 'line-width': 1.8, 'line-dasharray': [3, 2] }
+    });
+    map.addLayer({
+        id: 'cwa-label', type: 'symbol', source: 'cwa',
+        layout: {
+            visibility: 'none',
+            'text-field': ['concat', ['coalesce', ['get', 'cwsu'], ''], ' CWA'],
+            'text-font': ['Noto Sans Regular'], 'text-size': 10
+        },
+        paint: { 'text-color': '#ffb3e2', 'text-halo-color': '#000', 'text-halo-width': 1.4 }
+    });
+
+    // ─── Layer 7k: NDBC marine buoy observations ───
+    map.addSource('ndbc', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'ndbc-layer', type: 'circle', source: 'ndbc',
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': 4.5,
+            'circle-color': '#00b8d4',
+            'circle-stroke-color': '#003c46', 'circle-stroke-width': 1.5, 'circle-opacity': 0.9
+        }
+    });
+    map.addLayer({
+        id: 'ndbc-label', type: 'symbol', source: 'ndbc',
+        minzoom: 5,
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'tag'], 'text-font': ['Noto Sans Regular'],
+            'text-size': 9, 'text-offset': [0, 1.1], 'text-anchor': 'top'
+        },
+        paint: { 'text-color': '#9fe8f5', 'text-halo-color': '#000', 'text-halo-width': 1.4 }
     });
 
     // ─── Layer 4a2: SPC Probabilistic Hazard Outlooks (Day 1 & 2: Tornado/Wind/Hail) ───
@@ -2139,6 +2213,45 @@ function setupMapLayers(map, paneId) {
         paint: { 'text-color': '#ffd0f4', 'text-halo-color': '#000000', 'text-halo-width': 1.5 }
     });
 
+    // ─── Layer 7f2: Mesocyclone / TVS markers (NEXRAD L3 MDA, product NMD) ───
+    // AWIPS-style: open circle for a detected circulation (color scales with
+    // strength rank), inverted red triangle when the TVS flag is set.
+    map.addSource('meso-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'meso-circ', type: 'circle', source: 'meso-markers',
+        filter: ['!=', ['get', 'tvs'], 'Y'],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['case', ['>=', ['get', 'sr_n'], 8], 11, 8],
+            'circle-color': 'rgba(0,0,0,0)',
+            'circle-stroke-width': 2.5,
+            'circle-stroke-color': ['case',
+                ['>=', ['get', 'sr_n'], 8], '#ff2b2b',
+                ['>=', ['get', 'sr_n'], 5], '#ff9e3b',
+                '#ffe14d']
+        }
+    });
+    map.addLayer({
+        id: 'meso-tvs', type: 'symbol', source: 'meso-markers',
+        filter: ['==', ['get', 'tvs'], 'Y'],
+        layout: {
+            visibility: 'none',
+            'text-field': '▼', 'text-font': ['Noto Sans Regular'],
+            'text-size': 18, 'text-allow-overlap': true
+        },
+        paint: { 'text-color': '#ff2b2b', 'text-halo-color': '#000000', 'text-halo-width': 2 }
+    });
+    map.addLayer({
+        id: 'meso-label', type: 'symbol', source: 'meso-markers',
+        layout: {
+            visibility: 'none',
+            'text-field': ['concat', ['get', 'id'], ' · SR', ['get', 'sr']],
+            'text-font': ['Noto Sans Regular'], 'text-size': 9,
+            'text-offset': [0, -1.5], 'text-anchor': 'bottom', 'text-allow-overlap': true
+        },
+        paint: { 'text-color': '#ffd23c', 'text-halo-color': '#000000', 'text-halo-width': 1.5 }
+    });
+
 function getRadarSitesGeoJSON() {
     const features = [];
     for (const [id, coords] of Object.entries(RADAR_LOCATIONS)) {
@@ -2570,7 +2683,7 @@ function initFrontalPipIcons(map) {
     // loaded directly (no proxy needed — same-origin not required for <img> tiles).
     map.addSource('ndfd-temp', {
         type: 'raster',
-        tiles: ['https://mapservices.weather.noaa.gov/raster/services/NDFD/NDFD_temp/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&layers=1&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}'],
+        tiles: [NDFD_TEMP_URL],
         tileSize: 256
     });
     map.addLayer({
@@ -3336,6 +3449,56 @@ function initFrontalPipIcons(map) {
     map.on('mouseenter', 'taf-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'taf-layer', () => { map.getCanvas().style.cursor = ''; });
 
+    // ─── Center Weather Advisory click ───
+    map.on('click', 'cwa-fill', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const fmt = s => s ? String(s).replace('T', ' ').replace(/:\d{2}(\.\d+)?Z?$/, 'Z').slice(5, 16) + 'Z' : '';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:340px;">
+            <div style="font-weight:bold;color:#ff5ac4;font-size:13px;margin-bottom:3px;">CWA · ${esc(p.cwsu || '')} ${esc(p.name || '')} <span style="color:#888;font-weight:normal;">#${esc(p.seriesId || '')}</span></div>
+            <div style="color:#888;margin-bottom:4px;">Valid ${fmt(p.validTimeFrom)} – ${fmt(p.validTimeTo)}</div>
+            ${p.hazard ? `<div><span style="color:#888;">Hazard:</span> ${esc(p.hazard)}${p.qualifier ? ' (' + esc(p.qualifier) + ')' : ''}</div>` : ''}
+            ${p.cwaText ? `<pre style="white-space:pre-wrap;color:#9fd3ff;font-size:10px;margin:6px 0 0;border-top:1px solid #333;padding-top:5px;">${esc(p.cwaText)}</pre>` : ''}
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'cwa-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'cwa-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── NDBC buoy click ───
+    map.on('click', 'ndbc-layer', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const row = (label, v, unit) => (v != null && v !== 'null')
+            ? `<div><span style="color:#888;">${label}:</span> ${esc(v)}${unit}</div>` : '';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:250px;">
+            <div style="font-weight:bold;color:#00b8d4;font-size:13px;margin-bottom:3px;">Buoy ${esc(p.id)} <span style="color:#888;font-weight:normal;">${esc(p.obs || '')}</span></div>
+            <div style="line-height:1.6;">
+                ${row('Wind', p.wdir != null && p.wspd != null ? `${p.wdir}° @ ${p.wspd}${p.gst != null ? 'G' + p.gst : ''}` : null, ' kt')}
+                ${row('Waves', p.wvht, ' ft')}${row('Dom. period', p.dpd, ' s')}
+                ${row('Pressure', p.pres, ' hPa')}
+                ${row('Air temp', p.atmp, '°F')}${row('Water temp', p.wtmp, '°F')}
+            </div>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'ndbc-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'ndbc-layer', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── SPC Day 4-8 outlook click ───
+    map.on('click', 'spc-d48-fill', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:280px;">
+            <div style="font-weight:bold;color:#b87aff;font-size:13px;margin-bottom:3px;">SPC Day ${esc(p.day || '?')} Severe Outlook</div>
+            <div><span style="color:#888;">Probability:</span> ${esc(p.LABEL2 || p.LABEL || '')}</div>
+            <div style="color:#888;margin-top:3px;">Valid ${esc((p.VALID_ISO || '').slice(0, 10))} · issued ${esc((p.ISSUE_ISO || '').slice(0, 10))}</div>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'spc-d48-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'spc-d48-fill', () => { map.getCanvas().style.cursor = ''; });
+
     // ─── Storm-track cell click ───
     map.on('click', 'storm-attr-cell', e => {
         if (!e.features || !e.features[0]) return;
@@ -3353,6 +3516,27 @@ function initFrontalPipIcons(map) {
     });
     map.on('mouseenter', 'storm-attr-cell', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'storm-attr-cell', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── Mesocyclone / TVS marker click ───
+    const mesoClick = e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const isTvs = p.tvs === 'Y';
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:250px;">
+            <div style="font-weight:bold;color:${isTvs ? '#ff2b2b' : '#ff9e3b'};font-size:13px;margin-bottom:4px;">${isTvs ? '⚠ TVS · ' : ''}Circulation ${esc(p.id)} <span style="color:#888;font-weight:normal;">cell ${esc(p.stmid || '')}</span></div>
+            <div style="line-height:1.6;">
+                <div><span style="color:#888;">Strength rank:</span> ${esc(p.sr)} &nbsp; <span style="color:#888;">MSI:</span> ${esc(p.msi)}</div>
+                <div><span style="color:#888;">Max rot. velocity:</span> ${p.maxrv != null ? esc(p.maxrv) + ' kt' : '—'}</div>
+                <div><span style="color:#888;">Base:</span> ${p.base != null ? esc(p.base) + ' kft' : '—'} &nbsp; <span style="color:#888;">Depth:</span> ${p.depth != null ? esc(p.depth) + ' kft' : '—'}</div>
+                <div><span style="color:#888;">Motion:</span> ${esc(p.mdir)}° @ ${esc(p.mspd)} kt</div>
+            </div>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    };
+    map.on('click', 'meso-circ', mesoClick);
+    map.on('click', 'meso-tvs', mesoClick);
+    map.on('mouseenter', 'meso-circ', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'meso-circ', () => { map.getCanvas().style.cursor = ''; });
 
     // SPC LSR click
     map.on('click', 'spc-lsr-icons', e => {
@@ -3575,6 +3759,33 @@ async function fetchSPCOutlook(day, show, prefetch) {
         addLiveLog(`SPC: Day ${day} Outlook loaded (${data.features?.length || 0} areas)`, '#ffff00');
     } catch (e) {
         addLiveLog(`SPC ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// SPC Day 4-8 severe outlook (15%/30% probability areas, one product per day).
+// All five days merge into one source; features tagged D4-D8. A day with no
+// areas ships a "Predictability Too Low" placeholder (DN 0, empty geometry).
+async function fetchSPCD48(show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    addLiveLog('SPC: Fetching Day 4-8 Severe Outlooks...', '#ffb300');
+    try {
+        const results = await Promise.all([4, 5, 6, 7, 8].map(async d => {
+            try {
+                const r = await fetch(`https://www.spc.noaa.gov/products/exper/day4-8/day${d}prob.nolyr.geojson`);
+                if (!r.ok) return [];
+                const j = await r.json();
+                return (j.features || [])
+                    .filter(f => f.geometry && f.properties && Number(f.properties.DN) > 0)
+                    .map(f => { f.properties.dayTag = `D${d}`; f.properties.day = d; return f; });
+            } catch (_) { return []; }
+        }));
+        const feats = results.flat();
+        const fc = { type: 'FeatureCollection', features: feats };
+        Object.values(maps).forEach(m => { if (m.getSource('spc-d48')) m.getSource('spc-d48').setData(fc); });
+        updateHealth('spcOutlook');
+        addLiveLog(`SPC: Day 4-8 loaded — ${feats.length ? feats.length + ' probability area(s)' : 'no areas (predictability too low)'}`, '#ffff00');
+    } catch (e) {
+        addLiveLog(`SPC D4-8 ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -5272,112 +5483,129 @@ function concToAqi(conc, pollutant) {
 // SECTION 9b: AVIATION HAZARDS & PROBSEVERE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// SIGMETs and AIRMETs (Aviation Weather Center) — one feed carries both, styled by
-// hazard. Proxied through /api/airsigmet (AWC sends no CORS header).
-async function fetchAirSigmet(show) {
-    if (!show) { updateSidebarToActivePane(); return; }
-    addLiveLog('AVIATION: Fetching SIGMETs/AIRMETs...', '#ff9e3b');
-    try {
-        const res = await fetch('/api/airsigmet');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const fc = await res.json();
-        const feats = (fc.features || []).filter(f => f.geometry &&
-            (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'));
-        const clean = { type: 'FeatureCollection', features: feats };
-        Object.values(maps).forEach(m => { if (m.getSource('airsigmet')) m.getSource('airsigmet').setData(clean); });
-        updateHealth('airSigmet');
-        addLiveLog(`AVIATION: ${feats.length} SIGMET/AIRMET areas loaded`, '#00ff88');
-    } catch (e) {
-        addLiveLog(`AVIATION SIGMET ERROR: ${e.message}`, '#ff3333');
-    }
-}
-
-// Pilot reports (turbulence, icing, sky cover) — CONUS bbox, last 3 hours.
-async function fetchPireps(show) {
-    if (!show) { updateSidebarToActivePane(); return; }
-    addLiveLog('AVIATION: Fetching pilot reports...', '#00e5ff');
-    try {
-        const res = await fetch('/api/pirep');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const fc = await res.json();
-        const feats = (fc.features || []).filter(f => f.geometry && f.geometry.type === 'Point');
-        const clean = { type: 'FeatureCollection', features: feats };
-        Object.values(maps).forEach(m => { if (m.getSource('pireps')) m.getSource('pireps').setData(clean); });
-        updateHealth('pireps');
-        addLiveLog(`AVIATION: ${feats.length} PIREPs loaded`, '#00ff88');
-    } catch (e) {
-        addLiveLog(`AVIATION PIREP ERROR: ${e.message}`, '#ff3333');
-    }
-}
-
-// CIMSS ProbSevere storm objects (ProbSevere/Hail/Wind/Tor). Proxied through
-// /api/probsevere which finds the newest MRMS_PROBSEVERE_*.json (published ~2 min).
-async function fetchProbSevere(show) {
-    if (!show) { updateSidebarToActivePane(); return; }
-    addLiveLog('PROBSEVERE: Fetching CIMSS storm objects...', '#ff3b3b');
-    try {
-        const res = await fetch('/api/probsevere');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const fc = await res.json();
-        const feats = (fc.features || []).filter(f => f.geometry);
-        const clean = { type: 'FeatureCollection', features: feats };
-        Object.values(maps).forEach(m => { if (m.getSource('probsevere')) m.getSource('probsevere').setData(clean); });
-        updateHealth('probSevere');
-        addLiveLog(`PROBSEVERE: ${feats.length} storm objects loaded`, '#00ff88');
-    } catch (e) {
-        addLiveLog(`PROBSEVERE ERROR: ${e.message}`, '#ff3333');
-    }
-}
-
-// Terminal Aerodrome Forecasts — plotted as one point per station colored by the
-// current prevailing flight category (timeGroup 0). Proxied via /api/taf.
-async function fetchTaf(show) {
-    if (!show) { updateSidebarToActivePane(); return; }
-    addLiveLog('AVIATION: Fetching terminal forecasts (TAF)...', '#33c27a');
-    try {
-        const res = await fetch('/api/taf');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const fc = await res.json();
-        // Keep the prevailing period per site (timeGroup 0) so each airport is one dot.
-        const feats = (fc.features || []).filter(f => f.geometry && f.geometry.type === 'Point' &&
-            (f.properties && (f.properties.timeGroup === 0 || f.properties.timeGroup === '0')));
-        const clean = { type: 'FeatureCollection', features: feats };
-        Object.values(maps).forEach(m => { if (m.getSource('taf')) m.getSource('taf').setData(clean); });
-        updateHealth('taf');
-        addLiveLog(`AVIATION: ${feats.length} TAF sites loaded`, '#00ff88');
-    } catch (e) {
-        addLiveLog(`AVIATION TAF ERROR: ${e.message}`, '#ff3333');
-    }
-}
-
-// Graphical AIRMETs — hazard polygons (SIERRA/TANGO/ZULU). Shows the current
-// snapshot (forecast hour 0) so areas don't stack. Proxied via /api/gairmet.
-async function fetchGairmet(show) {
-    if (!show) { updateSidebarToActivePane(); return; }
-    addLiveLog('AVIATION: Fetching graphical AIRMETs...', '#ff9e3b');
-    try {
-        const res = await fetch('/api/gairmet');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const fc = await res.json();
-        const areas = (fc.features || []).filter(f => f.geometry &&
-            (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') && f.properties);
-        // G-AIRMET issuances carry snapshots at forecast hours 0/3/6; which hours are
-        // present depends on the issuance cycle — right after an issuance the hour-0
-        // snapshot is often gone and only +3/+6 remain. Show the nearest-term snapshot
-        // (the minimum forecast hour actually present) so areas never stack and we
-        // never end up empty just because hour-0 isn't in this cycle.
-        let feats = areas;
-        if (areas.length) {
+// Config-driven GeoJSON feed loader — one implementation for every simple
+// fetch → filter → setData feed (aviation, ProbSevere, CWA). Each entry gives
+// the proxy URL, target map source, health tracker id, log labels, and a
+// `pick` function that reduces the raw FeatureCollection to what gets plotted.
+const _polyOnly = fs => fs.filter(f => f.geometry &&
+    (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'));
+const GEOJSON_FEEDS = {
+    // SIGMETs and AIRMETs — one AWC feed carries both, styled by hazard.
+    airsigmet: {
+        url: '/api/airsigmet', source: 'airsigmet', health: 'airSigmet', tag: 'AVIATION',
+        fetching: 'Fetching SIGMETs/AIRMETs...', what: 'SIGMET/AIRMET areas', color: '#ff9e3b',
+        pick: _polyOnly
+    },
+    // Pilot reports (turbulence, icing, sky cover) — CONUS bbox, last 3 hours.
+    pireps: {
+        url: '/api/pirep', source: 'pireps', health: 'pireps', tag: 'AVIATION',
+        fetching: 'Fetching pilot reports...', what: 'PIREPs', color: '#00e5ff',
+        pick: fs => fs.filter(f => f.geometry && f.geometry.type === 'Point')
+    },
+    // CIMSS ProbSevere storm objects — newest MRMS_PROBSEVERE_*.json (~2 min).
+    probsevere: {
+        url: '/api/probsevere', source: 'probsevere', health: 'probSevere', tag: 'PROBSEVERE',
+        fetching: 'Fetching CIMSS storm objects...', what: 'storm objects', color: '#ff3b3b',
+        pick: fs => fs.filter(f => f.geometry)
+    },
+    // Terminal forecasts — one dot per station, prevailing period (timeGroup 0).
+    taf: {
+        url: '/api/taf', source: 'taf', health: 'taf', tag: 'AVIATION',
+        fetching: 'Fetching terminal forecasts (TAF)...', what: 'TAF sites', color: '#33c27a',
+        pick: fs => fs.filter(f => f.geometry && f.geometry.type === 'Point' &&
+            (f.properties && (f.properties.timeGroup === 0 || f.properties.timeGroup === '0')))
+    },
+    // Graphical AIRMETs — issuances carry snapshots at forecast hours 0/3/6 and
+    // which hours are present rotates with the cycle; keep the nearest-term
+    // snapshot present so areas never stack and the layer never comes up empty.
+    gairmet: {
+        url: '/api/gairmet', source: 'gairmet', health: 'gairmet', tag: 'AVIATION',
+        fetching: 'Fetching graphical AIRMETs...', what: 'G-AIRMET areas', color: '#ff9e3b',
+        pick: fs => {
+            const areas = _polyOnly(fs).filter(f => f.properties);
+            if (!areas.length) return areas;
             const hours = areas.map(f => Number(f.properties.forecast)).filter(Number.isFinite);
             const minH = hours.length ? Math.min(...hours) : 0;
-            feats = areas.filter(f => Number(f.properties.forecast) === minH);
+            return areas.filter(f => Number(f.properties.forecast) === minH);
         }
+    },
+    // Center Weather Advisories — short-fuse CWSU aviation warnings (2h shelf life).
+    cwa: {
+        url: '/api/cwa', source: 'cwa', health: 'cwa', tag: 'AVIATION',
+        fetching: 'Fetching Center Weather Advisories...', what: 'CWAs', color: '#ff5ac4',
+        pick: _polyOnly
+    },
+};
+
+async function fetchGeoJsonFeed(key, show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    const cfg = GEOJSON_FEEDS[key];
+    addLiveLog(`${cfg.tag}: ${cfg.fetching}`, cfg.color);
+    try {
+        const res = await fetch(cfg.url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const fc = await res.json();
+        const feats = cfg.pick(fc.features || []);
         const clean = { type: 'FeatureCollection', features: feats };
-        Object.values(maps).forEach(m => { if (m.getSource('gairmet')) m.getSource('gairmet').setData(clean); });
-        updateHealth('gairmet');
-        addLiveLog(`AVIATION: ${feats.length} G-AIRMET areas loaded`, '#00ff88');
+        Object.values(maps).forEach(m => { if (m.getSource(cfg.source)) m.getSource(cfg.source).setData(clean); });
+        updateHealth(cfg.health);
+        addLiveLog(`${cfg.tag}: ${feats.length} ${cfg.what} loaded`, '#00ff88');
     } catch (e) {
-        addLiveLog(`AVIATION G-AIRMET ERROR: ${e.message}`, '#ff3333');
+        addLiveLog(`${cfg.tag} ${key.toUpperCase()} ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// Thin wrappers keep every existing call site (toggles, auto-refresh) unchanged.
+async function fetchAirSigmet(show) { return fetchGeoJsonFeed('airsigmet', show); }
+async function fetchPireps(show) { return fetchGeoJsonFeed('pireps', show); }
+async function fetchProbSevere(show) { return fetchGeoJsonFeed('probsevere', show); }
+async function fetchTaf(show) { return fetchGeoJsonFeed('taf', show); }
+async function fetchGairmet(show) { return fetchGeoJsonFeed('gairmet', show); }
+async function fetchCwa(show) { return fetchGeoJsonFeed('cwa', show); }
+
+// NDBC marine buoy observations — fixed-width latest_obs.txt (one row per
+// station, 'MM' = missing), proxied via /api/ndbc (NDBC sends no CORS header).
+// Columns: STN LAT LON YYYY MM DD hh mm WDIR WSPD GST WVHT DPD APD MWD PRES PTDY ATMP WTMP DEWP VIS TIDE
+async function fetchNdbc(show) {
+    if (!show) { updateSidebarToActivePane(); return; }
+    addLiveLog('MARINE: Fetching NDBC buoy observations...', '#00b8d4');
+    try {
+        const res = await fetch('/api/ndbc');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        const num = v => (v === 'MM' || v == null) ? null : parseFloat(v);
+        const kt = v => v == null ? null : Math.round(v * 1.94384);          // m/s → kt
+        const degF = v => v == null ? null : Math.round(v * 9 / 5 + 32);     // °C → °F
+        const ft = v => v == null ? null : Math.round(v * 3.281 * 10) / 10;  // m → ft
+        const feats = [];
+        text.split('\n').forEach(ln => {
+            if (!ln || ln[0] === '#') return;
+            const t = ln.trim().split(/\s+/);
+            if (t.length < 22) return;
+            const lat = parseFloat(t[1]), lon = parseFloat(t[2]);
+            if (!isFinite(lat) || !isFinite(lon)) return;
+            if (lat < 15 || lat > 62 || lon < -180 || lon > -50) return;   // US waters
+            const wdir = num(t[8]), wspd = num(t[9]), gst = num(t[10]), wvht = num(t[11]),
+                  dpd = num(t[12]), pres = num(t[15]), atmp = num(t[17]), wtmp = num(t[18]);
+            if (wspd == null && wvht == null && atmp == null && wtmp == null) return;  // nothing to show
+            const tag = [wtmp != null ? degF(wtmp) + '°' : null,
+                         wvht != null ? ft(wvht) + 'ft' : null].filter(Boolean).join(' ');
+            feats.push({
+                type: 'Feature',
+                properties: {
+                    id: t[0], obs: `${t[5]}/${t[6]}:${t[7]}Z`,
+                    wdir, wspd: kt(wspd), gst: kt(gst), wvht: ft(wvht), dpd,
+                    pres, atmp: degF(atmp), wtmp: degF(wtmp), tag
+                },
+                geometry: { type: 'Point', coordinates: [lon, lat] }
+            });
+        });
+        const fc = { type: 'FeatureCollection', features: feats };
+        Object.values(maps).forEach(m => { if (m.getSource('ndbc')) m.getSource('ndbc').setData(fc); });
+        updateHealth('ndbc');
+        addLiveLog(`MARINE: ${feats.length} NDBC buoys loaded`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`MARINE NDBC ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -6413,6 +6641,17 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'spc-md-fill'), 'SPC MESO DISCUSSIONS', '#ff6a00', 'spcMd');
     add(isLayerVisible(map, 'wpc-mpd-fill'), 'WPC MESO PRECIP DISC', '#33c27a', 'wpcMpd');
     add(isLayerVisible(map, 'spc-lsr-icons'), 'LOCAL STORM REPORTS', '#ff8c00', 'spcLsr');
+    add(isLayerVisible(map, 'spc-d48-fill'), 'SPC DAY 4-8 OUTLOOK', '#b87aff', 'spcOutlook');
+    add(isLayerVisible(map, 'probsevere-fill'), 'PROBSEVERE (CIMSS)', '#ff9900', 'probSevere');
+    add(isLayerVisible(map, 'storm-attr-cell'), `${site} STORM TRACKS (STI)`, '#ff2bd0');
+    add(isLayerVisible(map, 'meso-circ'), `${site} MESO/TVS (MDA)`, '#ff9e3b');
+    add(isLayerVisible(map, 'airsigmet-fill'), 'SIGMETS / AIRMETS', '#ff9e3b', 'airSigmet');
+    add(isLayerVisible(map, 'gairmet-fill'), 'G-AIRMET HAZARDS', '#ffd23c', 'gairmet');
+    add(isLayerVisible(map, 'pireps-layer'), 'PILOT REPORTS', '#00e5ff', 'pireps');
+    add(isLayerVisible(map, 'taf-layer'), 'TAF FLIGHT CATEGORY', '#33c27a', 'taf');
+    add(isLayerVisible(map, 'cwa-fill'), 'CENTER WX ADVISORIES', '#ff5ac4', 'cwa');
+    add(isLayerVisible(map, 'ndbc-layer'), 'NDBC BUOY OBS', '#00b8d4', 'ndbc');
+    add(isLayerVisible(map, 'ndfd-temp-layer'), 'NDFD SFC TEMP FCST', '#ff8c69', 'ndfdTemp');
     add(isLayerVisible(map, 'nws-warnings-only-fill'), 'NWS WARNINGS', '#ff3333', 'warnings');
     add(isLayerVisible(map, 'nws-advis-fill'), 'NWS ADVISORIES', '#ffd23c', 'warnings');
     add(isLayerVisible(map, 'nws-watches-only-fill'), 'NWS WATCHES', '#ffaa00', 'watches');
@@ -7300,6 +7539,7 @@ function updateSidebarToActivePane() {
         else if (layer === 'metars') isActive = isLayerVisible(map, 'metars-temp');
         else if (layer === 'radar-l3') isActive = isLayerVisible(map, 'radar-l3-layer') && paneL3[activePaneId] && paneL3[activePaneId].product.charAt(2) === (item.getAttribute('data-l3') || '').charAt(2);
         else if (layer === 'storm-attr') isActive = isLayerVisible(map, 'storm-attr-cell');
+        else if (layer === 'nodd-meso') isActive = isLayerVisible(map, 'meso-circ');
         else if (layer === 'radar-ref') isActive = isLayerVisible(map, 'radar-layer') || isLayerVisible(map, 'site-bref-layer');
         else if (layer === 'radar-vel') isActive = isLayerVisible(map, 'site-bvel-layer');
         else if (layer === 'radar-hc') isActive = isLayerVisible(map, 'site-bdhc-layer');
@@ -7325,6 +7565,9 @@ function updateSidebarToActivePane() {
         else if (layer === 'gairmet') isActive = isLayerVisible(map, 'gairmet-fill');
         else if (layer === 'pireps') isActive = isLayerVisible(map, 'pireps-layer');
         else if (layer === 'taf') isActive = isLayerVisible(map, 'taf-layer');
+        else if (layer === 'cwa') isActive = isLayerVisible(map, 'cwa-fill');
+        else if (layer === 'ndbc') isActive = isLayerVisible(map, 'ndbc-layer');
+        else if (layer === 'spc-d48') isActive = isLayerVisible(map, 'spc-d48-fill');
         else if (layer === 'ndfd-temp') isActive = isLayerVisible(map, 'ndfd-temp-layer');
         else if (layer === 'spc-outlook') {
             const day = item.getAttribute('data-day');
@@ -7661,10 +7904,41 @@ function initProductSidebar() {
                 return;
             }
 
+            // ─── Aviation: Center Weather Advisories (CWA) ───
+            if (layer === 'cwa') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchCwa(true);
+                const vis = isActive ? 'visible' : 'none';
+                ['cwa-fill', 'cwa-outline', 'cwa-label'].forEach(l => map.setLayoutProperty(l, 'visibility', vis));
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Marine: NDBC buoy observations ───
+            if (layer === 'ndbc') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchNdbc(true);
+                const vis = isActive ? 'visible' : 'none';
+                ['ndbc-layer', 'ndbc-label'].forEach(l => map.setLayoutProperty(l, 'visibility', vis));
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── SPC Day 4-8 Severe Outlook ───
+            if (layer === 'spc-d48') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchSPCD48(true);
+                const vis = isActive ? 'visible' : 'none';
+                ['spc-d48-fill', 'spc-d48-line', 'spc-d48-label'].forEach(l => map.setLayoutProperty(l, 'visibility', vis));
+                updateSidebarToActivePane();
+                return;
+            }
+
             // ─── NDFD gridded forecast — surface temperature ───
             if (layer === 'ndfd-temp') {
                 const isActive = !item.classList.contains('active');
                 map.setLayoutProperty('ndfd-temp-layer', 'visibility', isActive ? 'visible' : 'none');
+                if (isActive) updateHealth('ndfdTemp');
                 updateSidebarToActivePane();
                 return;
             }
@@ -7745,6 +8019,29 @@ function initProductSidebar() {
                 }
                 const vis = isActive ? 'visible' : 'none';
                 ['storm-attr-track', 'storm-attr-fpos', 'storm-attr-cell', 'storm-attr-label']
+                    .forEach(l => map.setLayoutProperty(l, 'visibility', vis));
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Mesocyclone / TVS markers (MDA / NMD) ───
+            if (layer === 'nodd-meso') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) {
+                    let station = (paneRadarSites[activePaneId] || '').toUpperCase();
+                    if (!station || station.includes('NEXRAD')) {
+                        station = 'DGX';
+                        paneRadarSites[activePaneId] = 'DGX';
+                        const sel = document.getElementById('radar-site-select');
+                        if (sel) sel.value = 'DGX';
+                        addLiveLog('MESO: no SITE selected — defaulting to DGX (Jackson MS)', '#ffb300');
+                    }
+                    await fetchMesoMarkers(activePaneId, station);
+                } else {
+                    delete paneMeso[activePaneId];
+                }
+                const vis = isActive ? 'visible' : 'none';
+                ['meso-circ', 'meso-tvs', 'meso-label']
                     .forEach(l => map.setLayoutProperty(l, 'visibility', vis));
                 updateSidebarToActivePane();
                 return;
@@ -9192,8 +9489,11 @@ function clearPane(map, paneId) {
         'probsevere-fill', 'probsevere-outline', 'probsevere-label',
         'airsigmet-fill', 'airsigmet-outline', 'airsigmet-label', 'pireps-layer',
         'gairmet-fill', 'gairmet-outline', 'gairmet-label', 'taf-layer', 'taf-label',
+        'cwa-fill', 'cwa-outline', 'cwa-label', 'ndbc-layer', 'ndbc-label',
+        'spc-d48-fill', 'spc-d48-line', 'spc-d48-label',
         'ndfd-temp-layer',
         'storm-attr-track', 'storm-attr-fpos', 'storm-attr-cell', 'storm-attr-label',
+        'meso-circ', 'meso-tvs', 'meso-label',
         'nws-cwa-layer', 'nws-cwa-label-layer'
     ];
     allToggleLayers.forEach(l => {
@@ -9577,13 +9877,16 @@ function startAutoRefresh() {
         if (psActive) fetchProbSevere(true);
     }, 60 * 1000);
 
-    // Aviation hazards (SIGMET/AIRMET hourly-ish, PIREPs continuous) — 5 min cadence.
+    // Aviation hazards (SIGMET/AIRMET hourly-ish, PIREPs continuous) and Local
+    // Storm Reports (stream continuously during events) — 5 min cadence.
     setInterval(() => {
         if (isPlaying) return;
         if (Object.values(maps).some(m => isLayerVisible(m, 'airsigmet-fill'))) fetchAirSigmet(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'pireps-layer'))) fetchPireps(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'gairmet-fill'))) fetchGairmet(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'taf-layer'))) fetchTaf(true);
+        if (Object.values(maps).some(m => isLayerVisible(m, 'cwa-fill'))) fetchCwa(true);
+        if (Object.values(maps).some(m => isLayerVisible(m, 'spc-lsr-icons'))) fetchLSRs(true);
     }, 5 * 60 * 1000);
 
     // 2. High Frequency (5 minutes)
@@ -9650,10 +9953,10 @@ function startAutoRefresh() {
         if (terminatorActive) updateTerminator();
     }, 5 * 60 * 1000);
 
-    // 3. Standard Frequency (10 minutes)
+    // 3. Satellite (5 minutes — GOES-East ABI CONUS scans every 5 min)
     setInterval(() => {
         if (isPlaying) return;
-        
+
         // Satellite refresh — each pane may have its own GOES channel
         let anyRefreshed = false;
         Object.entries(maps).forEach(([paneId, m]) => {
@@ -9697,7 +10000,7 @@ function startAutoRefresh() {
                 if (paneId === activePaneId) refreshTimestampLabel();
             });
         });
-    }, 10 * 60 * 1000);
+    }, 5 * 60 * 1000);
 
     // Lightning refresh (NLDN nowCOAST updates ~every 5 min; refresh every 5 min when visible)
     setInterval(() => {
@@ -9712,6 +10015,30 @@ function startAutoRefresh() {
         if (refreshed) {
             updateHealth('lightning');
             addLiveLog('AUTO: NLDN lightning refreshed', '#444');
+        }
+    }, 5 * 60 * 1000);
+
+    // MRMS tiles (echo tops / QPE) — the MRMS mosaic regenerates every ~2 min, so
+    // a 30-min refresh left severe-weather products badly stale. 5-min tile
+    // re-pull is cheap and only runs while the layer is visible.
+    setInterval(() => {
+        if (isPlaying) return;
+        const echotopsActive = Object.values(maps).some(m => isLayerVisible(m, 'mrms-echotops-layer'));
+        if (echotopsActive) {
+            const etUrl = cacheBust('https://opengeo.ncep.noaa.gov/geoserver/conus/conus_neet_v18/ows?service=wms&version=1.1.1&request=GetMap&layers=conus_neet_v18&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}');
+            Object.values(maps).forEach(m => {
+                if (m.getSource('mrms-echotops')) m.getSource('mrms-echotops').setTiles([etUrl]);
+            });
+            updateHealth('mrmsEchotops');
+        }
+        if (activeMrmsQpe) {
+            const layerMap = { '1h': 'mrms_p1h', '24h': 'mrms_p24h', '48h': 'mrms_p48h', '72h': 'mrms_p72h' };
+            const wmsLayer = layerMap[activeMrmsQpe] || 'mrms_p1h';
+            const qpeUrl = cacheBust(`https://mesonet.agron.iastate.edu/cgi-bin/wms/us/mrms_nn.cgi?service=WMS&version=1.1.1&request=GetMap&layers=${wmsLayer}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`);
+            Object.values(maps).forEach(m => {
+                if (m.getSource('mrms-qpe')) m.getSource('mrms-qpe').setTiles([qpeUrl]);
+            });
+            updateHealth('mrmsQpe');
         }
     }, 5 * 60 * 1000);
 
@@ -9744,6 +10071,12 @@ function startAutoRefresh() {
             if (outlookActive) fetchSPCOutlook(day, true);
         });
 
+        // SPC Day 4-8 Severe Outlook
+        if (Object.values(maps).some(m => isLayerVisible(m, 'spc-d48-fill'))) fetchSPCD48(true);
+
+        // NDBC buoy observations (hourly obs; 30 min keeps them within one cycle)
+        if (Object.values(maps).some(m => isLayerVisible(m, 'ndbc-layer'))) fetchNdbc(true);
+
         // SPC Probabilistic Hazards (Day 1/2 Tornado/Wind/Hail)
         [1, 2].forEach(day => {
             ['torn', 'wind', 'hail'].forEach(hz => {
@@ -9765,10 +10098,6 @@ function startAutoRefresh() {
         });
 
 
-        // SPC Local Storm Reports
-        const lsrActive = Object.values(maps).some(m => isLayerVisible(m, 'spc-lsr-icons'));
-        if (lsrActive) fetchLSRs(true);
-
         // WPC Isobars
         const isobarsActive = Object.values(maps).some(m => isLayerVisible(m, 'wpc-isobars-line'));
         if (isobarsActive) fetchWPCIsobars(true);
@@ -9786,27 +10115,6 @@ function startAutoRefresh() {
             fetchRiverGauges(true);
         }
 
-        // MRMS Echo Tops tile refresh
-        const echotopsActive = Object.values(maps).some(m => isLayerVisible(m, 'mrms-echotops-layer'));
-        if (echotopsActive) {
-            const etUrl = cacheBust('https://opengeo.ncep.noaa.gov/geoserver/conus/conus_neet_v18/ows?service=wms&version=1.1.1&request=GetMap&layers=conus_neet_v18&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}');
-            Object.values(maps).forEach(m => {
-                if (m.getSource('mrms-echotops')) m.getSource('mrms-echotops').setTiles([etUrl]);
-            });
-            updateHealth('mrmsEchotops');
-        }
-
-        // MRMS QPE tile refresh
-        if (activeMrmsQpe) {
-            const layerMap = { '1h': 'mrms_p1h', '24h': 'mrms_p24h', '48h': 'mrms_p48h', '72h': 'mrms_p72h' };
-            const wmsLayer = layerMap[activeMrmsQpe] || 'mrms_p1h';
-            const qpeUrl = cacheBust(`https://mesonet.agron.iastate.edu/cgi-bin/wms/us/mrms_nn.cgi?service=WMS&version=1.1.1&request=GetMap&layers=${wmsLayer}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`);
-            Object.values(maps).forEach(m => {
-                if (m.getSource('mrms-qpe')) m.getSource('mrms-qpe').setTiles([qpeUrl]);
-            });
-            updateHealth('mrmsQpe');
-        }
-
         // WPC QPF tile refresh
         if (activeQpfLayer) {
             const wmsUrl = cacheBust(`https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=102100&layers=show:${activeQpfLayer}&size=512,512&imageSR=102100&format=png32&transparent=true&f=image`);
@@ -9814,6 +10122,17 @@ function startAutoRefresh() {
                 if (m.getSource('wpc-qpf')) m.getSource('wpc-qpf').setTiles([wmsUrl]);
             });
             updateHealth('wpcQpf');
+        }
+
+        // NDFD forecast grid tile refresh (grids update ~hourly; previously the
+        // tiles were loaded once on toggle and never refreshed)
+        const ndfdActive = Object.values(maps).some(m => isLayerVisible(m, 'ndfd-temp-layer'));
+        if (ndfdActive) {
+            const ndfdUrl = cacheBust(NDFD_TEMP_URL);
+            Object.values(maps).forEach(m => {
+                if (m.getSource('ndfd-temp')) m.getSource('ndfd-temp').setTiles([ndfdUrl]);
+            });
+            updateHealth('ndfdTemp');
         }
 
     }, 30 * 60 * 1000);
@@ -10348,6 +10667,15 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 3, 2026 (evening)', items: [
+        'Meso / TVS markers (MDA): a new RADAR item plots the NEXRAD Mesocyclone Detection Algorithm output — every detected circulation as an open circle colored by strength rank (yellow → orange → red), with a red ▼ when the TVS flag is set. Click one for strength rank, rotational velocity, base/depth, motion and MSI. Follows the volume-scan refresh like STI.',
+        'SPC Mesoanalysis viewer: an SPC-PRODUCTS panel with the hourly RAP-based objective analysis — 11 sectors (all verified against SPC’s own basemaps) and 12 parameters from MSL pressure and CAPE through effective SRH, supercell composite and significant-tornado parameter.',
+        'SPC Day 4-8 Severe Outlook: the extended probabilistic outlook joins Days 1-3, all five days merged on one layer with D4-D8 tags; click an area for probability and valid date.',
+        'Center Weather Advisories (CWA): short-fuse CWSU aviation warnings as dashed magenta areas under AVIATION, with the raw advisory text on click.',
+        'NDBC marine buoys: a SURFACE ANALYSIS item plots ~700 coastal and offshore buoys/C-MAN stations (water temp + wave height labels at zoom; click for wind, waves, pressure, temps).',
+        'Freshness pass from tonight’s audit: MRMS Echo Tops/QPE now refresh every 5 min (was 30 — MRMS regenerates every 2), satellite every 5 min (was 10 — matches GOES CONUS scans), LSRs every 5 min during events (was 30), and the NDFD grid re-pulls every 30 min with a Data-Health row (it previously never refreshed after toggle-on).',
+        'Under the hood: removed ~300 lines of duplicated code (the local dev server now imports the same Vercel functions it mirrors; the radar decoder’s three copies of block-locate/render plumbing collapsed into shared helpers; the six GeoJSON feed loaders are one config-driven function). Local dev server binds loopback only; production now sends nosniff/frame/referrer security headers; Skew-T ignores stale responses when you switch stations quickly.'
+    ]},
     { date: 'Jul 3, 2026', items: [
         'Security hardening: the sounding proxy (/api/raob) now validates the station and WMO id before building an upstream request, and the live-log escapes alert/warning text — closing two low-severity injection paths found in a code audit.',
         'Data Health now covers everything: the monitor gained an AVIATION section (SIGMET/AIRMET, G-AIRMET, PIREPs, TAF) and a ProbSevere row under SPC Products, each with a live red/amber/green freshness dot — so every auto-refreshing feed on the workstation is accounted for.',
@@ -10813,6 +11141,7 @@ function initProcedures() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const paneStormAttr = {};   // paneId -> { station, meta }
+const paneMeso = {};        // paneId -> { station, meta }
 
 // Storm Track Information (STI / product NST): storm cell centroids + forecast
 // tracks + attributes, fetched through the existing L3 endpoint (returns GeoJSON).
@@ -10842,6 +11171,26 @@ async function fetchStormAttr(paneId, station) {
         addLiveLog(`STI: ${data.meta.count} cells @ ${data.meta.time} (${station})`, '#00ff88');
     } catch (e) {
         addLiveLog(`STI ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// Mesocyclone Detection (NMD / MDA): detected circulations + TVS flags from the
+// same L3 endpoint. AWIPS-style meso/TVS marker overlay for the radar pane.
+async function fetchMesoMarkers(paneId, station) {
+    const map = maps[paneId];
+    if (!map) return;
+    addLiveLog(`MESO: Loading ${station} circulation detections...`, '#ff9e3b');
+    try {
+        const res = await fetch(`/api/radar-l3?station=${station}&product=NMD&_=${Date.now()}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'NMD failed');
+        const fc = data.geojson || { type: 'FeatureCollection', features: [] };
+        Object.values(maps).forEach(m => { if (m.getSource('meso-markers')) m.getSource('meso-markers').setData(fc); });
+        paneMeso[paneId] = { station, meta: data.meta };
+        const tvsCount = fc.features.filter(f => f.properties && f.properties.tvs === 'Y').length;
+        addLiveLog(`MESO: ${data.meta.count} circulation(s)${tvsCount ? ` · ${tvsCount} TVS ⚠` : ''} @ ${data.meta.time} (${station})`, tvsCount ? '#ff3333' : '#00ff88');
+    } catch (e) {
+        addLiveLog(`MESO: ${e.message}`, '#ffb300');
     }
 }
 
@@ -11248,7 +11597,9 @@ function nearestRaob() {
     for (const id in RAOB_SITES) { const s = RAOB_SITES[id]; const dx = (s[1] - c.lng) * Math.cos(c.lat * Math.PI / 180), dy = s[0] - c.lat; const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = id; } }
     return best;
 }
+let _skewtSeq = 0;   // drop stale responses when the user switches station/time quickly
 async function loadSkewt(station) {
+    const seq = ++_skewtSeq;
     const meta = document.getElementById('skewt-meta'), body = document.getElementById('skewt-body');
     const timeSel = document.getElementById('skewt-time');
     if (meta) meta.textContent = `Fetching sounding for ${station}…`;
@@ -11256,6 +11607,7 @@ async function loadSkewt(station) {
     try {
         let pr = null, used = null;
         for (const ts of wanted) { const p = await _fetchRaob(station, ts); if (p && p.profile && p.profile.filter(l => l.tmpc != null).length > 5) { pr = p; used = ts; break; } }
+        if (seq !== _skewtSeq) return;   // a newer request superseded this one
         if (!pr) throw new Error('no data for recent cycles');
         const lv = pr.profile.filter(l => l.pres && l.tmpc != null && l.dwpc != null && l.hght != null).sort((a, b) => b.pres - a.pres);
         if (lv.length < 3) throw new Error('sounding too sparse');
@@ -11264,6 +11616,7 @@ async function loadSkewt(station) {
         if (meta) meta.innerHTML = `${station} · ${(pr.valid || used).replace('T', ' ')} · ${lv.length} lvl (${srcLabel}) · SBCAPE ${Math.round(D.cape)} · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${(D.pw / 25.4).toFixed(2)} in`;
         if (body) body.innerHTML = renderSkewT(lv, D);
     } catch (e) {
+        if (seq !== _skewtSeq) return;
         if (meta) meta.textContent = `Skew-T: ${e.message}`;
         if (body) body.innerHTML = `<div style="color:#ff6666;font-size:11px;padding:16px;">Could not load a sounding for ${esc(station)} (${esc(e.message)}). Launches are 00Z & 12Z — try another site or an earlier time.</div>`;
     }
@@ -11295,6 +11648,69 @@ function initSkewtPanel() {
     document.getElementById('skewt-time')?.addEventListener('change', () => { const s = document.getElementById('skewt-station'); loadSkewt((s && s.value) || nearestRaob()); });
     const panel = document.getElementById('skewt-panel'), handle = document.getElementById('skewt-drag');
     if (panel && handle) {
+        let dx = 0, dy = 0, drag = false; handle.style.cursor = 'move';
+        handle.addEventListener('mousedown', e => { if (e.target.closest('button') || e.target.closest('select')) return; drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop; e.preventDefault(); });
+        window.addEventListener('mousemove', e => { if (!drag) return; panel.style.left = Math.max(0, e.clientX - dx) + 'px'; panel.style.top = Math.max(0, e.clientY - dy) + 'px'; panel.style.right = 'auto'; });
+        window.addEventListener('mouseup', () => { drag = false; });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 31: SPC MESOANALYSIS VIEWER
+// ═══════════════════════════════════════════════════════════════════════════════
+// SPC's hourly objective mesoscale analysis (RAP-based). The parameter graphics
+// are transparent GIFs meant to sit on the sector's county basemap, exactly how
+// SPC's own page composites them; both are hot-linked (no proxy needed for <img>).
+// Sector regions verified against the actual basemap imagery.
+
+const SPCMESO_SECTORS = [
+    ['19', 'National (CONUS)'], ['11', 'Pacific Northwest'], ['12', 'Southwest'],
+    ['13', 'N Plains / Upper Midwest'], ['14', 'Central Plains'], ['15', 'Southern Plains'],
+    ['20', 'Midwest / MS Valley'], ['21', 'Great Lakes'], ['16', 'Northeast'],
+    ['17', 'Mid-Atlantic / TN-OH Valley'], ['18', 'Southeast'],
+];
+const SPCMESO_PARAMS = [
+    ['pmsl', 'MSL Pressure / Wind'], ['ttd', 'Temp / Dewpoint'],
+    ['sbcp', 'SBCAPE / SBCIN'], ['mlcp', 'MLCAPE / MLCIN'], ['mucp', 'MUCAPE'],
+    ['lllr', 'Low-Level Lapse Rates'], ['pwtr', 'Precipitable Water'],
+    ['shr6', '0-6 km Bulk Shear'], ['srh1', '0-1 km Storm-Rel. Helicity'],
+    ['effh', 'Effective SRH'], ['scp', 'Supercell Composite'], ['stpc', 'Sig. Tornado Parameter'],
+];
+
+function _spcMesoLoad() {
+    const sector = document.getElementById('spcmeso-sector')?.value || 's19';
+    const param = document.getElementById('spcmeso-param')?.value || 'pmsl';
+    const cnty = document.getElementById('spcmeso-cnty');
+    const img = document.getElementById('spcmeso-img');
+    const meta = document.getElementById('spcmeso-meta');
+    const bust = Math.floor(Date.now() / 60000);   // per-minute cache-bust
+    if (cnty) cnty.src = `https://www.spc.noaa.gov/exper/mesoanalysis/${sector}/cnty/cnty.gif`;
+    if (img) img.src = `https://www.spc.noaa.gov/exper/mesoanalysis/${sector}/${param}/${param}.gif?${bust}`;
+    if (meta) {
+        const pLabel = (SPCMESO_PARAMS.find(p => p[0] === param) || [])[1] || param;
+        meta.textContent = `${pLabel} — hourly SPC objective analysis (RAP-based), updates ~:25 past the hour. Loaded ${new Date().toISOString().substring(11, 16)}Z.`;
+    }
+}
+function initSpcMesoPanel() {
+    const openBtn = document.getElementById('btn-spcmeso');
+    const panel = document.getElementById('spcmeso-panel');
+    if (!openBtn || !panel) return;
+    const sSel = document.getElementById('spcmeso-sector');
+    const pSel = document.getElementById('spcmeso-param');
+    if (sSel && !sSel.options.length) SPCMESO_SECTORS.forEach(([v, label]) => {
+        const o = document.createElement('option'); o.value = `s${v}`; o.textContent = label; sSel.appendChild(o);
+    });
+    if (pSel && !pSel.options.length) SPCMESO_PARAMS.forEach(([v, label]) => {
+        const o = document.createElement('option'); o.value = v; o.textContent = label; pSel.appendChild(o);
+    });
+    openBtn.addEventListener('click', () => { panel.style.display = 'block'; _spcMesoLoad(); });
+    document.getElementById('close-spcmeso-panel')?.addEventListener('click', () => { panel.style.display = 'none'; });
+    document.getElementById('spcmeso-refresh')?.addEventListener('click', _spcMesoLoad);
+    sSel?.addEventListener('change', _spcMesoLoad);
+    pSel?.addEventListener('change', _spcMesoLoad);
+    const handle = document.getElementById('spcmeso-drag');
+    if (handle) {
         let dx = 0, dy = 0, drag = false; handle.style.cursor = 'move';
         handle.addEventListener('mousedown', e => { if (e.target.closest('button') || e.target.closest('select')) return; drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop; e.preventDefault(); });
         window.addEventListener('mousemove', e => { if (!drag) return; panel.style.left = Math.max(0, e.clientX - dx) + 'px'; panel.style.top = Math.max(0, e.clientY - dy) + 'px'; panel.style.right = 'auto'; });
@@ -11352,6 +11768,7 @@ function init() {
     initL3Tilt();
     initVadPanel();
     initSkewtPanel();
+    initSpcMesoPanel();
 
     // Start warning watchdog (check every 15 seconds for rapid convective updates)
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');
@@ -11366,10 +11783,15 @@ function init() {
                 loadL3Radar(pid, st.station, st.product);
             }
         });
-        // Storm tracks (STI) follow the same volume-scan cadence.
+        // Storm tracks (STI) and meso/TVS markers follow the volume-scan cadence.
         Object.keys(paneStormAttr).forEach(pid => {
             if (maps[pid] && isLayerVisible(maps[pid], 'storm-attr-cell')) {
                 fetchStormAttr(pid, paneStormAttr[pid].station);
+            }
+        });
+        Object.keys(paneMeso).forEach(pid => {
+            if (maps[pid] && isLayerVisible(maps[pid], 'meso-circ')) {
+                fetchMesoMarkers(pid, paneMeso[pid].station);
             }
         });
         if (!isPlaying) refreshTimestampLabel();   // update L3 time on all panes

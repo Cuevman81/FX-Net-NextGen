@@ -1,5 +1,6 @@
 import http.server
 import socketserver
+import importlib.util
 import os
 import re
 import urllib.request
@@ -16,260 +17,87 @@ def safe_urlopen(req, timeout=15):
     #   /Applications/Python 3.x/Install Certificates.command
     return urllib.request.urlopen(req, timeout=timeout)
 
+
+def load_api(filename, modname):
+    """Load a Vercel function module from api/ so local and prod share one
+    implementation (the api/ filenames contain '-', so no plain import)."""
+    spec = importlib.util.spec_from_file_location(
+        modname, os.path.join(os.path.dirname(__file__), 'api', filename))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Explicit METAR station ids to avoid AWC bounding-box limit failures.
+METAR_IDS = "KATL,KORD,KDFW,KDEN,KJFK,KLAX,KSEA,KSFO,KMIA,KPHX,KMSP,KDTW,KBOS,KPHL,KCLT,KSLC,KMCO,KIAD,KEWR,KMDW,KTPA,KPDX,KHOU,KDAL,KSJC,KSTL,KBWI,KMSY,KMEM,KCLE,KIND,KAUS,KSAT,KRDU,KCVG,KSDF,KPIT,KMKE,KBUF,KOMA,KOKC,KRIC,KHNL,PANC,KABQ,KCHS,KCMH,KRSW,KBDL,KBOI,KBUR,KPVD,KPBI,KORF,KMYR,KSRQ,KILM,KTLH,KJAX,KPNS,KVPS,KMOB,KBHM,KBNA,KHSV,KLIT,KJAN,KGPT,KLFT,KXNA,KBTR,KSHV,KSFB,KEYW,KMLB,KPGD,KAPF,KPIE,KGNV,KCRG,KECP,KVLD,KDAB,KSAV,KDHN,KCSG,KABY,KAGS,KVQQ,KSSI,KCAE,KFLO,KOAJ,KPHF,KCHO,KROA,KLYH,KCRW,KBLF,KHTS,KPKB,KCKB,KBKW,KEKN,KMGW,KHLG,KLWB,KSHD,KOKV,KFRR,KCJR,KHWY,KMTN,KDCA,KILG,KDOV,KTTN,KACY,KBLM,KMIV,KWRI,KVAY,KCDW,KSMQ,KTEB,KMMU,KFWN,KLDJ,KDYL,KPTW,KUKT,KLOM,KMQS,KPNE,KCKZ,KABE,KRDG,KBCB,KPSK,KVJI,KTNB,KGEV,KGKT,KDKK,KMEV,KSYP,KSKF,KEDC,KHYI,KGTU,KBAZ,KRBD,KSSF,KCVB,KERV,KPEZ,KSZT,KCOE,KPBF,KPEQ,KDSM,KCID,KDBQ,KSUX,KMLI,KPIA,KSPI,KCMI,KBMG,KLAF,KFWA,KSBN,KGRR,KLAN,KFNT,KMBS,KTVC,KPLN,KAPN,KMQT,KIMT,KGRB,KATW,KCWA,KEAU,KLSE,KRST,KDLH,KBRD,KSTC,KFAR,KGFK,KBIS,KMOT,KDIK,KJMS,KABR,KPIR,KRAP,KFSD,KSUA,KVTN,KLBF,KGRI,KMCK,KGLD,KHYS,KSLN,KGBD,KDDC,KGCK,KHUT,KICT,KTOP,KMHK,KLNK,KCNU,KJLN,KSGF,KCGI,KPAH,KEVV,KOWB,KLEX,KGEG,KPUW,KALW,KPSC,KYKM,KEAT,KMWH,KOLM,KHQM,KUIL,KAST,KTMK,KSLE,KEUG,KOTH,KACV,KCEC,KRDD,KCIC,KSMF,KSCK,KMOD,KMER,KFAT,KVIS,KBFL,KPMD,KWJF,KNID,KTRM,KIPL,KNYL,KPRC,KFLG,KINW,KSAW,KPGA,KGCN,KSGE,KCGZ,KDUG,KTUS,KFHU,KSAD,KOLS,KALS,KDRO,KTEX,KMTJ,KGJT,KRIL,KEGE,KASE,KSBS,KHDN,KCAG,KCPR,KGCC,KSHR,KCOD"
+
+# Simple pass-through CORS proxies: path -> (upstream URL, response content-type).
+# One handler serves them all; JSON routes fall back to an empty FeatureCollection
+# on error, text/html routes to an ERROR string.
+SIMPLE_PROXIES = {
+    '/api/metar':              (f"https://aviationweather.gov/api/data/metar?format=geojson&ids={METAR_IDS}", 'application/json'),
+    '/api/airsigmet':          ('https://aviationweather.gov/api/data/airsigmet?format=geojson', 'application/json'),
+    '/api/pirep':              ('https://aviationweather.gov/api/data/pirep?format=geojson&age=3&bbox=20,-130,55,-60', 'application/json'),
+    '/api/taf':                ('https://aviationweather.gov/api/data/taf?format=geojson&bbox=20,-130,55,-60', 'application/json'),
+    '/api/gairmet':            ('https://aviationweather.gov/api/data/gairmet?format=geojson', 'application/json'),
+    '/api/cwa':                ('https://aviationweather.gov/api/data/cwa?format=geojson', 'application/json'),
+    '/api/ndbc':               ('https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt', 'text/plain'),
+    '/api/wpc-isobars':        ('https://ftp-wpc.ncep.noaa.gov/sfcanl_isobars/isobars_latest.txt', 'text/plain'),
+    '/api/wpc-coded-fronts':   ('https://www.wpc.ncep.noaa.gov/discussions/codsus', 'text/plain'),
+    '/api/wpc-ero-discussion': ('https://www.wpc.ncep.noaa.gov/discussions/hpcdiscussions.php?disc=qpferd', 'text/html'),
+    '/api/nhc-two-atl':        ('https://www.nhc.noaa.gov/text/MIATWOAT.shtml', 'text/html'),
+    '/api/nhc-two-epac':       ('https://www.nhc.noaa.gov/text/MIATWOEP.shtml', 'text/html'),
+}
+
+
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
+    def _send(self, status, ctype, body):
+        self.send_response(status)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_json(self, obj, status=200):
+        self._send(status, 'application/json', json.dumps(obj).encode())
+
     def do_GET(self):
         path = self.path.split('?')[0]
 
-        if path == '/api/metar':
+        if path in SIMPLE_PROXIES:
+            url, ctype = SIMPLE_PROXIES[path]
             try:
-                # Proxy the AWC request using explicit IDs to avoid bounding box limit failures
-                icao_list = "KATL,KORD,KDFW,KDEN,KJFK,KLAX,KSEA,KSFO,KMIA,KPHX,KMSP,KDTW,KBOS,KPHL,KCLT,KSLC,KMCO,KIAD,KEWR,KMDW,KTPA,KPDX,KHOU,KDAL,KSJC,KSTL,KBWI,KMSY,KMEM,KCLE,KIND,KAUS,KSAT,KRDU,KCVG,KSDF,KPIT,KMKE,KBUF,KOMA,KOKC,KRIC,KHNL,PANC,KABQ,KCHS,KCMH,KRSW,KBDL,KBOI,KBUR,KPVD,KPBI,KORF,KMYR,KSRQ,KILM,KTLH,KJAX,KPNS,KVPS,KMOB,KBHM,KBNA,KHSV,KLIT,KJAN,KGPT,KLFT,KXNA,KBTR,KSHV,KSFB,KEYW,KMLB,KPGD,KAPF,KPIE,KGNV,KCRG,KECP,KVLD,KDAB,KSAV,KDHN,KCSG,KABY,KAGS,KVQQ,KSSI,KCAE,KFLO,KOAJ,KPHF,KCHO,KROA,KLYH,KCRW,KBLF,KHTS,KPKB,KCKB,KBKW,KEKN,KMGW,KHLG,KLWB,KSHD,KOKV,KFRR,KCJR,KHWY,KMTN,KDCA,KILG,KDOV,KTTN,KACY,KBLM,KMIV,KWRI,KVAY,KCDW,KSMQ,KTEB,KMMU,KFWN,KLDJ,KDYL,KPTW,KUKT,KLOM,KMQS,KPNE,KCKZ,KABE,KRDG,KBCB,KPSK,KVJI,KTNB,KGEV,KGKT,KDKK,KMEV,KSYP,KSKF,KEDC,KHYI,KGTU,KBAZ,KRBD,KSSF,KCVB,KERV,KPEZ,KSZT,KCOE,KPBF,KPEQ,KDSM,KCID,KDBQ,KSUX,KMLI,KPIA,KSPI,KCMI,KBMG,KLAF,KFWA,KSBN,KGRR,KLAN,KFNT,KMBS,KTVC,KPLN,KAPN,KMQT,KIMT,KGRB,KATW,KCWA,KEAU,KLSE,KRST,KDLH,KBRD,KSTC,KFAR,KGFK,KBIS,KMOT,KDIK,KJMS,KABR,KPIR,KRAP,KFSD,KSUA,KVTN,KLBF,KGRI,KMCK,KGLD,KHYS,KSLN,KGBD,KDDC,KGCK,KHUT,KICT,KTOP,KMHK,KLNK,KCNU,KJLN,KSGF,KCGI,KPAH,KEVV,KOWB,KLEX,KGEG,KPUW,KALW,KPSC,KYKM,KEAT,KMWH,KOLM,KHQM,KUIL,KAST,KTMK,KSLE,KEUG,KOTH,KACV,KCEC,KRDD,KCIC,KSMF,KSCK,KMOD,KMER,KFAT,KVIS,KBFL,KPMD,KWJF,KNID,KTRM,KIPL,KNYL,KPRC,KFLG,KINW,KSAW,KPGA,KGCN,KSGE,KCGZ,KDUG,KTUS,KFHU,KSAD,KOLS,KALS,KDRO,KTEX,KMTJ,KGJT,KRIL,KEGE,KASE,KSBS,KHDN,KCAG,KCPR,KGCC,KSHR,KCOD"
-                req = urllib.request.Request(f"https://aviationweather.gov/api/data/metar?format=geojson&ids={icao_list}")
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
+                req = urllib.request.Request(url, headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
                 with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(data)
+                    self._send(200, ctype, response.read())
             except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
-
-        elif path == '/api/airsigmet':
-            try:
-                req = urllib.request.Request('https://aviationweather.gov/api/data/airsigmet?format=geojson')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
-
-        elif path == '/api/pirep':
-            try:
-                req = urllib.request.Request('https://aviationweather.gov/api/data/pirep?format=geojson&age=3&bbox=20,-130,55,-60')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
-
-        elif path == '/api/taf':
-            try:
-                req = urllib.request.Request('https://aviationweather.gov/api/data/taf?format=geojson&bbox=20,-130,55,-60')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
-
-        elif path == '/api/gairmet':
-            try:
-                req = urllib.request.Request('https://aviationweather.gov/api/data/gairmet?format=geojson')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
+                if ctype == 'application/json':
+                    self._send_json({'type': 'FeatureCollection', 'features': [], 'error': str(e)}, 500)
+                else:
+                    self._send(500, ctype, f'ERROR: {str(e)}'.encode())
 
         elif path == '/api/raob':
+            # Reuse the Vercel function (validation + Wyoming/IEM logic live there).
             try:
-                from urllib.parse import urlparse, parse_qs, quote
                 q = parse_qs(urlparse(self.path).query)
                 station = (q.get('station', [''])[0] or '').upper()
                 wmo = q.get('wmo', [''])[0]
                 ts = q.get('ts', [''])[0]
-                # Guard station/WMO before they reach an upstream URL (fixed host,
-                # so no SSRF, but blocks stray query-param smuggling).
-                if not re.match(r'^[A-Z0-9]{3,5}$', station):
-                    station = ''
-                if not re.match(r'^\d{4,6}$', wmo):
-                    wmo = ''
-                dt = ts.replace('T', ' ').replace('Z', '')
-                result = None
-                if wmo:
-                    try:
-                        wurl = f"https://weather.uwyo.edu/wsgi/sounding?datetime={quote(dt)}&id={quote(wmo)}&type=TEXT:LIST&src=UNKNOWN"
-                        wreq = urllib.request.Request(wurl, headers={'User-Agent': 'Mozilla/5.0 (FXNet-Proxy)'})
-                        with safe_urlopen(wreq, timeout=22) as wr:
-                            wraw = wr.read().decode('utf-8', 'replace')
-                        m = re.search(r'<PRE>(.*?)</PRE>', wraw, re.S)
-                        if m:
-                            def _num(s):
-                                s = s.strip()
-                                return None if s in ('', '-', '----', '/////') else float(s)
-                            prof = []
-                            for ln in m.group(1).splitlines():
-                                if not re.match(r'^\s*-?\d', ln):
-                                    continue
-                                try:
-                                    pres = _num(ln[0:7]); tmpc = _num(ln[14:21])
-                                    if pres is None or tmpc is None:
-                                        continue
-                                    sped = _num(ln[49:56])
-                                    prof.append({'pres': pres, 'hght': _num(ln[7:14]), 'tmpc': tmpc,
-                                                 'dwpc': _num(ln[21:28]), 'drct': _num(ln[42:49]),
-                                                 'sknt': (sped * 1.94384 if sped is not None else None)})
-                                except (ValueError, IndexError):
-                                    continue
-                            if len(prof) > 10:
-                                result = {'success': True, 'source': 'wyoming', 'station': station, 'valid': dt + 'Z', 'profile': prof}
-                    except Exception:
-                        result = None
-                if result is None and not station:
-                    result = {'success': False, 'error': 'invalid station', 'profile': []}
-                if result is None:
-                    ireq = urllib.request.Request(f"https://mesonet.agron.iastate.edu/json/raob.py?ts={quote(ts)}&station={quote(station)}", headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
-                    with safe_urlopen(ireq, timeout=22) as ir:
-                        j = json.loads(ir.read())
-                    profs = j.get('profiles') or []
-                    if profs and profs[0].get('profile'):
-                        result = {'success': True, 'source': 'iem', 'station': station, 'valid': profs[0].get('valid'), 'profile': profs[0]['profile']}
-                    else:
-                        result = {'success': False, 'error': 'no sounding data for that station/time', 'profile': []}
-                self.send_response(200 if result.get('success') else 404)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(result).encode())
+                if not station or not ts:
+                    raise ValueError('station and ts are required')
+                raob = load_api('raob.py', 'raob')
+                result = raob.get_raob(wmo, station, ts)
+                self._send_json(result, 200 if result.get('success') else 404)
             except Exception as e:
-                self.send_response(502)
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': str(e), 'profile': []}).encode())
+                self._send_json({'success': False, 'error': str(e), 'profile': []}, 502)
 
         elif path == '/api/probsevere':
+            # Reuse the Vercel function (newest-file discovery + property trim).
             try:
-                import re as _re
-                base = 'https://mrms.ncep.noaa.gov/data/ProbSevere/PROBSEVERE/'
-                lreq = urllib.request.Request(base, headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
-                with safe_urlopen(lreq, timeout=15) as lr:
-                    listing = lr.read().decode('utf-8', 'replace')
-                names = _re.findall(r'MRMS_PROBSEVERE_\d{8}_\d{6}\.json', listing)
-                if not names:
-                    raise ValueError('no ProbSevere files found')
-                newest = sorted(set(names))[-1]
-                freq = urllib.request.Request(base + newest, headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
-                with safe_urlopen(freq, timeout=15) as fr:
-                    data = fr.read()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(data)
+                ps = load_api('probsevere.py', 'probsevere')
+                self._send_json(ps.latest_probsevere())
             except Exception as e:
-                self.send_response(502)
-                self.end_headers()
-                self.wfile.write(json.dumps({'type': 'FeatureCollection', 'features': [], 'error': str(e)}).encode())
-
-        elif path == '/api/wpc-isobars':
-            try:
-                req = urllib.request.Request('https://ftp-wpc.ncep.noaa.gov/sfcanl_isobars/isobars_latest.txt')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/plain')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(f'ERROR: {str(e)}'.encode())
-
-        elif path == '/api/wpc-coded-fronts':
-            try:
-                req = urllib.request.Request('https://www.wpc.ncep.noaa.gov/discussions/codsus')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/plain')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(f'ERROR: {str(e)}'.encode())
-
-        elif path == '/api/wpc-ero-discussion':
-            try:
-                req = urllib.request.Request('https://www.wpc.ncep.noaa.gov/discussions/hpcdiscussions.php?disc=qpferd')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(f'ERROR: {str(e)}'.encode())
-
-        elif path == '/api/nhc-two-atl':
-            try:
-                req = urllib.request.Request('https://www.nhc.noaa.gov/text/MIATWOAT.shtml')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(f'ERROR: {str(e)}'.encode())
-
-        elif path == '/api/nhc-two-epac':
-            try:
-                req = urllib.request.Request('https://www.nhc.noaa.gov/text/MIATWOEP.shtml')
-                req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
-                with safe_urlopen(req, timeout=15) as response:
-                    data = response.read()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(data)
-            except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(f'ERROR: {str(e)}'.encode())
+                self._send_json({'type': 'FeatureCollection', 'features': [], 'error': str(e)}, 502)
 
         elif path == '/api/drought-monitor':
             try:
@@ -279,7 +107,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 last_tuesday = today - datetime.timedelta(days=days_since_tues)
                 date_str = last_tuesday.strftime('%Y%m%d')
                 url = f'https://droughtmonitor.unl.edu/data/json/usdm_{date_str}.json'
-                
+
                 req = urllib.request.Request(url)
                 req.add_header('User-Agent', 'FXNet-LocalProxy/1.0')
                 try:
@@ -297,143 +125,72 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                             data = response.read()
                     else:
                         raise he
-
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(data)
+                self._send(200, 'application/json', data)
             except Exception as e:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': str(e)}).encode())
+                self._send_json({'error': str(e)}, 500)
 
         elif path == '/api/wpc-ero':
-            # WPC Excessive Rainfall Outlook (KMZ -> GeoJSON). Reuse the Vercel
-            # function's converter so local and prod behavior stay identical.
+            # WPC Excessive Rainfall Outlook (KMZ -> GeoJSON), via the Vercel converter.
             try:
-                from urllib.parse import urlparse, parse_qs
-                import importlib.util
                 qs = parse_qs(urlparse(self.path).query)
                 day = qs.get('day', ['1'])[0]
-                spec = importlib.util.spec_from_file_location(
-                    'wpc_ero', os.path.join(os.path.dirname(__file__), 'api', 'wpc-ero.py'))
-                ero_mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(ero_mod)
+                ero_mod = load_api('wpc-ero.py', 'wpc_ero')
                 if day not in ero_mod.ERO_KMZ:
                     day = '1'
-                geojson = ero_mod.kmz_to_geojson(day)
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(geojson).encode())
+                self._send_json(ero_mod.kmz_to_geojson(day))
             except Exception as e:
-                self.send_response(500)
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': str(e)}).encode())
+                self._send_json({'error': str(e)}, 500)
 
         elif path == '/api/spc-fire-wx':
-            # SPC Fire Weather Outlook (KMZ -> GeoJSON). Reuse the Vercel
-            # function's converter so local and prod behavior stay identical.
+            # SPC Fire Weather Outlook (KMZ -> GeoJSON), via the Vercel converter.
             try:
-                from urllib.parse import urlparse, parse_qs
-                import importlib.util
                 qs = parse_qs(urlparse(self.path).query)
                 day = qs.get('day', ['1'])[0]
-                spec = importlib.util.spec_from_file_location(
-                    'spc_fire_wx', os.path.join(os.path.dirname(__file__), 'api', 'spc-fire-wx.py'))
-                fw_mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(fw_mod)
+                fw_mod = load_api('spc-fire-wx.py', 'spc_fire_wx')
                 if day not in fw_mod.FIREWX_KMZ:
                     day = '1'
-                geojson = fw_mod.kmz_to_geojson(day)
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(geojson).encode())
+                self._send_json(fw_mod.kmz_to_geojson(day))
             except Exception as e:
-                self.send_response(500)
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': str(e)}).encode())
+                self._send_json({'error': str(e)}, 500)
 
         elif path == '/api/radar-l3':
-            # NEXRAD Level III (NODD) -> transparent georeferenced radar overlay.
-            # Reuse the Vercel function's decode/render so local/prod stay identical.
+            # NEXRAD Level III (NODD) -> radar overlay / storm tracks / VAD / meso,
+            # via the Vercel decoder so local and prod stay identical.
             try:
-                from urllib.parse import urlparse, parse_qs
-                import importlib.util
                 qs = parse_qs(urlparse(self.path).query)
                 station = qs.get('station', ['KDGX'])[0].upper()
                 product = qs.get('product', ['N0B'])[0].upper()
-                spec = importlib.util.spec_from_file_location(
-                    'radar_l3', os.path.join(os.path.dirname(__file__), 'api', 'radar-l3.py'))
-                rl3 = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(rl3)
+                rl3 = load_api('radar-l3.py', 'radar_l3')
                 if product in ('NST', 'STORMTRACK'):
                     result = rl3.build_storm_attr(station)
                 elif product in ('NVW', 'VAD'):
                     result = rl3.build_vad(station)
+                elif product in ('NMD', 'MESO'):
+                    result = rl3.build_meso(station)
                 else:
                     result = rl3.build_radar(station, product)
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(result).encode())
+                self._send_json(result)
             except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+                self._send_json({'success': False, 'error': str(e)}, 500)
 
         elif path == '/api/gibs-times':
             try:
-                from urllib.parse import urlparse, parse_qs
-                import importlib.util
                 qs = parse_qs(urlparse(self.path).query)
                 layer = qs.get('layer', ['GOES-East_ABI_GeoColor'])[0]
                 tms = qs.get('tms', ['GoogleMapsCompatible_Level7'])[0]
                 n = max(1, min(int(qs.get('n', ['30'])[0]), 60))
-                spec = importlib.util.spec_from_file_location(
-                    'gibs_times', os.path.join(os.path.dirname(__file__), 'api', 'gibs-times.py'))
-                gt = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(gt)
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'times': gt.recent_times(layer, tms, n)}).encode())
+                gt = load_api('gibs-times.py', 'gibs_times')
+                self._send_json({'times': gt.recent_times(layer, tms, n)})
             except Exception as e:
-                self.send_response(500)
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': str(e), 'times': []}).encode())
+                self._send_json({'error': str(e), 'times': []}, 500)
 
         elif path == '/api/wpc-mpd':
-            # WPC Mesoscale Precipitation Discussions (IEM shapefile -> active GeoJSON).
-            # Reuse the Vercel function's converter so local/prod stay identical.
+            # WPC Mesoscale Precipitation Discussions, via the Vercel converter.
             try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location(
-                    'wpc_mpd', os.path.join(os.path.dirname(__file__), 'api', 'wpc-mpd.py'))
-                mpd_mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mpd_mod)
-                geojson = mpd_mod.fetch_active_mpds()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps(geojson).encode())
+                mpd_mod = load_api('wpc-mpd.py', 'wpc_mpd')
+                self._send_json(mpd_mod.fetch_active_mpds())
             except Exception as e:
-                self.send_response(500)
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': str(e)}).encode())
+                self._send_json({'error': str(e)}, 500)
 
         else:
             # Fallback to serving regular static files
@@ -447,7 +204,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             # Append log entry to the file
             with open(LOG_FILE, 'a') as f:
                 f.write(post_data.decode('utf-8', errors='replace') + '\n')
-                
+
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'Log saved')
@@ -462,8 +219,10 @@ if os.path.exists(LOG_FILE):
 # Allow address reuse so server restarts quickly
 socketserver.TCPServer.allow_reuse_address = True
 
-with socketserver.TCPServer(("", PORT), CustomHandler) as httpd:
+# Bind loopback only — this is a dev server; don't expose the proxies or the
+# /log endpoint to the rest of the LAN.
+with socketserver.TCPServer(("127.0.0.1", PORT), CustomHandler) as httpd:
     print(f"Serving at http://localhost:{PORT}")
     print(f"Ready to receive logs directly to {LOG_FILE}")
-    print("Proxying AWC METARs on /api/metar to bypass CORS")
+    print("Proxying NOAA/AWC/NDBC feeds on /api/* to bypass CORS")
     httpd.serve_forever()

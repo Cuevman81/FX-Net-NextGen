@@ -123,24 +123,9 @@ def fetch_latest_key(station, product):
 
 def decode_l3(raw, product):
     cal = CAL[product]
-    # locate Product Description Block (first 0xFFFF divider w/ CONUS lat/lon)
-    pdb = None
-    for o in range(0, 200):
-        if raw[o:o + 2] == b'\xff\xff':
-            lat = struct.unpack_from('>i', raw, o + 2)[0] / 1000.0
-            lon = struct.unpack_from('>i', raw, o + 6)[0] / 1000.0
-            if 15 < lat < 72 and -170 < lon < -60:
-                pdb = o
-                break
-    if pdb is None:
-        raise ValueError('PDB not found')
-    lat = struct.unpack_from('>i', raw, pdb + 2)[0] / 1000.0
-    lon = struct.unpack_from('>i', raw, pdb + 6)[0] / 1000.0
+    pdb, lat, lon, sym = _pdb_and_buf(raw)
     el = struct.unpack_from('>h', raw, pdb + 40)[0] / 10.0
     prod_time = _read_prod_time(raw, pdb)
-
-    bzpos = raw.find(b'BZh', pdb)
-    sym = bz2.BZ2Decompressor().decompress(raw[bzpos:]) if 0 < bzpos else raw[pdb + 102:]
 
     off = 2 + 2 + 4 + 2  # symbology block header
     off += 2 + 4         # layer header
@@ -180,7 +165,10 @@ def _read_prod_time(raw, pdb):
 RENDER_CAP = 3400
 
 
-def render(dec, product):
+def _resample_polar(dec):
+    """Map each output pixel of a north-up square around the radar to its
+    (radial, gate) index. Shared by the 256-level and 16-level renderers.
+    Returns (size, ri, gi, inside, coords)."""
     rlat, rlon, maxr = dec['lat'], dec['lon'], dec['max_range']
     coslat = math.cos(math.radians(rlat))
     # pixel size ~ gate size (native); capped
@@ -200,6 +188,25 @@ def render(dec, product):
     gi = (rng / dec['gate_km']).astype(np.int32)
     inside = (gi < dec['num_bins']) & (rng <= maxr)
     del rng
+    coords = [[rlon - dlon, rlat + dlat], [rlon + dlon, rlat + dlat],
+              [rlon + dlon, rlat - dlat], [rlon - dlon, rlat - dlat]]
+    return size, ri, gi, inside, coords
+
+
+def _palette_png(idx, colors):
+    """Encode a uint8 index grid as a palette PNG with index 0 transparent."""
+    palette = []
+    for (r, g, b) in colors:
+        palette += [r, g, b]
+    img = Image.fromarray(idx, 'P')
+    img.putpalette(palette)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG', optimize=True, transparency=0)
+    return buf.getvalue()
+
+
+def render(dec, product):
+    size, ri, gi, inside, coords = _resample_polar(dec)
     grid = np.full((size, size), np.nan, np.float32)
     grid[inside] = dec['data'][ri[inside], gi[inside]]
     del ri, gi, inside
@@ -212,17 +219,7 @@ def render(dec, product):
     idx = np.where(valid, bucket, 0).astype(np.uint8)
     del grid, bucket, valid
 
-    palette = [0, 0, 0]
-    for _, (r, g, b) in stops:
-        palette += [r, g, b]
-    img = Image.fromarray(idx, 'P')
-    img.putpalette(palette)
-    buf = io.BytesIO()
-    img.save(buf, format='PNG', optimize=True, transparency=0)
-
-    coords = [[rlon - dlon, rlat + dlat], [rlon + dlon, rlat + dlat],
-              [rlon + dlon, rlat - dlat], [rlon - dlon, rlat - dlat]]
-    return buf.getvalue(), coords
+    return _palette_png(idx, [(0, 0, 0)] + [c for _, c in stops]), coords
 
 
 def decode_l3_v16(raw, product):
@@ -232,27 +229,12 @@ def decode_l3_v16(raw, product):
     carry the code grid through to render and color it via SRM_PALETTE directly.
     """
     meta = V16[product]
-    pdb = None
-    for o in range(0, 200):
-        if raw[o:o + 2] == b'\xff\xff':
-            lat = struct.unpack_from('>i', raw, o + 2)[0] / 1000.0
-            lon = struct.unpack_from('>i', raw, o + 6)[0] / 1000.0
-            if 15 < lat < 72 and -170 < lon < -60:
-                pdb = o
-                break
-    if pdb is None:
-        raise ValueError('PDB not found')
-    lat = struct.unpack_from('>i', raw, pdb + 2)[0] / 1000.0
-    lon = struct.unpack_from('>i', raw, pdb + 6)[0] / 1000.0
+    pdb, lat, lon, sym = _pdb_and_buf(raw)
     el = struct.unpack_from('>h', raw, pdb + 40)[0] / 10.0
     # Product-56 dependent halfwords: storm-motion vector subtracted to form SRM.
     storm_spd = struct.unpack_from('>h', raw, pdb + 82)[0] / 10.0   # kt
     storm_dir = struct.unpack_from('>h', raw, pdb + 84)[0] / 10.0   # deg
     prod_time = _read_prod_time(raw, pdb)
-
-    # Legacy graphic products are usually uncompressed; honor BZh if present.
-    bzpos = raw.find(b'BZh', pdb)
-    sym = bz2.BZ2Decompressor().decompress(raw[bzpos:]) if 0 < bzpos else raw[pdb + 102:]
 
     off = 2 + 2 + 4 + 2  # symbology block header
     off += 2 + 4         # layer header
@@ -282,37 +264,11 @@ def decode_l3_v16(raw, product):
 
 def render_v16(dec):
     """Resample the polar CODE grid to a palette PNG (index 0 = transparent)."""
-    rlat, rlon, maxr = dec['lat'], dec['lon'], dec['max_range']
-    coslat = math.cos(math.radians(rlat))
-    size = int(min(round(2 * maxr / dec['gate_km']), RENDER_CAP))
-    dlat = maxr / 111.32
-    dlon = maxr / (111.32 * coslat)
-    ykm = ((np.linspace(rlat + dlat, rlat - dlat, size, dtype=np.float32) - rlat) * 111.32).reshape(size, 1)
-    xkm = ((np.linspace(rlon - dlon, rlon + dlon, size, dtype=np.float32) - rlon) * (111.32 * coslat)).reshape(1, size)
-    rng = np.sqrt(xkm * xkm + ykm * ykm)
-    azp = (np.degrees(np.arctan2(np.broadcast_to(xkm, rng.shape),
-                                 np.broadcast_to(ykm, rng.shape))) % 360.0)
-    nrad = dec['num_rad']
-    ri = np.round((azp - dec['az'][0]) * (nrad / 360.0)).astype(np.int32) % nrad
-    del azp
-    gi = (rng / dec['gate_km']).astype(np.int32)
-    inside = (gi < dec['num_bins']) & (rng <= maxr)
-    del rng
+    size, ri, gi, inside, coords = _resample_polar(dec)
     idx = np.zeros((size, size), np.uint8)
     idx[inside] = dec['codes'][ri[inside], gi[inside]]
     del ri, gi, inside
-
-    palette = []
-    for (r, g, b) in SRM_PALETTE:
-        palette += [r, g, b]
-    img = Image.fromarray(idx, 'P')
-    img.putpalette(palette)
-    buf = io.BytesIO()
-    img.save(buf, format='PNG', optimize=True, transparency=0)
-
-    coords = [[rlon - dlon, rlat + dlat], [rlon + dlon, rlat + dlat],
-              [rlon + dlon, rlat - dlat], [rlon - dlon, rlat - dlat]]
-    return buf.getvalue(), coords
+    return _palette_png(idx, SRM_PALETTE), coords
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -496,6 +452,77 @@ def build_vad(station):
                      'time': prod_time, 'lat': rlat, 'lon': rlon, 'count': len(profile), 'key': key}}
 
 
+def _azran_to_lonlat(az, ran_nm, rlat, rlon):
+    """Project an azimuth (deg true) / range (nm) from the radar to lon/lat."""
+    d_km = ran_nm * 1.852
+    brg = math.radians(az)
+    dn, de = d_km * math.cos(brg), d_km * math.sin(brg)
+    return rlon + de / (111.32 * math.cos(math.radians(rlat))), rlat + dn / 111.32
+
+
+# MDA table row, e.g. " 807  207/105  7  P7  34   54  <13   >20   70   13  34  N  312/ 28  2950"
+# columns: CIRC-ID AZ/RAN SR STMID [LL-RV LL-DV BASE DEPTH STMREL% MAXRV-kft MAXRV-kts] TVS MOTION MSI
+_MD_ROW = re.compile(
+    r'\b(\d{1,4})\s+(\d{1,3})/\s*(\d{1,3})\s+(\d{1,2}[A-Z]?)\s+(\S{1,3})\s+(.*?)\s([YN])\s+(\d{1,3})/\s*(\d{1,3})\s+(\d+)\s*$')
+
+
+def _parse_md_table(text):
+    """Parse the Mesocyclone Detection Algorithm table -> list of circulation dicts."""
+    out = []
+    for ln in re.findall(r'[ -~]{20,}', text):
+        m = _MD_ROW.search(ln)
+        if not m:
+            continue
+        circ = {'id': m.group(1), 'az': int(m.group(2)), 'ran': int(m.group(3)),
+                'sr': m.group(4), 'stmid': m.group(5), 'tvs': m.group(7),
+                'mdir': int(m.group(8)), 'mspd': int(m.group(9)), 'msi': int(m.group(10))}
+        # Detail columns (best-effort — format is fixed but values can be <n/>n):
+        toks = m.group(6).split()
+        if len(toks) >= 7:
+            circ.update(llrv=toks[0], lldv=toks[1], base=toks[2], depth=toks[3],
+                        strel=toks[4], maxrv_kft=toks[5], maxrv=toks[6])
+        out.append(circ)
+    return out
+
+
+def build_meso(station):
+    """Mesocyclone Detection (NMD, product 141): each detected circulation as a
+    GeoJSON point with strength rank, TVS flag, rotational velocity and depth —
+    the D2D meso/TVS marker overlay."""
+    if not _STATION_RE.match(station):
+        raise ValueError('invalid station')
+    key = fetch_latest_key(station, 'NMD')
+    if not key:
+        raise ValueError(f'no recent mesocyclone (NMD) data for {station}')
+    raw = urllib.request.urlopen(
+        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), timeout=25).read()
+    pdb, rlat, rlon, buf = _pdb_and_buf(raw)
+    prod_time = _read_prod_time(raw, pdb)
+
+    circs = []
+    for bid, start, blen in _iter_blocks(buf):
+        if bid == 3:
+            circs = _parse_md_table(buf[start:start + blen].decode('latin-1', 'replace'))
+            break
+
+    features = []
+    for c in circs:
+        lon, lat = _azran_to_lonlat(c['az'], c['ran'], rlat, rlon)
+        sr_n = int(re.sub(r'\D', '', c['sr']) or 0)
+        features.append({'type': 'Feature',
+                         'properties': {'id': c['id'], 'sr': c['sr'], 'sr_n': sr_n,
+                                        'stmid': c['stmid'], 'tvs': c['tvs'],
+                                        'llrv': c.get('llrv'), 'base': c.get('base'),
+                                        'depth': c.get('depth'), 'maxrv': c.get('maxrv'),
+                                        'mdir': c['mdir'], 'mspd': c['mspd'], 'msi': c['msi']},
+                         'geometry': {'type': 'Point', 'coordinates': [lon, lat]}})
+
+    return {'success': True, 'type': 'geojson',
+            'geojson': {'type': 'FeatureCollection', 'features': features},
+            'meta': {'station': station, 'product': 'NMD', 'name': 'Meso / TVS (MDA)',
+                     'time': prod_time, 'count': len(features), 'key': key}}
+
+
 # Storm-relative velocity is derived on the fly from the super-resolution base
 # velocity (N?G — 0.25 km range, 0.5° azimuth, 256 levels) minus the mean
 # storm-motion radial component read from the legacy product-56 header. That is
@@ -588,6 +615,8 @@ class handler(BaseHTTPRequestHandler):
                 result = build_storm_attr(station)
             elif product in ('NVW', 'VAD'):
                 result = build_vad(station)
+            elif product in ('NMD', 'MESO'):
+                result = build_meso(station)
             else:
                 result = build_radar(station, product)
             body = json.dumps(result).encode()

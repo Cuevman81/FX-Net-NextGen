@@ -67,6 +67,14 @@
     {
       "source": "/api/gairmet",
       "destination": "https://aviationweather.gov/api/data/gairmet?format=geojson"
+    },
+    {
+      "source": "/api/cwa",
+      "destination": "https://aviationweather.gov/api/data/cwa?format=geojson"
+    },
+    {
+      "source": "/api/ndbc",
+      "destination": "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
     }
   ],
   "headers": [
@@ -76,6 +84,22 @@
         {
           "key": "Access-Control-Allow-Origin",
           "value": "*"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "SAMEORIGIN"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=()"
         }
       ]
     }

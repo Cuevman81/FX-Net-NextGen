@@ -101,6 +101,7 @@
                         </div>
                     </div>
                     <div class="product-item" data-layer="storm-attr"><span>Storm Tracks (STI)</span> <span class="badge green">NODD</span></div>
+                    <div class="product-item" data-layer="nodd-meso"><span>Meso / TVS Markers (MDA)</span> <span class="badge red">NODD</span></div>
                     <div class="product-item" id="btn-vad"><span>VAD Wind Profile</span> <span class="badge green">NODD</span></div>
                 </div>
 
@@ -158,6 +159,7 @@
                     <div class="product-item" data-layer="spc-outlook" data-day="1"><span>Day 1 Convective Outlook</span></div>
                     <div class="product-item" data-layer="spc-outlook" data-day="2"><span>Day 2 Convective Outlook</span></div>
                     <div class="product-item" data-layer="spc-outlook" data-day="3"><span>Day 3 Convective Outlook</span></div>
+                    <div class="product-item" data-layer="spc-d48"><span>Day 4-8 Severe Outlook</span></div>
                     <div class="sub-category">Day 1 Probabilistic</div>
                     <div class="product-item" data-layer="spc-prob" data-day="1" data-hazard="torn"><span>Tornado Probability</span></div>
                     <div class="product-item" data-layer="spc-prob" data-day="1" data-hazard="wind"><span>Wind Probability</span></div>
@@ -171,6 +173,7 @@
                     <div class="product-item" data-layer="probsevere"><span>ProbSevere (CIMSS)</span> <span class="badge red">LIVE</span></div>
                     <div class="product-item" id="btn-soundings"><span>Skew-T Soundings (SPC img)</span></div>
                     <div class="product-item" id="btn-skewt"><span>Interactive Skew-T (RAOB)</span> <span class="badge green">NSHARP</span></div>
+                    <div class="product-item" id="btn-spcmeso"><span>SPC Mesoanalysis</span> <span class="badge orange">HOURLY</span></div>
                 </div>
 
                 <!-- AVIATION -->
@@ -180,6 +183,7 @@
                     <div class="product-item" data-layer="gairmet"><span>Graphical AIRMETs (G-AIRMET)</span> <span class="badge orange">AWC</span></div>
                     <div class="product-item" data-layer="pireps"><span>Pilot Reports (PIREPs)</span> <span class="badge green">AWC</span></div>
                     <div class="product-item" data-layer="taf"><span>Terminal Forecasts (TAF)</span> <span class="badge green">AWC</span></div>
+                    <div class="product-item" data-layer="cwa"><span>Center Weather Advisories (CWA)</span> <span class="badge orange">AWC</span></div>
                     <div class="sub-category">Click a hazard area, PIREP, or TAF site for detail</div>
                 </div>
 
@@ -187,6 +191,7 @@
                 <div class="category-group">
                     <div class="category-label"><i data-lucide="thermometer"></i> SURFACE ANALYSIS</div>
                     <div class="product-item" data-layer="metars"><span>METAR Plotted Obs</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" data-layer="ndbc"><span>NDBC Buoys (Marine Obs)</span> <span class="badge green">HOURLY</span></div>
                     <div class="product-item" data-layer="wpc-isobars"><span>Isobars (4mb WPC)</span> <span class="badge blue">WPC</span></div>
                     <div class="product-item" data-layer="sfc-isobars-2mb"><span>Isobars (2mb)</span> <span class="badge green">LIVE</span></div>
                     <div class="product-item" data-layer="sfc-isotherms"><span>Isotherms (2°F)</span> <span class="badge green">LIVE</span></div>
@@ -994,7 +999,27 @@
         </div>
     </div>
 
-    <script src="app.js?v=221"></script>
+    <!-- SPC Mesoanalysis viewer -->
+    <div id="spcmeso-panel" class="floating-panel" style="display:none; width:1030px; height:820px;">
+        <div class="floating-panel-header" id="spcmeso-drag">
+            <span><i data-lucide="activity"></i> SPC MESOANALYSIS</span>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <select id="spcmeso-sector" title="Sector" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <select id="spcmeso-param" title="Parameter" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <button id="spcmeso-refresh" class="btn-primary" style="height:24px; padding:0 10px; font-weight:700; font-size:10px;">Refresh</button>
+                <button id="close-spcmeso-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+            </div>
+        </div>
+        <div id="spcmeso-meta" style="font-size:10px; color:#8b97a3; padding:6px 12px; border-bottom:1px solid var(--border);">Hourly SPC objective mesoscale analysis (RAP-based). Images update ~hourly at :25.</div>
+        <div class="floating-panel-body" id="spcmeso-body" style="padding:6px; overflow:auto; background:#fff;">
+            <div style="position:relative; width:1000px; height:750px;">
+                <img id="spcmeso-cnty" alt="" style="position:absolute; inset:0; width:1000px;">
+                <img id="spcmeso-img" alt="SPC mesoanalysis" style="position:absolute; inset:0; width:1000px;">
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=222"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

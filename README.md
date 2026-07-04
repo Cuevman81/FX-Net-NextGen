@@ -32,14 +32,14 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 ### 📡 Full Radar Suite
 - **National Reflectivity (MRMS)**: Seamless CONUS base-reflectivity mosaic.
 - **Single-Site Products (NCEP)**: Per-site Reflectivity, Base Velocity, Hydrometeor Classification, Storm Total Precip, and One-Hour Precip pinned to the latest volume scan.
-- **Dual-Pol, Velocity & Storm Tracks (NODD Level III)**: A **dependency-free, stdlib-only decoder** (`api/radar-l3.py`, validated byte-for-byte against MetPy) renders Correlation Coefficient (CC), Differential Reflectivity (ZDR), Specific Differential Phase (KDP), and **Storm Relative Velocity** — the last derived on the fly from the super-resolution base velocity (0.25 km / 0.5° / 256-level) for ~8× the detail of the legacy product-56 image. Products step through the lowest four elevation tilts, georeferenced as transparent PNG overlays with AWIPS-style color tables. Includes **Storm Tracks (STI)** with forecast positions and **VAD Wind Profiles** (winds aloft + hodograph).
+- **Dual-Pol, Velocity & Storm Tracks (NODD Level III)**: A **dependency-free, stdlib-only decoder** (`api/radar-l3.py`, validated byte-for-byte against MetPy) renders Correlation Coefficient (CC), Differential Reflectivity (ZDR), Specific Differential Phase (KDP), and **Storm Relative Velocity** — the last derived on the fly from the super-resolution base velocity (0.25 km / 0.5° / 256-level) for ~8× the detail of the legacy product-56 image. Products step through the lowest four elevation tilts, georeferenced as transparent PNG overlays with AWIPS-style color tables. Includes **Storm Tracks (STI)** with forecast positions, **Meso/TVS markers (MDA)** colored by strength rank, and **VAD Wind Profiles** (winds aloft + hodograph).
 
 ### 🛰️ Satellite & Lightning
 - **GOES-East (NASA GIBS)**: All ABI visible/water-vapor/infrared channels plus GeoColor composites, with smooth time-looping driven by real published frame times.
 - **Lightning**: Near-real-time strike density (NLDN via nowCOAST).
 
 ### 🔥 Severe, Fire & Hydro Guidance
-- **Storm Prediction Center (SPC)**: Day 1–3 Convective Outlooks (categorical), Day 1–2 probabilistic Tornado/Wind/Hail with significant-severe hatching, **Fire Weather Outlooks Day 1–8**, Mesoscale Discussions (MCDs), and Local Storm Reports (LSRs).
+- **Storm Prediction Center (SPC)**: Day 1–3 Convective Outlooks (categorical), **Day 4–8 Severe Outlook**, Day 1–2 probabilistic Tornado/Wind/Hail with significant-severe hatching, **Fire Weather Outlooks Day 1–8**, Mesoscale Discussions (MCDs), Local Storm Reports (LSRs), and an **SPC Mesoanalysis viewer** (hourly RAP-based objective analysis, 11 sectors × 12 parameters).
 - **ProbSevere (CIMSS)**: Machine-learning storm objects colored by severe/hail/wind/tornado probability, refreshed every ~2 minutes; click a cell for the model's readout.
 - **Weather Prediction Center (WPC)**: Surface isobars, high/low centers, coded fronts, QPF, **Excessive Rainfall Outlooks (ERO)**, and Mesoscale Precipitation Discussions (MPDs).
 - **NHC-Style Discussion Popups**: Click any SPC/fire-weather/tropical area to open the official text discussion for that hazard in an in-app browser.
@@ -48,8 +48,8 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 
 ### 🌐 Observations, Soundings & Tools
 - **National Hurricane Center (NHC)**: Tropical weather outlook areas, active storm cones, and forecast track points.
-- **Aviation Weather (AWC)**: SIGMETs/AIRMETs, **Graphical AIRMETs (G-AIRMET)** hazard areas, Pilot Reports (PIREPs), and **Terminal Forecasts (TAF)** plotted by prevailing flight category (VFR/MVFR/IFR/LIFR) — click any for detail.
-- **Surface Observations & Forecast Grids**: Real-time METAR plotting (temperature, dew point, pressure, wind barbs) with isobar/isotherm/isodrosotherm analysis, plus the **NDFD** surface-temperature forecast grid.
+- **Aviation Weather (AWC)**: SIGMETs/AIRMETs, **Graphical AIRMETs (G-AIRMET)** hazard areas, Pilot Reports (PIREPs), **Center Weather Advisories (CWA)**, and **Terminal Forecasts (TAF)** plotted by prevailing flight category (VFR/MVFR/IFR/LIFR) — click any for detail.
+- **Surface & Marine Observations, Forecast Grids**: Real-time METAR plotting (temperature, dew point, pressure, wind barbs) with isobar/isotherm/isodrosotherm analysis, **NDBC marine buoys** (~700 coastal/offshore stations), plus the **NDFD** surface-temperature forecast grid.
 - **Interactive Skew-T (NSHARP-lite)**: A full radiosonde sounding for the site nearest the pane — high-resolution BUFR profile (thousands of levels) with standard-RAOB fallback, a lifted surface parcel with shaded CAPE on a real skew-T/log-P grid, wind barbs, and a 0–10 km hodograph. Computes SBCAPE/SBCIN (virtual-temperature corrected), Lifted Index, PWAT, LCL/LFC/EL, and 0–1 / 0–6 km bulk shear — all in-browser.
 - **Solar Tools**: Day/Night terminator with a click-anywhere solar calculator (sunrise/sunset, twilight, solar noon, day length, declination).
 
