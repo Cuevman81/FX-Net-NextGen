@@ -10668,6 +10668,7 @@ function initSyncButton() {
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
     { date: 'Jul 3, 2026 (evening)', items: [
+        'SPC Mesoanalysis — full catalog: the viewer now carries everything on SPC’s own page (~140 parameters in 11 grouped menus): surface analyses and 2-3 hour change fields, upper-air charts for 925/850/700/500/300 mb with frontogenesis at seven levels and jet-circulation dynamics, the complete thermodynamics and wind-shear suites, all composite indices (supercell, sig tornado, SARS hail, derecho, microburst, VTP…), multi-parameter combos, heavy-rain, winter-weather and fire-weather sets, plus the classic/beta indices. Every parameter code was verified live against spc.noaa.gov and labeled with SPC’s official menu name.',
         'Meso / TVS markers (MDA): a new RADAR item plots the NEXRAD Mesocyclone Detection Algorithm output — every detected circulation as an open circle colored by strength rank (yellow → orange → red), with a red ▼ when the TVS flag is set. Click one for strength rank, rotational velocity, base/depth, motion and MSI. Follows the volume-scan refresh like STI.',
         'SPC Mesoanalysis viewer: an SPC-PRODUCTS panel with the hourly RAP-based objective analysis — 11 sectors (all verified against SPC’s own basemaps) and 12 parameters from MSL pressure and CAPE through effective SRH, supercell composite and significant-tornado parameter.',
         'SPC Day 4-8 Severe Outlook: the extended probabilistic outlook joins Days 1-3, all five days merged on one layer with D4-D8 tags; click an area for probability and valid date.',
@@ -11670,12 +11671,87 @@ const SPCMESO_SECTORS = [
     ['20', 'Midwest / MS Valley'], ['21', 'Great Lakes'], ['16', 'Northeast'],
     ['17', 'Mid-Atlantic / TN-OH Valley'], ['18', 'Southeast'],
 ];
+// Complete parameter catalog, mirroring SPC's own menu — every code verified
+// live against spc.noaa.gov and labeled with SPC's official display name.
 const SPCMESO_PARAMS = [
-    ['pmsl', 'MSL Pressure / Wind'], ['ttd', 'Temp / Dewpoint'],
-    ['sbcp', 'SBCAPE / SBCIN'], ['mlcp', 'MLCAPE / MLCIN'], ['mucp', 'MUCAPE'],
-    ['lllr', 'Low-Level Lapse Rates'], ['pwtr', 'Precipitable Water'],
-    ['shr6', '0-6 km Bulk Shear'], ['srh1', '0-1 km Storm-Rel. Helicity'],
-    ['effh', 'Effective SRH'], ['scp', 'Supercell Composite'], ['stpc', 'Sig. Tornado Parameter'],
+    ['Surface', [
+        ['pmsl', 'MSL Pressure/Wind'], ['ttd', 'Temp/Wind/Dwpt'], ['thet', 'MSL Pressure/Theta-E/Wind'],
+        ['mcon', 'Moisture Convergence'], ['thea', 'Theta-E Advection'], ['mxth', 'Mixing Ratio / Theta'],
+        ['icon', 'Instantaneous Contraction Rate'], ['trap', 'Fluid Trapping'], ['vtm', 'Velocity Tensor Magnitude'],
+        ['dvvr', 'Divergence and Vorticity'], ['def', 'Deformation / Axes of Dilatation'],
+        ['pchg', '2-hour Pressure Change'], ['temp_chg', '3-hour Temp Change'], ['dwpt_chg', '3-hour Dwpt Change'],
+        ['mixr_chg', '3-hour Mixing Ratio Change'], ['thte_chg', '3-hour Theta-E Change'],
+    ]],
+    ['Upper Air', [
+        ['925mb', '925mb Analysis'], ['850mb', '850mb Analysis'], ['850mb2', '850mb Analysis (v2)'],
+        ['700mb', '700mb Analysis'], ['500mb', '500mb Analysis'], ['300mb', '300mb Analysis'],
+        ['dlcp', 'Deep Moist Convergence'], ['tadv_925', '925mb Temp Advection'], ['tadv', '850mb Temp Advection'],
+        ['7tad', '700mb Temp Advection'], ['sfnt', 'Sfc Frontogenesis'], ['9fnt', '925mb Frontogenesis'],
+        ['8fnt', '850mb Frontogenesis'], ['7fnt', '700mb Frontogenesis'], ['925f', '1000-925mb Frontogenesis'],
+        ['98ft', '925-850mb Frontogenesis'], ['857f', '850-700mb Frontogenesis'], ['75ft', '700-500mb Frontogenesis'],
+        ['vadv', '700-400mb Diff. Vorticity Advection'], ['padv', '400-250mb Pot. Vorticity Advection'],
+        ['ddiv', '850-250mb Diff. Divergence'], ['ageo', '300mb Jet Circulation'],
+        ['500mb_chg', '12-hour 500mb Height Change'], ['trap_500', 'Fluid Trapping (500mb)'], ['trap_250', 'Fluid Trapping (250mb)'],
+    ]],
+    ['Thermodynamics', [
+        ['sbcp', 'CAPE — Surface-Based'], ['mlcp', 'CAPE — 100mb Mixed-Layer'], ['mucp', 'CAPE — Most-Unstable / LPL Height'],
+        ['eltm', 'EL Temp / MUCAPE / MUCIN'], ['ncap', 'CAPE — Normalized'], ['dcape', 'CAPE — Downdraft'],
+        ['muli', 'Surface-Based Lifted Index'], ['laps', 'Mid-Level Lapse Rates'], ['lllr', 'Low-Level Lapse Rates'],
+        ['maxlr', 'Max 2-6 km AGL Lapse Rate'], ['lclh', 'LCL Height'], ['lfch', 'LFC Height'], ['lfrh', 'LCL-LFC Mean RH'],
+        ['sbcp_chg', '3-hr SBCAPE Change'], ['sbcn_chg', '3-hr SBCIN Change'], ['mlcp_chg', '3-hr MLCAPE Change'],
+        ['mucp_chg', '3-hr MUCAPE Change'], ['lllr_chg', '3-hr Low-Level LR Change'], ['laps_chg', '6-hr Mid-Level LR Change'],
+    ]],
+    ['Wind Shear', [
+        ['eshr', 'Bulk Shear — Effective'], ['shr1', 'Bulk Shear — Sfc-1km'], ['shr3', 'Bulk Shear — Sfc-3km'],
+        ['shr6', 'Bulk Shear — Sfc-6km'], ['shr8', 'Bulk Shear — Sfc-8km'], ['brns', 'BRN Shear'],
+        ['effh', 'SR Helicity — Effective'], ['srh5', 'SR Helicity — Sfc-500m'], ['srh1', 'SR Helicity — Sfc-1km'],
+        ['srh3', 'SR Helicity — Sfc-3km'], ['llsr', 'SR Wind — Sfc-2km'], ['mlsr', 'SR Wind — 4-6km'],
+        ['ulsr', 'SR Wind — 9-11km'], ['alsr', 'SR Wind — Anvil Level'], ['mnwd', '850-300mb Mean Wind'],
+        ['xover', '850 and 500mb Winds'], ['shr1_chg', '3-hr Sfc-1km Shear Change'],
+        ['srh3_chg', '3-hr Sfc-3km SRH Change'], ['shr6_chg', '3-hr Sfc-6km Shear Change'],
+    ]],
+    ['Composite Indices', [
+        ['scp', 'Supercell Composite'], ['lscp', 'Supercell Composite (left-moving)'],
+        ['stpc', 'Sgfnt Tornado (effective layer)'], ['stor', 'Sgfnt Tornado (fixed layer)'],
+        ['sigt1', 'Cond. Prob. Sigtor (Eqn 1)'], ['sigt2', 'Cond. Prob. Sigtor (Eqn 2)'],
+        ['nstp', 'Non-Supercell Tornado'], ['vtp3', 'Violent Tornado Parameter'],
+        ['sigh', 'Sgfnt Hail'], ['sars1', 'SARS Hail Size'], ['sars2', 'SARS Sig. Hail %'],
+        ['lghl', 'Large Hail Parameter'], ['dcp', 'Derecho Composite'], ['cbsig', 'Craven/Brooks Sgfnt Severe'],
+        ['brn', 'Bulk Richardson Number'], ['mcsm', 'MCS Maintenance'], ['mbcp', 'Microburst Composite'],
+        ['desp', 'Enhanced Stretching Potential'], ['ehi1', 'EHI — Sfc-1km'], ['ehi3', 'EHI — Sfc-3km'],
+        ['vgp3', 'VGP — Sfc-3km'], ['crit', 'Critical Angle'],
+    ]],
+    ['Multi-Parameter', [
+        ['mlcp_eshr', 'MLCAPE / Effective Shear'], ['cpsh', 'MUCAPE / Effective Shear'],
+        ['comp', 'MU LI / 850 & 500mb Winds'], ['lcls', 'LCL Height / Sfc-1km SRH'],
+        ['lr3c', 'Sfc-3km Lapse Rate / 3km MLCAPE'], ['3cvr', 'Sfc Vorticity / 3km MLCAPE'],
+        ['tdlr', 'Sfc Dwpt / Mid-Level Lapse Rates'], ['hail', 'Hail Parameters'],
+        ['qlcs1', 'QLCS 1 (Theta-E diff / MUCAPE / shear)'], ['qlcs2', 'QLCS 2 (Theta-E diff / MLCAPE / shear)'],
+    ]],
+    ['Heavy Rain', [
+        ['pwtr', 'Precipitable Water'], ['pwtr2', 'PW + 850mb Moisture Transport'],
+        ['tran', '850mb Moisture Transport'], ['tran_925', '925mb Moisture Transport'],
+        ['tran_925-850', '925-850mb Moisture Transport'], ['prop', 'Upwind Propagation Vector'],
+        ['peff', 'Precip Potential Placement'], ['mixr', '100mb Mean Mixing Ratio'], ['pw3k', 'PW × 3km RH'],
+    ]],
+    ['Winter Weather', [
+        ['ptyp', 'Precipitation Type'], ['fztp', 'Near-Freezing Sfc Temp'], ['swbt', 'Surface Wet-Bulb Temp'],
+        ['mxwb', 'Max Wet-Bulb Temp'], ['fzlv', 'Freezing Level'], ['thck', 'Critical Thicknesses'],
+        ['epvl', '800-750mb EPVg'], ['epvm', '650-500mb EPVg'], ['les1', 'Lake Effect Snow 1'],
+        ['les2', 'Lake Effect Snow 2'], ['snsq', 'Snow Squall Parameter'], ['dend', 'Dendritic Growth Depth'],
+        ['dendrh', 'Dendritic Growth RH'], ['ddrh', 'Dendritic Growth Depth & RH'],
+    ]],
+    ['Fire Weather', [
+        ['sfir', 'Sfc RH / Temp / Wind'], ['fosb', 'Fosberg Index'], ['lhan', 'Low Altitude Haines'],
+        ['mhan', 'Mid Altitude Haines'], ['hhan', 'High Altitude Haines'],
+        ['lasi', 'Lower Atmos. Severity Index'], ['lfrh2', 'LCL-LFC Mean RH (fire wx)'],
+    ]],
+    ['Classic / Beta', [
+        ['ttot', 'Total Totals'], ['kidx', 'K-Index'], ['show', 'Showalter Index'],
+        ['sherbe', 'SHERBE'], ['moshe', 'Modified SHERBE'], ['cwasp', 'CWASP'], ['oprh', 'OPRH'],
+        ['ptstpe', 'Prob EF0+ (cond. on RM supercell)'], ['pstpe', 'Prob EF2+ (cond. on RM supercell)'],
+        ['pvstpe', 'Prob EF4+ (cond. on RM supercell)'],
+    ]],
 ];
 
 function _spcMesoLoad() {
@@ -11688,7 +11764,11 @@ function _spcMesoLoad() {
     if (cnty) cnty.src = `https://www.spc.noaa.gov/exper/mesoanalysis/${sector}/cnty/cnty.gif`;
     if (img) img.src = `https://www.spc.noaa.gov/exper/mesoanalysis/${sector}/${param}/${param}.gif?${bust}`;
     if (meta) {
-        const pLabel = (SPCMESO_PARAMS.find(p => p[0] === param) || [])[1] || param;
+        let pLabel = param;
+        for (const [, params] of SPCMESO_PARAMS) {
+            const hit = params.find(p => p[0] === param);
+            if (hit) { pLabel = hit[1]; break; }
+        }
         meta.textContent = `${pLabel} — hourly SPC objective analysis (RAP-based), updates ~:25 past the hour. Loaded ${new Date().toISOString().substring(11, 16)}Z.`;
     }
 }
@@ -11701,8 +11781,12 @@ function initSpcMesoPanel() {
     if (sSel && !sSel.options.length) SPCMESO_SECTORS.forEach(([v, label]) => {
         const o = document.createElement('option'); o.value = `s${v}`; o.textContent = label; sSel.appendChild(o);
     });
-    if (pSel && !pSel.options.length) SPCMESO_PARAMS.forEach(([v, label]) => {
-        const o = document.createElement('option'); o.value = v; o.textContent = label; pSel.appendChild(o);
+    if (pSel && !pSel.options.length) SPCMESO_PARAMS.forEach(([group, params]) => {
+        const og = document.createElement('optgroup'); og.label = group;
+        params.forEach(([v, label]) => {
+            const o = document.createElement('option'); o.value = v; o.textContent = label; og.appendChild(o);
+        });
+        pSel.appendChild(og);
     });
     openBtn.addEventListener('click', () => { panel.style.display = 'block'; _spcMesoLoad(); });
     document.getElementById('close-spcmeso-panel')?.addEventListener('click', () => { panel.style.display = 'none'; });

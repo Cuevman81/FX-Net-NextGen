@@ -39,7 +39,7 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 - **Lightning**: Near-real-time strike density (NLDN via nowCOAST).
 
 ### 🔥 Severe, Fire & Hydro Guidance
-- **Storm Prediction Center (SPC)**: Day 1–3 Convective Outlooks (categorical), **Day 4–8 Severe Outlook**, Day 1–2 probabilistic Tornado/Wind/Hail with significant-severe hatching, **Fire Weather Outlooks Day 1–8**, Mesoscale Discussions (MCDs), Local Storm Reports (LSRs), and an **SPC Mesoanalysis viewer** (hourly RAP-based objective analysis, 11 sectors × 12 parameters).
+- **Storm Prediction Center (SPC)**: Day 1–3 Convective Outlooks (categorical), **Day 4–8 Severe Outlook**, Day 1–2 probabilistic Tornado/Wind/Hail with significant-severe hatching, **Fire Weather Outlooks Day 1–8**, Mesoscale Discussions (MCDs), Local Storm Reports (LSRs), and an **SPC Mesoanalysis viewer** — the full SPC catalog (~140 parameters across 11 categories: surface, upper-air analyses from 925–300 mb with frontogenesis and jet dynamics, thermodynamics, wind shear, composite indices, multi-parameter fields, heavy rain, winter weather, and fire weather) over 11 selectable sectors.
 - **ProbSevere (CIMSS)**: Machine-learning storm objects colored by severe/hail/wind/tornado probability, refreshed every ~2 minutes; click a cell for the model's readout.
 - **Weather Prediction Center (WPC)**: Surface isobars, high/low centers, coded fronts, QPF, **Excessive Rainfall Outlooks (ERO)**, and Mesoscale Precipitation Discussions (MPDs).
 - **NHC-Style Discussion Popups**: Click any SPC/fire-weather/tropical area to open the official text discussion for that hazard in an in-app browser.
