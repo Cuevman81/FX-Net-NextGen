@@ -19,7 +19,7 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 
 ### 🗺️ Multi-Pane Workspace
 - **1 / 2 / 4-Pane Layouts**: Split the view into independent map panes, each with its own products, radar site, and animation state.
-- **Workspace Tabs**: Save multiple labeled workspaces (double-click to rename, e.g. "Gulf Coast", "Severe Setup"); overlays persist across sessions.
+- **Workspace Tabs & Autosave**: Save multiple labeled workspaces (double-click to rename, e.g. "Gulf Coast", "Severe Setup"). The whole workspace autosaves every 15 seconds and on close — every pane's map view, radar/satellite imagery, and overlay products (warnings, outlooks, obs, aviation…) come back exactly as you left them on reload, and the NWS Warnings state/WFO filter is remembered too. A Settings Export/Import (under ANALYSIS TOOLS) writes all saved settings — workspaces, procedures, filters, preferences — to a JSON file for backup or moving between browsers/machines.
 - **Master Sync & Looping**: Lock all panes to a master view to compare radar, satellite, surface fronts, and severe outlooks over the exact same region — with synchronized time loops.
 - **Per-Pane Legend & Data Health**: A live legend stack timestamps every active product (imagery valid time or last fetch), and a collapsible Data Health monitor groups every feed by category with red/amber/green status dots.
 

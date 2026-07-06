@@ -798,6 +798,10 @@ function initMap(paneId) {
 
     addLiveLog(`PANE ${paneId}: Creating map...`, '#888');
 
+    // When this pane has a saved view waiting to be restored, start the map
+    // there directly — no default-CONUS flash, no camera jump after 'load'.
+    const savedView = pendingRestore[paneId] && Array.isArray(pendingRestore[paneId].view) &&
+        pendingRestore[paneId].view.length === 3 ? pendingRestore[paneId].view : null;
     const map = new maplibregl.Map({
         container: containerId,
         style: {
@@ -808,8 +812,8 @@ function initMap(paneId) {
                 { id: 'black-bg', type: 'background', paint: { 'background-color': '#000000' } }
             ]
         },
-        center: [-90.18, 32.30],
-        zoom: 6,
+        center: savedView ? [savedView[0], savedView[1]] : [-90.18, 32.30],
+        zoom: savedView ? savedView[2] : 6,
         preserveDrawingBuffer: true
     });
 
@@ -7526,101 +7530,111 @@ function attachMeteoHover(svg) {
     hide();
 }
 
+// Is this sidebar product-item currently showing on pane `pid`'s map? Single
+// source of truth shared by the sidebar active-state sync and the per-pane
+// workspace snapshot (saveTabs → overlay restore on reload).
+function productItemActiveOn(pid, item) {
+    const map = maps[pid];
+    if (!map) return false;
+    const layer = item.getAttribute('data-layer');
+    if (!layer) return false;
+
+    let isActive = false;
+    if (layer === 'airnow-aqi') isActive = isLayerVisible(map, 'airnow-aqi-layer');
+    else if (layer === 'metars') isActive = isLayerVisible(map, 'metars-temp');
+    else if (layer === 'radar-l3') isActive = isLayerVisible(map, 'radar-l3-layer') && paneL3[pid] && paneL3[pid].product.charAt(2) === (item.getAttribute('data-l3') || '').charAt(2);
+    else if (layer === 'storm-attr') isActive = isLayerVisible(map, 'storm-attr-cell');
+    else if (layer === 'nodd-meso') isActive = isLayerVisible(map, 'meso-circ');
+    else if (layer === 'radar-ref') isActive = isLayerVisible(map, 'radar-layer') || isLayerVisible(map, 'site-bref-layer');
+    else if (layer === 'radar-vel') isActive = isLayerVisible(map, 'site-bvel-layer');
+    else if (layer === 'radar-hc') isActive = isLayerVisible(map, 'site-bdhc-layer');
+    else if (layer === 'radar-stp') isActive = isLayerVisible(map, 'site-bdsa-layer');
+    else if (layer === 'radar-oha') isActive = isLayerVisible(map, 'site-boha-layer');
+    else if (layer === 'goes-ch') {
+        const ch = parseInt(item.getAttribute('data-channel'));
+        isActive = isLayerVisible(map, 'satellite-layer') && paneGoesChannels[pid] === ch;
+    }
+    else if (layer === 'gibs-sat') isActive = isLayerVisible(map, 'gibs-sat-layer') && paneGibs[pid] === item.getAttribute('data-gibs');
+    else if (layer === 'lightning') isActive = isLayerVisible(map, 'lightning-layer');
+    else if (layer === 'hms-smoke') isActive = isLayerVisible(map, 'hms-smoke-fill');
+    else if (layer === 'firms-fires') isActive = isLayerVisible(map, 'firms-fires-layer');
+    else if (layer === 'nws-warnings-only') isActive = isLayerVisible(map, 'nws-warnings-only-fill');
+    else if (layer === 'nws-advisories-only') isActive = isLayerVisible(map, 'nws-advis-fill');
+    else if (layer === 'nws-watches-only') isActive = isLayerVisible(map, 'nws-watches-only-fill');
+    else if (layer === 'nws-wwa') isActive = isLayerVisible(map, 'nws-wwa-wms-layer');
+    else if (layer === 'spc-md') isActive = isLayerVisible(map, 'spc-md-fill');
+    else if (layer === 'wpc-mpd') isActive = isLayerVisible(map, 'wpc-mpd-fill');
+    else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-icons');
+    else if (layer === 'probsevere') isActive = isLayerVisible(map, 'probsevere-fill');
+    else if (layer === 'airsigmet') isActive = isLayerVisible(map, 'airsigmet-fill');
+    else if (layer === 'gairmet') isActive = isLayerVisible(map, 'gairmet-fill');
+    else if (layer === 'pireps') isActive = isLayerVisible(map, 'pireps-layer');
+    else if (layer === 'taf') isActive = isLayerVisible(map, 'taf-layer');
+    else if (layer === 'cwa') isActive = isLayerVisible(map, 'cwa-fill');
+    else if (layer === 'ndbc') isActive = isLayerVisible(map, 'ndbc-layer');
+    else if (layer === 'spc-d48') isActive = isLayerVisible(map, 'spc-d48-fill');
+    else if (layer === 'ndfd-temp') isActive = isLayerVisible(map, 'ndfd-temp-layer');
+    else if (layer === 'spc-outlook') {
+        const day = item.getAttribute('data-day');
+        isActive = isLayerVisible(map, `spc-day${day}-fill`);
+    }
+    else if (layer === 'spc-prob') {
+        const day = item.getAttribute('data-day');
+        const hazard = item.getAttribute('data-hazard');
+        isActive = isLayerVisible(map, `spc-prob-${day}-${hazard}-fill`);
+    }
+    else if (layer === 'wpc-ero') {
+        const day = item.getAttribute('data-day');
+        isActive = isLayerVisible(map, `wpc-ero-day${day}-fill`);
+    }
+    else if (layer === 'spc-firewx') {
+        const day = item.getAttribute('data-day');
+        isActive = isLayerVisible(map, `spc-firewx-day${day}-fill`);
+    }
+    else if (layer === 'overlay-states') isActive = isLayerVisible(map, 'states-layer');
+    else if (layer === 'overlay-counties') isActive = isLayerVisible(map, 'counties-layer');
+    else if (layer === 'overlay-roads') isActive = isLayerVisible(map, 'esri-roads-layer');
+    else if (layer === 'overlay-cities') isActive = isLayerVisible(map, 'esri-labels-layer');
+    else if (layer === 'overlay-cwa') isActive = isLayerVisible(map, 'nws-cwa-layer');
+    else if (layer === 'river-gauges') isActive = isLayerVisible(map, 'river-gauges-layer');
+    else if (layer === 'solar-terminator') isActive = isLayerVisible(map, 'solar-night-fill');
+    else if (layer === 'wpc-isobars') isActive = isLayerVisible(map, 'wpc-isobars-line');
+    else if (layer === 'sfc-isobars-2mb') isActive = isLayerVisible(map, 'sfc-isobars-2mb-line');
+    else if (layer === 'sfc-isotherms') isActive = isLayerVisible(map, 'sfc-isotherms-line');
+    else if (layer === 'sfc-isodrosotherms') isActive = isLayerVisible(map, 'sfc-isodrosotherms-line');
+    else if (layer === 'wpc-fronts') isActive = isLayerVisible(map, 'wpc-fronts-solid');
+    else if (layer === 'wpc-qpf') {
+        const qpfId = item.getAttribute('data-qpf');
+        isActive = isLayerVisible(map, 'wpc-qpf-layer') && activeQpfLayer === qpfId;
+    }
+    else if (layer === 'nhc-storms') isActive = isLayerVisible(map, 'nhc-track-pts');
+    else if (layer === 'nhc-outlook') isActive = isLayerVisible(map, 'nhc-outlook-fill');
+    else if (layer === 'cpc-temp') {
+        const period = item.getAttribute('data-period');
+        isActive = isLayerVisible(map, 'cpc-temp-layer') && activeCpcTempLayer === period;
+    }
+    else if (layer === 'cpc-precip') {
+        const period = item.getAttribute('data-period');
+        isActive = isLayerVisible(map, 'cpc-precip-layer') && activeCpcPrecipLayer === period;
+    }
+    else if (layer === 'mrms-echotops') isActive = isLayerVisible(map, 'mrms-echotops-layer');
+    else if (layer === 'mrms-qpe') {
+        const qpePeriod = item.getAttribute('data-qpe');
+        isActive = isLayerVisible(map, 'mrms-qpe-layer') && activeMrmsQpe === qpePeriod;
+    }
+    else if (layer === 'drought-monitor') isActive = isLayerVisible(map, 'drought-fill');
+    else if (layer === 'cpc-drought-outlook') isActive = isLayerVisible(map, 'cpc-drought-layer');
+
+    return isActive;
+}
+
 function updateSidebarToActivePane() {
     const map = maps[activePaneId];
     if (!map) return;
 
     document.querySelectorAll('.product-item').forEach(item => {
-        const layer = item.getAttribute('data-layer');
-        if (!layer) return;
-
-        let isActive = false;
-        if (layer === 'airnow-aqi') isActive = isLayerVisible(map, 'airnow-aqi-layer');
-        else if (layer === 'metars') isActive = isLayerVisible(map, 'metars-temp');
-        else if (layer === 'radar-l3') isActive = isLayerVisible(map, 'radar-l3-layer') && paneL3[activePaneId] && paneL3[activePaneId].product.charAt(2) === (item.getAttribute('data-l3') || '').charAt(2);
-        else if (layer === 'storm-attr') isActive = isLayerVisible(map, 'storm-attr-cell');
-        else if (layer === 'nodd-meso') isActive = isLayerVisible(map, 'meso-circ');
-        else if (layer === 'radar-ref') isActive = isLayerVisible(map, 'radar-layer') || isLayerVisible(map, 'site-bref-layer');
-        else if (layer === 'radar-vel') isActive = isLayerVisible(map, 'site-bvel-layer');
-        else if (layer === 'radar-hc') isActive = isLayerVisible(map, 'site-bdhc-layer');
-        else if (layer === 'radar-stp') isActive = isLayerVisible(map, 'site-bdsa-layer');
-        else if (layer === 'radar-oha') isActive = isLayerVisible(map, 'site-boha-layer');
-        else if (layer === 'goes-ch') {
-            const ch = parseInt(item.getAttribute('data-channel'));
-            isActive = isLayerVisible(map, 'satellite-layer') && paneGoesChannels[activePaneId] === ch;
-        }
-        else if (layer === 'gibs-sat') isActive = isLayerVisible(map, 'gibs-sat-layer') && paneGibs[activePaneId] === item.getAttribute('data-gibs');
-        else if (layer === 'lightning') isActive = isLayerVisible(map, 'lightning-layer');
-        else if (layer === 'hms-smoke') isActive = isLayerVisible(map, 'hms-smoke-fill');
-        else if (layer === 'firms-fires') isActive = isLayerVisible(map, 'firms-fires-layer');
-        else if (layer === 'nws-warnings-only') isActive = isLayerVisible(map, 'nws-warnings-only-fill');
-        else if (layer === 'nws-advisories-only') isActive = isLayerVisible(map, 'nws-advis-fill');
-        else if (layer === 'nws-watches-only') isActive = isLayerVisible(map, 'nws-watches-only-fill');
-        else if (layer === 'nws-wwa') isActive = isLayerVisible(map, 'nws-wwa-wms-layer');
-        else if (layer === 'spc-md') isActive = isLayerVisible(map, 'spc-md-fill');
-        else if (layer === 'wpc-mpd') isActive = isLayerVisible(map, 'wpc-mpd-fill');
-        else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-icons');
-        else if (layer === 'probsevere') isActive = isLayerVisible(map, 'probsevere-fill');
-        else if (layer === 'airsigmet') isActive = isLayerVisible(map, 'airsigmet-fill');
-        else if (layer === 'gairmet') isActive = isLayerVisible(map, 'gairmet-fill');
-        else if (layer === 'pireps') isActive = isLayerVisible(map, 'pireps-layer');
-        else if (layer === 'taf') isActive = isLayerVisible(map, 'taf-layer');
-        else if (layer === 'cwa') isActive = isLayerVisible(map, 'cwa-fill');
-        else if (layer === 'ndbc') isActive = isLayerVisible(map, 'ndbc-layer');
-        else if (layer === 'spc-d48') isActive = isLayerVisible(map, 'spc-d48-fill');
-        else if (layer === 'ndfd-temp') isActive = isLayerVisible(map, 'ndfd-temp-layer');
-        else if (layer === 'spc-outlook') {
-            const day = item.getAttribute('data-day');
-            isActive = isLayerVisible(map, `spc-day${day}-fill`);
-        }
-        else if (layer === 'spc-prob') {
-            const day = item.getAttribute('data-day');
-            const hazard = item.getAttribute('data-hazard');
-            isActive = isLayerVisible(map, `spc-prob-${day}-${hazard}-fill`);
-        }
-        else if (layer === 'wpc-ero') {
-            const day = item.getAttribute('data-day');
-            isActive = isLayerVisible(map, `wpc-ero-day${day}-fill`);
-        }
-        else if (layer === 'spc-firewx') {
-            const day = item.getAttribute('data-day');
-            isActive = isLayerVisible(map, `spc-firewx-day${day}-fill`);
-        }
-        else if (layer === 'overlay-states') isActive = isLayerVisible(map, 'states-layer');
-        else if (layer === 'overlay-counties') isActive = isLayerVisible(map, 'counties-layer');
-        else if (layer === 'overlay-roads') isActive = isLayerVisible(map, 'esri-roads-layer');
-        else if (layer === 'overlay-cities') isActive = isLayerVisible(map, 'esri-labels-layer');
-        else if (layer === 'overlay-cwa') isActive = isLayerVisible(map, 'nws-cwa-layer');
-        else if (layer === 'river-gauges') isActive = isLayerVisible(map, 'river-gauges-layer');
-        else if (layer === 'solar-terminator') isActive = isLayerVisible(map, 'solar-night-fill');
-        else if (layer === 'wpc-isobars') isActive = isLayerVisible(map, 'wpc-isobars-line');
-        else if (layer === 'sfc-isobars-2mb') isActive = isLayerVisible(map, 'sfc-isobars-2mb-line');
-        else if (layer === 'sfc-isotherms') isActive = isLayerVisible(map, 'sfc-isotherms-line');
-        else if (layer === 'sfc-isodrosotherms') isActive = isLayerVisible(map, 'sfc-isodrosotherms-line');
-        else if (layer === 'wpc-fronts') isActive = isLayerVisible(map, 'wpc-fronts-solid');
-        else if (layer === 'wpc-qpf') {
-            const qpfId = item.getAttribute('data-qpf');
-            isActive = isLayerVisible(map, 'wpc-qpf-layer') && activeQpfLayer === qpfId;
-        }
-        else if (layer === 'nhc-storms') isActive = isLayerVisible(map, 'nhc-track-pts');
-        else if (layer === 'nhc-outlook') isActive = isLayerVisible(map, 'nhc-outlook-fill');
-        else if (layer === 'cpc-temp') {
-            const period = item.getAttribute('data-period');
-            isActive = isLayerVisible(map, 'cpc-temp-layer') && activeCpcTempLayer === period;
-        }
-        else if (layer === 'cpc-precip') {
-            const period = item.getAttribute('data-period');
-            isActive = isLayerVisible(map, 'cpc-precip-layer') && activeCpcPrecipLayer === period;
-        }
-        else if (layer === 'mrms-echotops') isActive = isLayerVisible(map, 'mrms-echotops-layer');
-        else if (layer === 'mrms-qpe') {
-            const qpePeriod = item.getAttribute('data-qpe');
-            isActive = isLayerVisible(map, 'mrms-qpe-layer') && activeMrmsQpe === qpePeriod;
-        }
-        else if (layer === 'drought-monitor') isActive = isLayerVisible(map, 'drought-fill');
-        else if (layer === 'cpc-drought-outlook') isActive = isLayerVisible(map, 'cpc-drought-layer');
-
-        if (isActive) item.classList.add('active');
+        if (!item.getAttribute('data-layer')) return;
+        if (productItemActiveOn(activePaneId, item)) item.classList.add('active');
         else item.classList.remove('active');
     });
 
@@ -7729,6 +7743,13 @@ function refreshAllRadarStatus() {
         .then(() => { if (!isPlaying) refreshTimestampLabel(); });
 }
 
+function persistWatchdogFilter() {
+    try {
+        localStorage.setItem('fxnet_watchdog_state', document.getElementById('watchdog-filter-state')?.value || 'all');
+        localStorage.setItem('fxnet_watchdog_wfo', document.getElementById('watchdog-filter-wfo')?.value || 'all');
+    } catch (_) {}
+}
+
 function initProductSidebar() {
     const stateFilter = document.getElementById('watchdog-filter-state');
     const wfoFilter = document.getElementById('watchdog-filter-wfo');
@@ -7740,6 +7761,7 @@ function initProductSidebar() {
         });
         stateFilter.addEventListener('change', () => {
             if (wfoFilter) wfoFilter.value = 'all';
+            persistWatchdogFilter();
             applyWatchdogFilter();
         });
     }
@@ -7747,9 +7769,18 @@ function initProductSidebar() {
         rebuildWfoFilter(); // seed from static roster; live offices merged in as alerts arrive
         wfoFilter.addEventListener('change', () => {
             if (stateFilter) stateFilter.value = 'all';
+            persistWatchdogFilter();
             applyWatchdogFilter();
         });
     }
+    // Restore the last-used state/WFO filter (drives both the WATCHDOG list
+    // and which warnings raise AlertViz toasts)
+    try {
+        const st = localStorage.getItem('fxnet_watchdog_state');
+        const wfo = localStorage.getItem('fxnet_watchdog_wfo');
+        if (stateFilter && st && Array.from(stateFilter.options).some(o => o.value === st)) stateFilter.value = st;
+        if (wfoFilter && wfo && Array.from(wfoFilter.options).some(o => o.value === wfo)) wfoFilter.value = wfo;
+    } catch (_) {}
 
     document.querySelectorAll('.product-item').forEach(item => {
         item.addEventListener('click', async () => {
@@ -9709,9 +9740,12 @@ function startTabRename(tabId) {
 function applyPaneRestore(paneId) {
     const conf = pendingRestore[paneId];
     if (!conf) return;
-    delete pendingRestore[paneId];
     const map = maps[paneId];
     if (!map) return;
+    // Put the pane back where it was (center/zoom persist per pane)
+    if (Array.isArray(conf.view) && conf.view.length === 3) {
+        try { map.jumpTo({ center: [conf.view[0], conf.view[1]], zoom: conf.view[2] }); } catch (_) {}
+    }
     try {
         if (conf.gibs) {
             loadGibsLive(paneId, conf.gibs);
@@ -9737,9 +9771,80 @@ function applyPaneRestore(paneId) {
             if (paneId === activePaneId) activeGoesChannel = conf.goesChannel;
         }
     } catch (_) {}
+    // Overlay products are re-applied by re-clicking their sidebar items (queue
+    // below). The pending conf is kept until that finishes so an early save
+    // can't overwrite the snapshot with the half-restored state.
+    if (conf.overlays && conf.overlays.length) queueOverlayRestore(paneId, conf.overlays);
+    else delete pendingRestore[paneId];
     if (paneId === activePaneId && typeof updateSidebarToActivePane === 'function') {
         updateSidebarToActivePane();
     }
+}
+
+// ── Overlay snapshot & restore ───────────────────────────────────────────────
+// Overlay products (warnings, outlooks, obs, aviation…) are restored by
+// re-clicking their sidebar items so every existing fetch/visibility path is
+// reused verbatim (same mechanism as Procedures). Clicks act on the active
+// pane, so panes are processed one at a time with activePaneId temporarily
+// pointed at the pane being restored.
+const _overlayRestoreQueue = [];
+let _overlayRestoreBusy = false;
+
+function queueOverlayRestore(paneId, recs) {
+    _overlayRestoreQueue.push({ paneId, recs });
+    if (!_overlayRestoreBusy) _drainOverlayRestoreQueue();
+}
+
+async function _drainOverlayRestoreQueue() {
+    _overlayRestoreBusy = true;
+    // let setupMapLayers/legends settle after the map 'load' event
+    await new Promise(r => setTimeout(r, 500));
+    while (_overlayRestoreQueue.length) {
+        const { paneId, recs } = _overlayRestoreQueue.shift();
+        if (!maps[paneId]) { delete pendingRestore[paneId]; continue; }
+        const prevActive = activePaneId;
+        let n = 0;
+        try {
+            activePaneId = paneId;
+            updateSidebarToActivePane();   // sync .active classes to THIS pane before clicking
+            for (const rec of recs) {
+                const item = document.querySelector(_procItemSelector(rec));
+                if (item && !item.classList.contains('active')) {
+                    item.click();
+                    n++;
+                    await new Promise(r => setTimeout(r, 150));
+                }
+            }
+        } catch (_) {}
+        delete pendingRestore[paneId];
+        // hand the active pane back unless the user switched panes mid-restore
+        if (activePaneId === paneId) activePaneId = prevActive;
+        updateSidebarToActivePane();
+        if (n) addLiveLog(`RESTORE: ${n} overlay${n === 1 ? '' : 's'} re-applied on pane ${paneId}`, '#00e5ff');
+    }
+    _overlayRestoreBusy = false;
+}
+
+// Snapshot which overlay products are showing on a pane, as procedure-style
+// records ({layer, day, hazard, …}) that restore by re-clicking the item.
+// Imagery that applyPaneRestore rebuilds directly (site radar, GOES, GIBS, L3)
+// is excluded; 'radar-ref' is kept only for the national mosaic case.
+const _OVERLAY_SNAPSHOT_SKIP = new Set(['radar-vel', 'radar-hc', 'radar-stp', 'radar-oha', 'goes-ch', 'gibs-sat', 'radar-l3']);
+
+function capturePaneOverlays(pid) {
+    const m = maps[pid];
+    if (!m) return [];
+    const recs = [];
+    document.querySelectorAll('.product-item').forEach(item => {
+        const layer = item.getAttribute('data-layer');
+        if (!layer || _OVERLAY_SNAPSHOT_SKIP.has(layer)) return;
+        if (layer === 'radar-ref' && !isLayerVisible(m, 'radar-layer')) return;
+        if (!productItemActiveOn(pid, item)) return;
+        const rec = { layer };
+        PROC_ATTRS.forEach(k => { const v = item.getAttribute('data-' + k); if (v != null) rec[k] = v; });
+        recs.push(rec);
+    });
+    return recs;
 }
 
 function saveTabs() {
@@ -9752,6 +9857,11 @@ function saveTabs() {
                 name: t.name,
                 layout: t.layout,
                 panes: paneIdsForTab(t.id).reduce((acc, pid) => {
+                    // Pane not restored yet (map still loading, or it lives in a
+                    // tab that hasn't been visited this session) — carry the
+                    // saved setup forward instead of overwriting it with the
+                    // empty live state.
+                    if (pendingRestore[pid]) { acc[pid] = pendingRestore[pid]; return acc; }
                     const conf = {};
                     const m = maps[pid];
                     if (paneRadarSites[pid]) conf.radarSite = paneRadarSites[pid];
@@ -9760,11 +9870,18 @@ function saveTabs() {
                     if (paneGibs[pid]) conf.gibs = paneGibs[pid];
                     if (paneL3[pid]) conf.l3 = paneL3[pid];
                     // Record whether the imagery layers are actually showing, so
-                    // we only auto-restore what was visible (not merely selected).
+                    // we only auto-restore what was visible (not merely selected),
+                    // plus the pane's view and its active overlay products.
                     if (m) {
                         conf.radarVisible = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer',
                             'site-bdsa-layer', 'site-boha-layer'].some(l => isLayerVisible(m, l));
                         conf.satVisible = isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] != null;
+                        try {
+                            const c = m.getCenter();
+                            conf.view = [+c.lng.toFixed(4), +c.lat.toFixed(4), +m.getZoom().toFixed(2)];
+                        } catch (_) {}
+                        const overlays = capturePaneOverlays(pid);
+                        if (overlays.length) conf.overlays = overlays;
                     }
                     return Object.keys(conf).length ? (acc[pid] = conf, acc) : acc;
                 }, {})
@@ -9788,8 +9905,9 @@ function loadTabs() {
                 if (conf.radarSite) paneRadarSites[pid] = conf.radarSite;
                 if (conf.radarProduct) paneRadarProducts[pid] = conf.radarProduct;
                 if (conf.goesChannel != null) paneGoesChannels[pid] = conf.goesChannel;
-                // Defer live-layer restore until the pane's map loads
-                if (conf.gibs || conf.l3 || conf.radarVisible || conf.satVisible) pendingRestore[pid] = conf;
+                // Defer live-layer/view/overlay restore until the pane's map loads
+                if (conf.gibs || conf.l3 || conf.radarVisible || conf.satVisible || conf.view ||
+                    (conf.overlays && conf.overlays.length)) pendingRestore[pid] = conf;
             });
         });
         activeTabId = (data.activeTabId && tabs[data.activeTabId]) ? data.activeTabId : Object.keys(tabs)[0];
@@ -10667,6 +10785,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 6, 2026', items: [
+        'Your workspace now truly saves: reloading the app brings back everything, not just the tab names. Every pane restores its map position and zoom, its radar/satellite imagery, AND all overlay products — warnings, watches, SPC outlooks, METARs, fronts, aviation layers, buoys… exactly as you left them. The snapshot autosaves every 15 seconds and on close.',
+        'Multi-tab fix: panes in tabs you hadn\'t visited yet no longer lose their saved setup — the snapshot carries un-visited tabs forward instead of overwriting them.',
+        'The NWS Warnings state/WFO filter is remembered across sessions, so AlertViz toasts stay scoped to your area without re-selecting it every time.',
+        'Settings backup: two new ANALYSIS TOOLS items export ALL workstation settings (workspaces, procedures, filters, preferences) to a JSON file and import them back — move between browsers/machines or keep a safety copy.'
+    ]},
     { date: 'Jul 3, 2026 (evening)', items: [
         'SPC Mesoanalysis — full catalog: the viewer now carries everything on SPC’s own page (~140 parameters in 11 grouped menus): surface analyses and 2-3 hour change fields, upper-air charts for 925/850/700/500/300 mb with frontogenesis at seven levels and jet-circulation dynamics, the complete thermodynamics and wind-shear suites, all composite indices (supercell, sig tornado, SARS hail, derecho, microburst, VTP…), multi-parameter combos, heavy-rain, winter-weather and fire-weather sets, plus the classic/beta indices. Every parameter code was verified live against spc.noaa.gov and labeled with SPC’s official menu name.',
         'Meso / TVS markers (MDA): a new RADAR item plots the NEXRAD Mesocyclone Detection Algorithm output — every detected circulation as an open circle colored by strength rank (yellow → orange → red), with a red ▼ when the TVS flag is set. Click one for strength rank, rotational velocity, base/depth, motion and MSI. Follows the volume-scan refresh like STI.',
@@ -11134,6 +11258,63 @@ function initProcedures() {
         addLiveLog(`PROCEDURE: saved "${esc(name)}" (${store[name].active.length} layers)`, '#00ff88');
     });
     renderProcList();
+    initSettingsBackup();
+}
+
+// ── Settings backup (export/import every fxnet_* localStorage key) ──────────
+// Everything the workstation persists — workspace tabs, procedures, filters,
+// UI prefs — lives in localStorage under an fxnet_ prefix, so a browser
+// upgrade, profile wipe or machine change loses it all. These two items dump
+// the whole set to a JSON file and load it back (then reload the app).
+function initSettingsBackup() {
+    document.getElementById('settings-export')?.addEventListener('click', () => {
+        try {
+            const dump = {};
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith('fxnet_')) dump[k] = localStorage.getItem(k);
+            }
+            const blob = new Blob([JSON.stringify({ app: 'fxnet-nextgen', exported: new Date().toISOString(), settings: dump }, null, 2)],
+                { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `fxnet-settings-${new Date().toISOString().substring(0, 10)}.json`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+            addLiveLog(`SETTINGS: exported ${Object.keys(dump).length} keys to file`, '#00ff88');
+        } catch (e) {
+            addLiveLog('SETTINGS: export failed — ' + esc(e.message || String(e)), '#ff5252');
+        }
+    });
+    document.getElementById('settings-import')?.addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.addEventListener('change', () => {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    const data = JSON.parse(reader.result);
+                    const settings = (data && data.app === 'fxnet-nextgen' && data.settings) ? data.settings : null;
+                    if (!settings) throw new Error('not an FX-Net settings file');
+                    let n = 0;
+                    Object.entries(settings).forEach(([k, v]) => {
+                        if (k.startsWith('fxnet_') && typeof v === 'string') { localStorage.setItem(k, v); n++; }
+                    });
+                    if (!n) throw new Error('file contained no settings');
+                    if (window.confirm(`Imported ${n} settings. Reload the workstation now to apply them?`)) {
+                        window.location.reload();
+                    }
+                } catch (e) {
+                    window.alert('Import failed: ' + (e.message || e));
+                }
+            };
+            reader.readAsText(file);
+        });
+        input.click();
+    });
 }
 
 
