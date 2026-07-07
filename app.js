@@ -10785,6 +10785,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 7, 2026', items: [
+        'Radar tilt fix — Storm Relative Velocity: stepping SRM up through the elevation angles now works. The tilt ladder previously asked for products that don’t exist above 0.5° (the native SRM is only made at the lowest cut, and the higher velocity tilts use different product codes than assumed). SRM now derives each tilt from the velocity product actually in the feed — 0.5° → 0.9° → 1.3° → 2.4° — always subtracting the storm motion from the 0.5° header. CC/ZDR/KDP tilt stepping was also corrected to the true lowest four cuts (0.5/0.9/1.3/1.8°; it previously skipped 0.9° and jumped to 2.4/3.4°). If a tilt isn’t in the radar’s current scan strategy, the log now says so plainly instead of failing silently.'
+    ]},
     { date: 'Jul 6, 2026 (update 2)', items: [
         'Procedures are now multi-pane: “Save Current Display…” records the pane layout plus every visible pane’s map view, imagery and overlays — so a 4-panel severe setup (outlook / tornado / wind / hail) reloads as all four panels, not just the last one you touched. Loading a procedure switches the tab to the saved layout, clears each pane, and rebuilds it. Bundles saved before this update still load the old way (active pane only) — just re-save them once to upgrade.'
     ]},
@@ -11433,6 +11436,13 @@ async function fetchMesoMarkers(paneId, station) {
 }
 
 // ── All-tilts: step the active pane's L3 product through elevation angles ──
+// NODD super-res tilt characters run 0→A→1→B (≈0.5/0.9/1.3/1.8-2.4°), not
+// 0→1→2→3 — the API maps each code to the products actually in the bucket.
+const L3_TILT_CHARS = ['0', 'A', '1', 'B'];
+function l3TiltIndex(product) {
+    const i = L3_TILT_CHARS.indexOf((product || '').charAt(1));
+    return i < 0 ? 0 : i;   // legacy digit codes (N2C…) normalize on next step
+}
 function updateL3TiltControl() {
     const ctrl = document.getElementById('l3-tilt-control');
     const label = document.getElementById('l3-tilt-label');
@@ -11441,7 +11451,7 @@ function updateL3TiltControl() {
     const map = maps[activePaneId];
     if (st && map && isLayerVisible(map, 'radar-l3-layer')) {
         ctrl.style.display = 'flex';
-        const tilt = parseInt(st.product.charAt(1), 10) || 0;
+        const tilt = l3TiltIndex(st.product);
         const el = st.meta && st.meta.elevation;
         label.textContent = (el != null ? el + '°' : ['0.5°', '0.9°', '1.3°', '1.8°'][tilt]) + ` · T${tilt}`;
     } else {
@@ -11452,10 +11462,10 @@ async function stepL3Tilt(delta) {
     const pid = activePaneId;
     const st = paneL3[pid];
     if (!st) return;
-    const cur = parseInt(st.product.charAt(1), 10) || 0;
+    const cur = l3TiltIndex(st.product);
     const next = Math.max(0, Math.min(3, cur + delta));
     if (next === cur) return;
-    const newProduct = st.product.charAt(0) + String(next) + st.product.charAt(2);
+    const newProduct = st.product.charAt(0) + L3_TILT_CHARS[next] + st.product.charAt(2);
     addLiveLog(`L3 TILT: requesting T${next} (${newProduct})…`, '#33c27a');
     await loadL3Radar(pid, st.station, newProduct);
     updateL3TiltControl();

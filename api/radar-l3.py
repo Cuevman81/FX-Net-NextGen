@@ -90,16 +90,20 @@ SRM_PALETTE = [
 ]
 
 # ── All-tilts: elevation variants share their base moment's calibration/palette ──
-# L3 mnemonics are [N][tilt-digit][moment]: N0B/N1B/N2B/N3B are base reflectivity at
-# the first four elevation angles; likewise G(vel), C(CC), X(ZDR), K(KDP), S(SRM).
-# Availability of higher tilts depends on the active VCP.
-for _base, _variants in {'N0B': ('N1B', 'N2B', 'N3B'), 'N0G': ('N1G', 'N2G', 'N3G'),
-                         'N0C': ('N1C', 'N2C', 'N3C'), 'N0X': ('N1X', 'N2X', 'N3X'),
-                         'N0K': ('N1K', 'N2K', 'N3K')}.items():
+# L3 mnemonics are [N][tilt][moment]. For the super-res digital moments the tilt
+# characters run 0→A→1→B (≈0.5/0.9/1.3/1.8°, per the live NODD bucket); the
+# legacy digit-only names continue upward (N2C=2.4°, N3C=3.4°). Velocity's
+# higher cuts arrive as the conventional 256-level product 99 (N2U/N3U) — same
+# 0.5 kt / −64.5 encoding as N0G. Availability depends on the active VCP.
+for _base, _variants in {'N0B': ('NAB', 'N1B', 'NBB', 'N2B', 'N3B'),
+                         'N0G': ('NAG', 'N1G', 'NBG', 'N2G', 'N3G', 'N1U', 'N2U', 'N3U'),
+                         'N0C': ('NAC', 'N1C', 'NBC', 'N2C', 'N3C'),
+                         'N0X': ('NAX', 'N1X', 'NBX', 'N2X', 'N3X'),
+                         'N0K': ('NAK', 'N1K', 'NBK', 'N2K', 'N3K')}.items():
     for _v in _variants:
         CAL[_v] = CAL[_base]
         STOPS[_v] = STOPS[_base]
-for _v in ('N1S', 'N2S', 'N3S'):
+for _v in ('NAS', 'N1S', 'NBS', 'N2S', 'N3S'):
     V16[_v] = V16['N0S']
 
 
@@ -523,12 +527,26 @@ def build_meso(station):
                      'time': prod_time, 'count': len(features), 'key': key}}
 
 
-# Storm-relative velocity is derived on the fly from the super-resolution base
-# velocity (N?G — 0.25 km range, 0.5° azimuth, 256 levels) minus the mean
-# storm-motion radial component read from the legacy product-56 header. That is
-# ~8x the data of the native 16-level SRM (~1 km / 1°) and reproduces its sign
-# ~93% (validated against live MKX). Palette is the base-velocity table.
-SRM_TO_VEL = {'N0S': 'N0G', 'N1S': 'N1G', 'N2S': 'N2G', 'N3S': 'N3G'}
+# Storm-relative velocity is derived on the fly from the digital base velocity
+# minus the mean storm-motion radial component read from the 0.5° product-56
+# header (the only tilt product 56 is generated at — the motion vector itself is
+# tilt-independent). SRM tilt pseudo-codes carry the same tilt character as the
+# other digital products; each maps to the velocity products actually produced
+# at that cut, best (super-res N?G) first. NBG (1.8° super-res) is rarely in
+# the bucket, so tilt B falls to the conventional 2.4° cut (N2U). ~8x the data
+# of the native 16-level SRM; sign match ~93% (validated against live MKX).
+SRM_TILT_VEL = {
+    '0': ('N0G',),
+    'A': ('NAG',),
+    '1': ('N1G', 'N1U'),
+    'B': ('NBG', 'N2U'),
+    '2': ('N2U', 'NBG'),   # legacy saved codes keep their real angle (2.4°)
+    '3': ('N3U',),
+}
+
+
+def _is_srm(product):
+    return len(product) == 3 and product[0] == 'N' and product[2] == 'S' and product[1] in SRM_TILT_VEL
 
 
 def _fetch_key(station, product):
@@ -540,12 +558,20 @@ def _fetch_key(station, product):
 
 
 def build_srm(station, product):
-    velprod = SRM_TO_VEL.get(product, 'N0G')
-    # Mean storm motion from the native SRM product's header.
-    sraw, _ = _fetch_key(station, product)
-    sdec = decode_l3_v16(sraw, product)
-    # Super-resolution base velocity for the same tilt.
-    graw, gkey = _fetch_key(station, velprod)
+    # Mean storm motion (tilt-independent) from the 0.5° product-56 header.
+    sraw, _ = _fetch_key(station, 'N0S')
+    sdec = decode_l3_v16(sraw, 'N0S')
+    # Digital base velocity for the requested tilt — best available product.
+    graw = gkey = velprod = None
+    for cand in SRM_TILT_VEL.get(product[1], ('N0G',)):
+        try:
+            graw, gkey = _fetch_key(station, cand)
+            velprod = cand
+            break
+        except Exception:
+            continue
+    if graw is None:
+        raise ValueError(f'SRM tilt {product[1]}: no velocity data in the current scan')
     gdec = decode_l3(graw, velprod)
     # SRM(az) = Vbase(az) - Vstorm·r̂(az) = Vbase - spd·cos(az - dir).
     off = sdec['storm_spd'] * np.cos(np.radians(gdec['az'] - sdec['storm_dir']))
@@ -569,13 +595,15 @@ def build_radar(station, product):
         raise ValueError('invalid station')
     if product not in CAL and product not in V16:
         raise ValueError(f'unsupported product {product}')
-    # High-res storm-relative velocity, derived from base velocity. Falls back to
-    # the native 16-level SRM if that tilt's base velocity isn't in the VCP.
-    if product in SRM_TO_VEL:
+    # High-res storm-relative velocity, derived from base velocity. The native
+    # 16-level SRM exists only at 0.5° (N0S), so that's the only tilt with a
+    # fallback; other tilts surface a clear "not in this scan" error instead.
+    if _is_srm(product):
         try:
             return build_srm(station, product)
-        except Exception:
-            pass
+        except Exception as e:
+            if product != 'N0S':
+                raise ValueError(f'SRM tilt unavailable: {e}')
     key = fetch_latest_key(station, product)
     if not key:
         raise ValueError(f'no recent {product} data for {station}')
