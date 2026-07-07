@@ -160,6 +160,10 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 qs = parse_qs(urlparse(self.path).query)
                 station = qs.get('station', ['KDGX'])[0].upper()
                 product = qs.get('product', ['N0B'])[0].upper()
+                try:
+                    offset = max(0, min(int(qs.get('offset', ['0'])[0]), 19))
+                except ValueError:
+                    offset = 0
                 rl3 = load_api('radar-l3.py', 'radar_l3')
                 if product in ('NST', 'STORMTRACK'):
                     result = rl3.build_storm_attr(station)
@@ -168,7 +172,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 elif product in ('NMD', 'MESO'):
                     result = rl3.build_meso(station)
                 else:
-                    result = rl3.build_radar(station, product)
+                    result = rl3.build_radar(station, product, offset)
                 self._send_json(result)
             except Exception as e:
                 self._send_json({'success': False, 'error': str(e)}, 500)

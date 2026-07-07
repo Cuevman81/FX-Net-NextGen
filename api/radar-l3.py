@@ -107,9 +107,12 @@ for _v in ('NAS', 'N1S', 'NBS', 'N2S', 'N3S'):
     V16[_v] = V16['N0S']
 
 
-def fetch_latest_key(station, product):
+def fetch_latest_key(station, product, offset=0):
+    """Newest key for a station/product, or the offset-th scan back (0 = latest).
+    Offsets past today's scans continue into yesterday's."""
     st3 = station[1:].upper() if (len(station) == 4 and station[0].upper() == 'K') else station.upper()
     now = datetime.now(timezone.utc)
+    all_keys = []
     for day_off in (0, 1):
         d = now - timedelta(days=day_off)
         url = f"{L3_BUCKET}/?prefix={st3}_{product}_{d:%Y_%m_%d}_"
@@ -118,10 +121,13 @@ def fetch_latest_key(station, product):
             xml = urllib.request.urlopen(req, timeout=15).read()
             ns = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
             keys = [c.find('s3:Key', ns).text for c in ET.fromstring(xml).findall('s3:Contents', ns)]
-            if keys:
-                return sorted(keys)[-1]
+            all_keys = sorted(keys) + all_keys   # yesterday's sort before today's
         except Exception:
             continue
+        if len(all_keys) > offset:
+            break                                 # today already covers the offset
+    if len(all_keys) > offset:
+        return all_keys[-1 - offset]
     return None
 
 
@@ -549,23 +555,24 @@ def _is_srm(product):
     return len(product) == 3 and product[0] == 'N' and product[2] == 'S' and product[1] in SRM_TILT_VEL
 
 
-def _fetch_key(station, product):
-    key = fetch_latest_key(station, product)
+def _fetch_key(station, product, offset=0):
+    key = fetch_latest_key(station, product, offset)
     if not key:
-        raise ValueError(f'no recent {product} data for {station}')
+        raise ValueError(f'no recent {product} data for {station}' + (f' (scan -{offset})' if offset else ''))
     req = urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'})
     return urllib.request.urlopen(req, timeout=25).read(), key
 
 
-def build_srm(station, product):
+def build_srm(station, product, offset=0):
     # Mean storm motion (tilt-independent) from the 0.5° product-56 header.
+    # Always the latest — it barely drifts over a loop's worth of scans.
     sraw, _ = _fetch_key(station, 'N0S')
     sdec = decode_l3_v16(sraw, 'N0S')
     # Digital base velocity for the requested tilt — best available product.
     graw = gkey = velprod = None
     for cand in SRM_TILT_VEL.get(product[1], ('N0G',)):
         try:
-            graw, gkey = _fetch_key(station, cand)
+            graw, gkey = _fetch_key(station, cand, offset)
             velprod = cand
             break
         except Exception:
@@ -590,7 +597,7 @@ def build_srm(station, product):
     }
 
 
-def build_radar(station, product):
+def build_radar(station, product, offset=0):
     if not _STATION_RE.match(station):
         raise ValueError('invalid station')
     if product not in CAL and product not in V16:
@@ -600,11 +607,11 @@ def build_radar(station, product):
     # fallback; other tilts surface a clear "not in this scan" error instead.
     if _is_srm(product):
         try:
-            return build_srm(station, product)
+            return build_srm(station, product, offset)
         except Exception as e:
-            if product != 'N0S':
+            if product != 'N0S' or offset:
                 raise ValueError(f'SRM tilt unavailable: {e}')
-    key = fetch_latest_key(station, product)
+    key = fetch_latest_key(station, product, offset)
     if not key:
         raise ValueError(f'no recent {product} data for {station}')
     req = urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'})
@@ -639,6 +646,10 @@ class handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             station = qs.get('station', ['KDGX'])[0].upper()
             product = qs.get('product', ['N0B'])[0].upper()
+            try:
+                offset = max(0, min(int(qs.get('offset', ['0'])[0]), 19))
+            except ValueError:
+                offset = 0
             if product in ('NST', 'STORMTRACK'):
                 result = build_storm_attr(station)
             elif product in ('NVW', 'VAD'):
@@ -646,7 +657,7 @@ class handler(BaseHTTPRequestHandler):
             elif product in ('NMD', 'MESO'):
                 result = build_meso(station)
             else:
-                result = build_radar(station, product)
+                result = build_radar(station, product, offset)
             body = json.dumps(result).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')

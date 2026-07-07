@@ -38,6 +38,9 @@ let animLastSi = -1;
 const USE_SUPER_RES_RADAR = false;
 
 let animLastRi = -1;
+let animL3Frames = {};      // paneId -> [{image, coordinates, time, label}] (NODD L3 loop frames)
+let animL3Count = 0;        // longest per-pane L3 frame list in the current loop
+let animLastLi = -1;
 let preAnimVisibility = {}; // Stores layer visibility before loop starts
 // Default radar mode = National Mosaic so "Reflectivity" shows CONUS, not a distant single site.
 // (A real site code here switches that pane to single-site products via the SITE selector.)
@@ -6116,7 +6119,7 @@ function rebuildWfoFilter() {
 // SECTION 11: ANIMATION ENGINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function startAnimation() {
+async function startAnimation() {
     if (isPlaying) return;
     isPlaying = true;
 
@@ -6133,6 +6136,7 @@ function startAnimation() {
         isLayerVisible(m, 'site-bvel-layer') || isLayerVisible(m, 'site-bdhc-layer') ||
         isLayerVisible(m, 'site-bdsa-layer') || isLayerVisible(m, 'site-boha-layer')
     );
+    const showL3 = loopMaps.some(([pid, m]) => isLayerVisible(m, 'radar-l3-layer') && paneL3[pid]);
 
     const durationMin = parseInt(document.getElementById('loop-duration').value) || 60;
     const stepMin = parseInt(document.getElementById('loop-step').value) || 5;
@@ -6142,13 +6146,14 @@ function startAnimation() {
     if (playBtn) playBtn.innerHTML = '<i data-lucide="pause"></i>';
     try { lucide.createIcons(); } catch (_) {}
 
-    addLiveLog(`LOOP: Starting ${durationMin}min / ${stepMin}min step (SAT:${showSat} RAD:${showRad})`, '#ffb300');
+    addLiveLog(`LOOP: Starting ${durationMin}min / ${stepMin}min step (SAT:${showSat} RAD:${showRad} L3:${showL3})`, '#ffb300');
 
     // ── Capture Visibility Snapshot (for restoration later) ──
     preAnimVisibility = {};
     const layersToSnapshot = [
         'satellite-layer', 'gibs-sat-layer', 'radar-layer',
-        'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'
+        'site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer',
+        'radar-l3-layer'
     ];
     loopMaps.forEach(([id, map]) => {
         preAnimVisibility[id] = {};
@@ -6249,7 +6254,40 @@ function startAnimation() {
         }
     }
 
-    const masterFrames = satFrames.length >= radFrames.length ? satFrames : radFrames;
+    // ─── NODD L3 frames (SRM / CC / ZDR / KDP) — decoded historical scans ───
+    // Each loop pane with an L3 product pulls its own last-K volume scans via
+    // /api/radar-l3?offset=N (0 = newest). Frames arrive as georeferenced PNG
+    // data-URLs, so each becomes an image source stepped like the other streams.
+    animL3Frames = {};
+    animL3Count = 0;
+    animLastLi = -1;
+    if (showL3) {
+        const l3Want = Math.max(4, Math.min(10, Math.floor(durationMin / 5) || 4));
+        const l3Panes = loopMaps.filter(([pid, m]) => isLayerVisible(m, 'radar-l3-layer') && paneL3[pid]);
+        addLiveLog(`LOOP: preloading up to ${l3Want} L3 volume scans for ${l3Panes.length} pane(s)…`, '#33c27a');
+        await Promise.all(l3Panes.map(async ([pid]) => {
+            const { station, product } = paneL3[pid];
+            const results = await Promise.all(Array.from({ length: l3Want }, (_, off) =>
+                fetch(`/api/radar-l3?station=${station}&product=${product}&offset=${off}&_=${Date.now()}`)
+                    .then(r => r.json()).catch(() => null)));
+            const seen = new Set();
+            animL3Frames[pid] = results
+                .filter(d => d && d.success && d.image && d.coordinates)
+                .map(d => ({ image: d.image, coordinates: d.coordinates, time: String(d.meta.time),
+                    label: `${station} ${product} ${String(d.meta.time).substring(11, 16)}Z` }))
+                .sort((a, b) => a.time.localeCompare(b.time))
+                .filter(f => !seen.has(f.time) && seen.add(f.time));   // dedupe same volume scan
+        }));
+        if (!isPlaying) return;   // user hit stop during the preload
+        animL3Count = Math.max(0, ...Object.values(animL3Frames).map(f => f.length));
+        addLiveLog(`LOOP: L3 frames ready (${animL3Count} scans)`, '#00ff88');
+    }
+
+    let masterFrames = satFrames.length >= radFrames.length ? satFrames : radFrames;
+    if (animL3Count > masterFrames.length) {
+        const longest = Object.values(animL3Frames).find(f => f.length === animL3Count) || [];
+        masterFrames = longest.map(f => ({ time: new Date(), label: f.label }));
+    }
     const totalFrames = masterFrames.length;
 
     if (totalFrames === 0) {
@@ -6313,6 +6351,28 @@ function startAnimation() {
                     }, map.getLayer('radar-layer') ? 'radar-layer' : firstBoundaryLayer(map));
                 }
             }
+        }
+
+        // NODD L3 (SRM/CC/ZDR/KDP): hide the live image, stack this pane's
+        // decoded historical scans as image sources stepped by opacity.
+        const paneL3FramesArr = animL3Frames[paneId] || [];
+        if (snap?.['radar-l3-layer'] === 'visible' && paneL3FramesArr.length > 0) {
+            if (map.getLayer('radar-l3-layer')) map.setLayoutProperty('radar-l3-layer', 'visibility', 'none');
+            paneL3FramesArr.forEach((f, i) => {
+                const srcId = `anim-l3-src-${i}`;
+                const lyrId = `anim-l3-lyr-${i}`;
+                if (!map.getSource(srcId)) {
+                    map.addSource(srcId, { type: 'image', url: f.image, coordinates: f.coordinates });
+                    map.addLayer({ id: lyrId, type: 'raster', source: srcId,
+                        layout: { visibility: 'visible' },
+                        paint: {
+                            'raster-opacity': 0.01,
+                            'raster-resampling': 'nearest',
+                            'raster-fade-duration': 0
+                        }
+                    }, firstBoundaryLayer(map));
+                }
+            });
         }
 
         // Create radar animation layers ONLY on panes that had radar visible
@@ -6427,6 +6487,33 @@ function renderCurrentFrame() {
         }
     }
 
+    // Toggle NODD L3 frame opacity — per-pane frame lists (each pane loops its
+    // own product/scans), clamped to that pane's own frame count.
+    if (animL3Count > 0) {
+        const li = Math.min(animationFrameIndex, animL3Count - 1);
+        if (li !== animLastLi) {
+            const prevLi = animLastLi;
+            Object.entries(maps).forEach(([pid, m]) => {
+                const cnt = (animL3Frames[pid] || []).length;
+                if (!m || !cnt) return;
+                const idx = Math.min(li, cnt - 1);
+                const prevIdx = prevLi >= 0 ? Math.min(prevLi, cnt - 1) : -1;
+                if (idx === prevIdx) return;
+                if (m.getLayer(`anim-l3-lyr-${idx}`)) {
+                    m.setPaintProperty(`anim-l3-lyr-${idx}`, 'raster-opacity', 0.85);
+                }
+                if (prevIdx >= 0) {
+                    setTimeout(() => {
+                        if (m && m.getLayer(`anim-l3-lyr-${prevIdx}`)) {
+                            m.setPaintProperty(`anim-l3-lyr-${prevIdx}`, 'raster-opacity', 0.01);
+                        }
+                    }, 60);
+                }
+            });
+            animLastLi = li;
+        }
+    }
+
     // Update per-pane labels with each pane's own channel/product info
     const satFrame = animSatFrames.length > 0 ? animSatFrames[Math.min(animationFrameIndex, animSatFrames.length - 1)] : null;
     const radFrame = animRadFrames.length > 0 ? animRadFrames[Math.min(animationFrameIndex, animRadFrames.length - 1)] : null;
@@ -6451,6 +6538,10 @@ function renderCurrentFrame() {
             parts.push(`${paneSite} ${paneProduct} ${timeStr}`);
         } else if (hadNatRad && radFrame) {
             parts.push(radFrame.label);
+        }
+        const paneL3FramesArr = animL3Frames[paneId] || [];
+        if (paneL3FramesArr.length) {
+            parts.push(paneL3FramesArr[Math.min(animationFrameIndex, paneL3FramesArr.length - 1)].label);
         }
         el.textContent = parts.length > 0 ? `LOOP | ${parts.join(' + ')}` : 'LOOP';
     });
@@ -6543,6 +6634,9 @@ function stopAnimation() {
 
     animationFrames = [];
     animationFrameIndex = 0;
+    animL3Frames = {};
+    animL3Count = 0;
+    animLastLi = -1;
 
     // Reset timeline progress bar
     const progressBar = document.querySelector('.timeline-progress');
@@ -10792,6 +10886,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 7, 2026 (update 3)', items: [
+        'Dual-pol & SRM products now animate: NODD Level III products (Storm Relative Velocity, CC, ZDR, KDP) join the loop. Press play with one active and the workstation pulls that pane’s recent volume scans from the NEXRAD archive (up to 10, decoded on the fly), then steps them in time with any radar/satellite loop. Works per pane — a 4-panel with SRM in one pane and reflectivity in another loops both, each on its own product — and the pane label shows the product and scan time per frame. The loop takes a few seconds to preload while the scans decode.'
+    ]},
     { date: 'Jul 7, 2026 (update 2)', items: [
         'Loop fix for multi-tab workspaces: stopping a radar/satellite animation no longer paints the national radar mosaic or a default IR satellite image onto your OTHER tabs. The stop-restore step was touching every pane in every tab instead of only the panes that were actually in the loop — panes that never had a satellite channel assigned were being force-shown the source’s default (IR) imagery. Restore is now strictly scoped to the loop’s own tab.',
         'Switching workspace tabs while a loop is running (or paused) now ends the loop cleanly first — the old tab gets its live layers back instead of being left frozen on an animation frame you’d have to clear manually.'
