@@ -11247,6 +11247,7 @@ async function applyProcedure(proc) {
 async function applyProcedureLegacy(proc) {
     const map = maps[activePaneId];
     if (!map || !proc) return;
+    addLiveLog('PROCEDURE: legacy 1-panel preset — it only holds one panel\'s display. Rebuild your layout and re-save it to capture every panel.', '#ffb300');
     if (proc.site) {
         const sel = document.getElementById('radar-site-select');
         if (sel && Array.from(sel.options).some(o => o.value === proc.site)) {
@@ -11277,7 +11278,10 @@ function renderProcList() {
     names.forEach(name => {
         const row = document.createElement('div');
         row.className = 'proc-row';
-        row.innerHTML = `<span class="proc-name" title="Load this display">${esc(name)}</span><span class="proc-del" title="Delete">✕</span>`;
+        const legacy = !(store[name] && store[name].v === 2 && store[name].panes);
+        row.innerHTML = `<span class="proc-name" title="Load this display">${esc(name)}</span>` +
+            (legacy ? `<span class="proc-legacy" title="Saved before multi-panel presets, so it holds only one panel. Rebuild your display and use Save Current Display… under this name to upgrade it.">1-PANE</span>` : '') +
+            `<span class="proc-del" title="Delete">✕</span>`;
         row.querySelector('.proc-name').addEventListener('click', () => applyProcedure(store[name]));
         row.querySelector('.proc-del').addEventListener('click', e => {
             e.stopPropagation();
@@ -11295,6 +11299,7 @@ function initProcedures() {
         .proc-name{cursor:pointer;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
         .proc-name:hover{color:#00e5ff;}
         .proc-del{cursor:pointer;color:#ff6666;padding-left:8px;font-size:11px;}
+        .proc-legacy{color:#ffb300;border:1px solid #ffb30055;border-radius:3px;padding:0 4px;margin-left:6px;font-size:9px;letter-spacing:.5px;cursor:help;}
         .proc-empty{padding:4px 10px;font-size:10px;color:#5c6b78;font-style:italic;}`;
     const style = document.createElement('style');
     style.textContent = css;
