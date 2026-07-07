@@ -10785,6 +10785,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 6, 2026 (update 2)', items: [
+        'Procedures are now multi-pane: “Save Current Display…” records the pane layout plus every visible pane’s map view, imagery and overlays — so a 4-panel severe setup (outlook / tornado / wind / hail) reloads as all four panels, not just the last one you touched. Loading a procedure switches the tab to the saved layout, clears each pane, and rebuilds it. Bundles saved before this update still load the old way (active pane only) — just re-save them once to upgrade.'
+    ]},
     { date: 'Jul 6, 2026', items: [
         'Your workspace now truly saves: reloading the app brings back everything, not just the tab names. Every pane restores its map position and zoom, its radar/satellite imagery, AND all overlay products — warnings, watches, SPC outlooks, METARs, fronts, aviation layers, buoys… exactly as you left them. The snapshot autosaves every 15 seconds and on close.',
         'Multi-tab fix: panes in tabs you hadn\'t visited yet no longer lose their saved setup — the snapshot carries un-visited tabs forward instead of overwriting them.',
@@ -11158,9 +11161,11 @@ function initAlertViz() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 28: PROCEDURES (saved display bundles)
 // ═══════════════════════════════════════════════════════════════════════════════
-// A "procedure" = the set of active product toggles + the active pane's view +
-// radar site. Reloading re-clicks the recorded sidebar items so all the existing
-// fetch/visibility logic is reused verbatim.
+// A "procedure" = the pane layout plus, for every visible pane, that pane's
+// view, imagery and overlay products — the same per-pane snapshot the
+// workspace autosave uses, loaded back through the same pendingRestore path.
+// (v1 bundles, saved before multi-pane capture, recorded only the active
+// pane's toggles; they still load through the legacy re-click path.)
 
 const PROC_KEY = 'fxnet_procedures';
 const PROC_ATTRS = ['day', 'hazard', 'channel', 'gibs', 'qpf', 'qpe', 'period', 'l3'];
@@ -11171,22 +11176,37 @@ function loadProcStore() {
 function saveProcStore(s) { localStorage.setItem(PROC_KEY, JSON.stringify(s)); }
 
 function captureProcedure() {
-    const active = [];
-    document.querySelectorAll('.product-item.active').forEach(it => {
-        const layer = it.getAttribute('data-layer');
-        if (!layer) return;
-        const rec = { layer };
-        PROC_ATTRS.forEach(k => { const v = it.getAttribute('data-' + k); if (v != null) rec[k] = v; });
-        active.push(rec);
+    const layout = (tabs[activeTabId] && tabs[activeTabId].layout) || 1;
+    const panes = {};
+    paneIdsForTab(activeTabId).forEach((pid, idx) => {
+        if (idx >= layout) return;                       // only visible panes
+        const m = maps[pid];
+        if (!m) return;
+        const conf = {};
+        if (paneRadarSites[pid]) conf.radarSite = paneRadarSites[pid];
+        if (paneRadarProducts[pid]) conf.radarProduct = paneRadarProducts[pid];
+        if (paneGoesChannels[pid] != null) conf.goesChannel = paneGoesChannels[pid];
+        if (paneGibs[pid]) conf.gibs = paneGibs[pid];
+        if (paneL3[pid]) conf.l3 = paneL3[pid];
+        conf.radarVisible = SITE_RADAR_VIS_LAYERS.some(l => isLayerVisible(m, l));
+        conf.satVisible = isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] != null;
+        try {
+            const c = m.getCenter();
+            conf.view = [+c.lng.toFixed(4), +c.lat.toFixed(4), +m.getZoom().toFixed(2)];
+        } catch (_) {}
+        const overlays = capturePaneOverlays(pid);
+        if (overlays.length) conf.overlays = overlays;
+        panes[idx + 1] = conf;                           // keyed by pane number → loads into any tab
     });
-    const map = maps[activePaneId];
-    const c = map ? map.getCenter() : { lng: -95, lat: 38 };
-    return {
-        active,
-        center: [c.lng, c.lat],
-        zoom: map ? map.getZoom() : 4,
-        site: (paneRadarSites[activePaneId] && !String(paneRadarSites[activePaneId]).includes('nexrad')) ? paneRadarSites[activePaneId] : null
-    };
+    return { v: 2, layout, panes };
+}
+// How many products a bundle carries (for the save/load log lines)
+function procLayerCount(proc) {
+    if (proc && proc.v === 2) {
+        return Object.values(proc.panes || {}).reduce((n, c) =>
+            n + ((c.overlays || []).length + (c.radarVisible ? 1 : 0) + (c.satVisible ? 1 : 0) + (c.gibs ? 1 : 0) + (c.l3 ? 1 : 0)), 0);
+    }
+    return (proc && proc.active && proc.active.length) || 0;
 }
 function _procItemSelector(rec) {
     let s = `.product-item[data-layer="${rec.layer}"]`;
@@ -11194,6 +11214,37 @@ function _procItemSelector(rec) {
     return s;
 }
 async function applyProcedure(proc) {
+    if (!proc) return;
+    if (proc.v !== 2 || !proc.panes) return applyProcedureLegacy(proc);
+    const layout = proc.layout || 1;
+    // Seed each pane's saved setup first, so panes the layout change is about
+    // to create construct directly at their saved view; then reveal the layout.
+    paneIdsForTab(activeTabId).forEach((pid, idx) => {
+        if (idx >= layout) return;
+        const conf = proc.panes[idx + 1];
+        if (!conf) return;
+        if (conf.radarSite) paneRadarSites[pid] = conf.radarSite;
+        if (conf.radarProduct) paneRadarProducts[pid] = conf.radarProduct;
+        pendingRestore[pid] = JSON.parse(JSON.stringify(conf));   // keep the stored bundle untouched
+    });
+    applyLayout(activeTabId, layout, false);
+    // Maps that are already up: wipe the current display and re-apply through
+    // the same pendingRestore path a page reload uses. Maps still initializing
+    // (panes the layout just created) restore from their 'load' handler.
+    paneIdsForTab(activeTabId).forEach((pid, idx) => {
+        if (idx >= layout) return;
+        const m = maps[pid];
+        if (!m || !m.getLayer('radar-layer')) return;
+        try { clearPane(m, pid); } catch (_) {}
+        const conf = proc.panes[idx + 1];
+        if (!conf) return;
+        if (conf.goesChannel != null) paneGoesChannels[pid] = conf.goesChannel;   // clearPane nulls it
+        applyPaneRestore(pid);
+    });
+    if (typeof updateSidebarToActivePane === 'function') updateSidebarToActivePane();
+    addLiveLog(`PROCEDURE: ${layout}-pane display restored`, '#00e5ff');
+}
+async function applyProcedureLegacy(proc) {
     const map = maps[activePaneId];
     if (!map || !proc) return;
     if (proc.site) {
@@ -11205,13 +11256,13 @@ async function applyProcedure(proc) {
     }
     if (proc.center) map.jumpTo({ center: proc.center, zoom: proc.zoom || map.getZoom() });
     // Turn OFF anything currently on that the procedure doesn't include, then turn ON the rest.
-    const want = new Set(proc.active.map(_procItemSelector));
+    const want = new Set((proc.active || []).map(_procItemSelector));
     document.querySelectorAll('.product-item.active').forEach(it => {
         if (!it.getAttribute('data-layer')) return;
         const isWanted = [...want].some(sel => it.matches(sel));
         if (!isWanted) it.click();
     });
-    for (const rec of proc.active) {
+    for (const rec of (proc.active || [])) {
         const item = document.querySelector(_procItemSelector(rec));
         if (item && !item.classList.contains('active')) { item.click(); await new Promise(r => setTimeout(r, 120)); }
     }
@@ -11255,7 +11306,7 @@ function initProcedures() {
         store[name] = captureProcedure();
         saveProcStore(store);
         renderProcList();
-        addLiveLog(`PROCEDURE: saved "${esc(name)}" (${store[name].active.length} layers)`, '#00ff88');
+        addLiveLog(`PROCEDURE: saved "${esc(name)}" (${store[name].layout || 1}-pane, ${procLayerCount(store[name])} products)`, '#00ff88');
     });
     renderProcList();
     initSettingsBackup();
