@@ -6559,18 +6559,21 @@ function stopAnimation() {
 }
 
 function restoreLiveLayers() {
-    Object.entries(maps).forEach(([id, map]) => {
-        const snapshot = preAnimVisibility[id];
-        if (snapshot) {
-            Object.entries(snapshot).forEach(([lyr, vis]) => {
-                if (map.getLayer(lyr)) map.setLayoutProperty(lyr, 'visibility', vis);
-            });
-        } else {
-            // Fallback to basic logic if no snapshot (rare)
-            if (activeRadarNational && map.getLayer('radar-layer')) map.setLayoutProperty('radar-layer', 'visibility', 'visible');
-            if (paneGoesChannels[id] !== null && map.getLayer('satellite-layer')) map.setLayoutProperty('satellite-layer', 'visibility', 'visible');
-        }
+    // Restore ONLY the panes the loop touched (the snapshot's keys — the loop
+    // tab's panes). Panes in other tabs were never altered by startAnimation,
+    // so there is nothing to restore there. The old fallback that force-showed
+    // radar/satellite on every snapshot-less pane is what painted the national
+    // mosaic and default-IR satellite onto other tabs after a loop stopped
+    // (`paneGoesChannels[id] !== null` is true for panes that were never
+    // assigned a channel at all — undefined !== null).
+    Object.entries(preAnimVisibility).forEach(([id, snapshot]) => {
+        const map = maps[id];
+        if (!map) return;
+        Object.entries(snapshot).forEach(([lyr, vis]) => {
+            if (map.getLayer(lyr)) map.setLayoutProperty(lyr, 'visibility', vis);
+        });
     });
+    preAnimVisibility = {};   // spent — never re-apply a stale snapshot
 }
 
 
@@ -9657,6 +9660,10 @@ function renderTabBar() {
 
 function switchTab(tabId) {
     if (!tabs[tabId]) return;
+    // A running/paused loop belongs to the tab it was started on — end it
+    // cleanly (removes anim frames + restores that tab's live layers) rather
+    // than leaving the old tab frozen on a loop frame.
+    if ((isPlaying || isPaused) && tabId !== activeTabId) stopAnimation();
     activeTabId = tabId;
     // Show only this tab's grid (revert inline display to the stylesheet's grid)
     document.querySelectorAll('#tab-grids .pane-grid').forEach(g => {
@@ -10785,6 +10792,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 7, 2026 (update 2)', items: [
+        'Loop fix for multi-tab workspaces: stopping a radar/satellite animation no longer paints the national radar mosaic or a default IR satellite image onto your OTHER tabs. The stop-restore step was touching every pane in every tab instead of only the panes that were actually in the loop — panes that never had a satellite channel assigned were being force-shown the source’s default (IR) imagery. Restore is now strictly scoped to the loop’s own tab.',
+        'Switching workspace tabs while a loop is running (or paused) now ends the loop cleanly first — the old tab gets its live layers back instead of being left frozen on an animation frame you’d have to clear manually.'
+    ]},
     { date: 'Jul 7, 2026', items: [
         'Radar tilt fix — Storm Relative Velocity: stepping SRM up through the elevation angles now works. The tilt ladder previously asked for products that don’t exist above 0.5° (the native SRM is only made at the lowest cut, and the higher velocity tilts use different product codes than assumed). SRM now derives each tilt from the velocity product actually in the feed — 0.5° → 0.9° → 1.3° → 2.4° — always subtracting the storm motion from the 0.5° header. CC/ZDR/KDP tilt stepping was also corrected to the true lowest four cuts (0.5/0.9/1.3/1.8°; it previously skipped 0.9° and jumped to 2.4/3.4°). If a tilt isn’t in the radar’s current scan strategy, the log now says so plainly instead of failing silently.'
     ]},
