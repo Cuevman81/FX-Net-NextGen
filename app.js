@@ -6419,11 +6419,35 @@ async function startAnimation() {
 
     addLiveLog(`LOOP: ${totalFrames} frames preloading (SAT:${satFrames.length} RAD:${radFrames.length})`, '#00ff88');
 
-    // ── Wait briefly for initial tiles to start loading, then begin animation ──
-    // Radar uses IEM cached tiles (fast ~800ms), satellite uses nowCOAST WMS (slower ~4s)
-    const preloadDelay = satFrames.length > 0 ? 4000 : 800;
+    // Show the first frame right away so panes aren't blank while loading
+    renderCurrentFrame();
 
-    animationTimer = setTimeout(advanceLoopTick, preloadDelay);
+    // ── Synchronized start: wait until EVERY loop pane has its frames loaded ──
+    // Frame sources are created pane-by-pane, so pane 1's tile requests hit the
+    // network first and pane 2+'s queue behind them (browser connection limit).
+    // A fixed delay let pane 1 start looping while pane 2 was still downloading,
+    // making it appear to "join late" mid-cycle. Poll areTilesLoaded() on all
+    // loop panes instead, capped so a stalled tile can't hang the loop.
+    const loadWaitStart = Date.now();
+    const loadWaitCapMs = satFrames.length > 0 ? 20000 : 12000;
+    const waitForAllPanes = () => {
+        if (!isPlaying) return;   // user hit stop during the wait
+        let allLoaded;
+        try {
+            allLoaded = loopMaps.every(([, m]) => m.areTilesLoaded());
+        } catch (_) { allLoaded = true; }
+        const waited = Date.now() - loadWaitStart;
+        if (allLoaded || waited > loadWaitCapMs) {
+            const secs = (waited / 1000).toFixed(1);
+            addLiveLog(allLoaded
+                ? `LOOP: all ${loopMaps.length} pane(s) loaded in ${secs}s — rolling`
+                : `LOOP: starting after ${secs}s (some frames still loading)`, '#00ff88');
+            advanceLoopTick();
+        } else {
+            animationTimer = setTimeout(waitForAllPanes, 300);
+        }
+    };
+    animationTimer = setTimeout(waitForAllPanes, 800);
 }
 
 function advanceLoopTick() {
@@ -10886,6 +10910,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 8, 2026', items: [
+        'Multi-panel loops now start in sync: in a 2/4-panel loop, panel 2+ no longer joins mid-cycle after panel 1 is already halfway through. Frame imagery downloads pane-by-pane, and the loop used to start on a fixed timer while later panes were still loading. Play now waits until every panel reports its frames loaded (capped at ~12–20s so a slow tile can’t stall it), shows the first frame while loading, and logs when all panes are ready.'
+    ]},
     { date: 'Jul 7, 2026 (update 3)', items: [
         'Dual-pol & SRM products now animate: NODD Level III products (Storm Relative Velocity, CC, ZDR, KDP) join the loop. Press play with one active and the workstation pulls that pane’s recent volume scans from the NEXRAD archive (up to 10, decoded on the fly), then steps them in time with any radar/satellite loop. Works per pane — a 4-panel with SRM in one pane and reflectivity in another loops both, each on its own product — and the pane label shows the product and scan time per frame. The loop takes a few seconds to preload while the scans decode.'
     ]},
