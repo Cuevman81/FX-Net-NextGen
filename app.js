@@ -10917,6 +10917,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 10, 2026 (update 2)', items: [
+        'New USER GUIDE: a full-screen reference manual for the whole workstation, opened from the USER GUIDE button under What’s New. Larger, readable text; a table of contents to jump straight to any topic (radar tilts, loops, procedures, analysis tools…); and a search box that filters the guide and highlights matches. What’s New stays as the short release log — the deep how-it-works documentation now lives in the guide. The What’s New text also got a small readability bump.'
+    ]},
     { date: 'Jul 10, 2026', items: [
         'WPC QPF no longer mirrors across panels: selecting Day 2 QPF in one panel used to silently flip every other panel’s QPF to Day 2 (and vice versa). QPF product choice is now truly per-panel — Day 1 / Day 2 / Day 3 can each live in their own pane, like the ERO products already did. The same cross-panel mirroring was fixed for MRMS QPE periods (1/24/48/72-hr) and the CPC temperature & precipitation outlooks.',
         'Distance/Bearing tool: DOUBLE-CLICK now finishes the line — it freezes on screen with its totals (no more rubber-band segment chasing the cursor off the edge of the pane), the map no longer zooms on that double-click, and the accidental stacked points it used to drop are cleaned up automatically. Click again to start a fresh line; Esc or re-clicking the tool still exits.'
@@ -11037,7 +11040,12 @@ function initWhatsNew() {
     body.innerHTML = CHANGELOG.map(rel =>
         `<div class="whats-new-rel"><div class="whats-new-rel-date">${rel.date}</div>` +
         rel.items.map(it => `<div class="whats-new-item">${it}</div>`).join('') +
-        `</div>`).join('');
+        `</div>`).join('') +
+        `<div class="whats-new-guide-link">Full feature documentation lives in the <a id="whats-new-open-guide">User Guide</a>.</div>`;
+    document.getElementById('whats-new-open-guide')?.addEventListener('click', e => {
+        e.stopPropagation();
+        document.getElementById('user-guide-btn')?.click();
+    });
 
     const latestId = CHANGELOG[0].date;
     let seen = null;
@@ -11056,6 +11064,225 @@ function initWhatsNew() {
     header.addEventListener('click', () => setOpen(body.style.display === 'none'));
     // Auto-expand ONCE when there's an unseen release; collapsed on later loads.
     setOpen(seen !== latestId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 25c: USER GUIDE (full-screen reference manual)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Task-organized documentation for every workstation feature — the "how does it
+// work" companion to What's New's "what changed". Static content, TOC sidebar,
+// live search with highlighting. Readable body text by design (field request).
+
+const USER_GUIDE = [
+    { id: 'start', title: 'Getting Started', html: `
+        <p>FX-Net NextGen is a browser-based forecaster workstation: an interactive map (or several) with live NWS/NOAA data layered on top. Everything is driven from the <b>product sidebar</b> on the left — click a product to turn it on, click it again to turn it off.</p>
+        <h3>Panels (panes)</h3>
+        <ul>
+            <li>The layout buttons in the bottom toolbar switch between <b>1, 2, 4, and 8 panel</b> displays.</li>
+            <li>One panel is always the <b>active panel</b>, marked with a cyan border. Sidebar clicks, the SITE selector, and the analysis tools apply to the active panel only — click any panel to make it active.</li>
+            <li>Panels in a tab <b>pan and zoom together</b>. The pin control in a panel’s corner unlocks that panel to hold an independent view.</li>
+            <li>Each panel keeps its own imagery: different radar sites, satellite channels, QPF days, etc. per panel.</li>
+        </ul>
+        <h3>Radar site selection</h3>
+        <p>The <b>SITE selector</b> (top right) switches the active panel between the <b>National Mosaic</b> and any single NEXRAD site. Site-specific products (velocity, dual-pol, tilts) need a site selected.</p>
+        <h3>The diagnostic log</h3>
+        <p>The <b>DIAGNOSTIC LOG</b> (bottom of the sidebar) narrates what the workstation is doing — data loads, loop status, errors. When something seems stuck, look there first.</p>` },
+
+    { id: 'tabs', title: 'Workspace Tabs & Autosave', html: `
+        <p>The tab bar across the top works like browser tabs — each tab is an independent workspace with its own panel layout and products.</p>
+        <ul>
+            <li><b>+</b> adds a tab, <b>×</b> closes one.</li>
+            <li>Panel layout, per-panel imagery, overlays, and map views are all <b>per tab</b>.</li>
+            <li>Overlay products you turn on are global to the panel they’re applied to, and stay put when you switch tabs.</li>
+        </ul>
+        <h3>Autosave</h3>
+        <p>Your whole workspace <b>saves automatically every 15 seconds</b> and when the page closes. Reloading the app restores every tab: layouts, map positions and zoom, radar/satellite imagery, and all overlay products — exactly as you left them. There is nothing to press; it just happens.</p>
+        <p>To move your setup to another computer or browser, use <b>Export Settings to File…</b> (see <b>Settings Backup</b>).</p>` },
+
+    { id: 'radar', title: 'Radar — NEXRAD, Dual-Pol & MRMS', html: `
+        <h3>Reflectivity (National vs SITE)</h3>
+        <p><b>Reflectivity</b> shows the national mosaic until you pick a site in the SITE selector — then it switches to that site’s super-resolution base reflectivity. <b>Velocity, Hydrometeor Class, Storm Total Precip,</b> and <b>One-Hour Precip</b> are site products (SITE badge) and follow the selected site.</p>
+        <h3>Dual-pol / NODD Level III (multi-tilt)</h3>
+        <p>The <b>NODD (Level III)</b> products — <b>Storm Relative Motion, Correlation Coefficient, Differential Reflectivity (ZDR), Specific Differential Phase (KDP)</b> — are decoded straight from the NEXRAD Level III archive for the selected site.</p>
+        <ul>
+            <li>A <b>tilt stepper</b> appears on the panel: step up/down through elevation angles. CC/ZDR/KDP cover the lowest four cuts (0.5&deg; / 0.9&deg; / 1.3&deg; / 1.8&deg;); SRM steps 0.5&deg; &rarr; 0.9&deg; &rarr; 1.3&deg; &rarr; 2.4&deg;.</li>
+            <li>If a tilt isn’t in the radar’s current scan strategy, the log says so plainly.</li>
+            <li>The <b>VAD Wind Profile</b> shows the radar-derived wind profile above the site.</li>
+            <li><b>Meso/TVS and Hail Index markers</b> plot the radar’s own detected circulations and hail signatures.</li>
+        </ul>
+        <h3>MRMS (national)</h3>
+        <p><b>Echo Tops</b> and <b>QPE</b> (1 / 24 / 48 / 72-hr radar+gauge precip estimates) are national MRMS mosaics. QPE period is <b>per panel</b>. Hovering the map with a site radar or MRMS product up shows a decoded <b>value readout</b> (dBZ, kt, inches) in the bottom toolbar.</p>` },
+
+    { id: 'satellite', title: 'Satellite — GOES & GIBS', html: `
+        <h3>GOES-East channels</h3>
+        <p>The <b>Satellite (GOES-East)</b> group offers Visible / Near-IR, Water Vapor, and Infrared channels. Each panel can carry its own channel — pick the panel, then the channel.</p>
+        <h3>Loopable GIBS imagery</h3>
+        <p>The <b>Loopable &middot; NASA GIBS</b> products use NASA’s global imagery tiles with real archived frame times, which makes them the smoothest choice for <b>animation loops</b> — no gaps or flicker, and you can pan/zoom mid-loop.</p>` },
+
+    { id: 'loops', title: 'Animation Loops', html: `
+        <p>The <b>play button</b> in the bottom toolbar animates whatever the current tab’s panels are showing — radar, satellite, and dual-pol products all loop together, each panel with its own imagery.</p>
+        <ul>
+            <li><b>DURATION</b> — how far back the loop reaches. <b>STEP</b> — minutes between frames. <b>SPEED</b> — playback rate.</li>
+            <li>The loop <b>waits until every panel has its frames loaded</b>, shows the first frame while loading, then starts all panels in sync (the log announces “rolling”).</li>
+            <li><b>Dual-pol/SRM panels</b> preload their last ~10 volume scans from the NEXRAD archive (a few seconds of “preloading” in the log) and step through real scan times.</li>
+            <li>Pause, step frame-by-frame with the arrows, or stop to return to live data.</li>
+            <li>Loops are <b>scoped to their tab</b> — switching tabs stops the loop and restores live layers.</li>
+        </ul>` },
+
+    { id: 'severe', title: 'Severe Weather — SPC', html: `
+        <ul>
+            <li><b>Convective Outlooks</b> Day 1–3 categorical risk areas, plus the <b>Day 4–8</b> outlook.</li>
+            <li><b>Day 1 / Day 2 Probabilistic</b> — tornado, wind, and hail probability contours.</li>
+            <li><b>Watches, Mesoscale Discussions,</b> and <b>Local Storm Reports</b> plot live; click one for its full text.</li>
+            <li><b>ProbSevere</b> storm-object polygons show ML-derived severe probabilities per storm.</li>
+            <li><b>Skew-T Soundings</b>: SPC’s observed sounding images, or the <b>Interactive Skew-T (RAOB)</b> panel — an NSHARP-style viewer with parcel curves and indices for any upper-air site.</li>
+            <li><b>SPC Mesoanalysis</b> opens the hourly mesoanalysis field viewer.</li>
+        </ul>` },
+
+    { id: 'surface', title: 'Surface Analysis & WPC', html: `
+        <ul>
+            <li><b>METAR Plotted Obs</b> — station model plots; <b>NDBC Buoys</b> — hourly marine obs.</li>
+            <li><b>Isobars</b> (WPC 4-mb or live 2-mb), <b>Isotherms, Isodrosotherms,</b> and WPC <b>Fronts &amp; Pressure Centers</b>.</li>
+            <li><b>QPF</b> — WPC precipitation forecasts (24-hr Day 1/2/3, 72-hr, 120-hr). The QPF day is <b>per panel</b>, so a 4-panel Day 1 / Day 2 / Day 3 comparison works.</li>
+            <li><b>Excessive Rainfall (ERO)</b> Day 1–3 risk areas — click a risk polygon to open the WPC discussion. <b>Mesoscale Precip Discussions</b> plot live.</li>
+            <li><b>Forecast Grids (NDFD)</b> — the official forecast temperature grid.</li>
+        </ul>` },
+
+    { id: 'hydro', title: 'Rivers, Drought & Climate (CPC)', html: `
+        <ul>
+            <li><b>River Gauges</b> color-code by flood status — click a gauge for its <b>hydrograph with forecast</b>.</li>
+            <li><b>US Drought Monitor</b> polygons and the <b>CPC Drought Outlook</b>.</li>
+            <li><b>CPC Climate Outlooks</b> — temperature and precipitation probability outlooks for 6–10 day, 8–14 day, monthly, and seasonal periods. The period is <b>per panel</b>.</li>
+        </ul>` },
+
+    { id: 'tropical', title: 'Tropical — NHC', html: `
+        <ul>
+            <li><b>Active Storms</b> — forecast cones, track points with intensities, and coastal watch/warning segments.</li>
+            <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details.</li>
+            <li><b>Tropical Discussions</b> open the full NHC text products.</li>
+        </ul>` },
+
+    { id: 'aviation', title: 'Aviation Hazards', html: `
+        <ul>
+            <li><b>SIGMETs / AIRMETs</b> and <b>G-AIRMET</b> hazard polygons (turbulence, icing, IFR…).</li>
+            <li><b>PIREPs</b> — pilot reports plotted with intensity.</li>
+            <li><b>TAFs</b> — terminal forecasts as flight-category colored airport dots.</li>
+            <li>Click any hazard area, PIREP, or TAF site for the decoded detail.</li>
+        </ul>` },
+
+    { id: 'firewx', title: 'Lightning, Fire, Smoke, Air Quality & Solar', html: `
+        <ul>
+            <li><b>Lightning</b> — NLDN strike density mosaic.</li>
+            <li><b>SPC Fire Weather Outlooks</b> (Day 1–8), <b>HMS Smoke</b> plumes, and <b>FIRMS</b> satellite-detected fire points.</li>
+            <li><b>AirNow AQI</b> — current air quality observations, synced to the hourly feed.</li>
+            <li><b>Solar</b> — day/night terminator shading; click the map for local sunrise/sunset data.</li>
+        </ul>` },
+
+    { id: 'tools', title: 'Analysis Tools', html: `
+        <h3>Distance / Bearing</h3>
+        <p>Click points on the map to build a great-circle line — each point labels the <b>cumulative distance (nm) and bearing</b>. <b>Double-click to finish</b>: the line freezes on screen with its totals. Click again to start a new line; <kbd>Esc</kbd> or re-clicking the tool exits.</p>
+        <h3>Range Rings</h3>
+        <p>Draws 25 / 50 / 100 / 150 / 200 nm rings around the active radar site (or the map center). Click anywhere to recenter them.</p>
+        <h3>Storm Motion &amp; ETA</h3>
+        <p>Click a storm’s <b>previous</b> position, then its <b>current</b> position — the tool computes its speed and heading (&Delta;t comes from the loop <b>STEP</b> setting). Then click any town or landmark for its <b>estimated arrival time</b>.</p>
+        <h3>Cursor sync &amp; value readout</h3>
+        <p>Moving the cursor over one panel shows a matching cursor on the others. With site radar or MRMS up, the bottom toolbar decodes the pixel under the cursor into real units.</p>` },
+
+    { id: 'procedures', title: 'Procedures — Saved Displays', html: `
+        <p>Procedures are AWIPS-style saved display bundles. <b>Save Current Display…</b> records the current tab’s <b>entire panel layout</b> — every panel’s map view, imagery, and overlays — under a name you choose.</p>
+        <ul>
+            <li>Loading a procedure switches the tab to the saved layout and rebuilds every panel.</li>
+            <li>An amber <b>1-PANE</b> badge marks bundles saved before multi-panel support; they load the old single-panel way — re-save them once to upgrade.</li>
+            <li>Procedures live in your browser. Use <b>Export Settings to File…</b> to carry them to another machine.</li>
+        </ul>` },
+
+    { id: 'watchdog', title: 'Watchdog, AlertViz & Text Products', html: `
+        <h3>Watchdog</h3>
+        <p>The warning ticker under NWS WARNINGS monitors the national alert feed continuously. Filter it by <b>state and WFO</b> — the filter persists across sessions. Click any alert for its full text.</p>
+        <h3>AlertViz</h3>
+        <p>High-urgency, action-forcing warnings (tornado, PDS…) fire a <b>toast notification</b> the moment they’re issued, with an optional alert tone.</p>
+        <h3>Text products</h3>
+        <p><b>Text Browser</b> pulls any raw NWS text product by office and category (AFDs, QPF discussions, and dozens more). <b>Forecast Meteogram</b> charts the hourly NWS forecast for any point.</p>` },
+
+    { id: 'settings', title: 'Settings Backup & Shortcuts', html: `
+        <h3>Backup / transfer</h3>
+        <p><b>Export Settings to File…</b> downloads everything — workspace tabs, procedures, watchdog filters — as one JSON file. <b>Import Settings from File…</b> restores it on any machine and reloads the app. Because all settings live in the browser’s local storage, clearing browser data erases them: export a backup first.</p>
+        <h3>Keyboard shortcuts</h3>
+        <ul>
+            <li><kbd>Ctrl</kbd>+<kbd>\\</kbd> — collapse / expand the product sidebar.</li>
+            <li><kbd>Esc</kbd> — exit the active analysis tool, close pop-up panels, close this guide.</li>
+        </ul>
+        <h3>Getting help</h3>
+        <p>The <b>WHAT’S NEW</b> panel lists recent changes; this guide is the permanent reference. Source code and issue reporting live on GitHub (link under the app title).</p>` }
+];
+
+function initUserGuide() {
+    const overlay = document.getElementById('guide-overlay');
+    const toc = document.getElementById('guide-toc');
+    const content = document.getElementById('guide-content');
+    const search = document.getElementById('guide-search');
+    const btn = document.getElementById('user-guide-btn');
+    if (!overlay || !toc || !content || !search || !btn) return;
+
+    content.innerHTML = USER_GUIDE.map(s =>
+        `<section class="guide-sec" id="guide-sec-${s.id}"><h2>${s.title}</h2>${s.html}</section>`).join('') +
+        `<div class="guide-no-results" style="display:none;">No guide sections match that search.</div>`;
+    // Pristine copy of each section for resetting search highlights
+    content.querySelectorAll('.guide-sec').forEach(sec => { sec.dataset.orig = sec.innerHTML; });
+
+    toc.innerHTML = USER_GUIDE.map(s => `<a data-target="guide-sec-${s.id}">${s.title}</a>`).join('');
+    const tocLinks = [...toc.querySelectorAll('a')];
+    tocLinks.forEach(a => a.addEventListener('click', () => {
+        tocLinks.forEach(x => x.classList.remove('active'));
+        a.classList.add('active');
+        document.getElementById(a.dataset.target)?.scrollIntoView({ block: 'start' });
+    }));
+
+    const escHtml = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const runSearch = q => {
+        const secs = [...content.querySelectorAll('.guide-sec')];
+        const qlc = q.toLowerCase();
+        let shown = 0;
+        secs.forEach((sec, i) => {
+            sec.innerHTML = sec.dataset.orig;   // reset any previous <mark>s
+            const match = !q || sec.textContent.toLowerCase().includes(qlc);
+            sec.style.display = match ? '' : 'none';
+            if (tocLinks[i]) tocLinks[i].style.display = match ? '' : 'none';
+            if (!match) return;
+            shown++;
+            if (!q) return;
+            // Wrap matches in <mark> — text nodes only, so tags stay intact
+            const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+            const walker = document.createTreeWalker(sec, NodeFilter.SHOW_TEXT);
+            const nodes = [];
+            while (walker.nextNode()) nodes.push(walker.currentNode);
+            nodes.forEach(n => {
+                if (!n.nodeValue.toLowerCase().includes(qlc)) return;
+                const span = document.createElement('span');
+                span.innerHTML = escHtml(n.nodeValue).replace(rx, m => `<mark>${m}</mark>`);
+                n.parentNode.replaceChild(span, n);
+            });
+        });
+        const noRes = content.querySelector('.guide-no-results');
+        if (noRes) noRes.style.display = shown ? 'none' : 'block';
+    };
+    search.addEventListener('input', () => runSearch(search.value.trim()));
+
+    const setOpen = open => {
+        overlay.style.display = open ? 'flex' : 'none';
+        if (open) {
+            search.value = '';
+            runSearch('');
+            if (tocLinks[0] && !toc.querySelector('a.active')) tocLinks[0].classList.add('active');
+            try { lucide.createIcons(); } catch (_) {}
+        }
+    };
+    btn.addEventListener('click', () => setOpen(true));
+    document.getElementById('guide-close')?.addEventListener('click', () => setOpen(false));
+    overlay.addEventListener('click', e => { if (e.target === overlay) setOpen(false); });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && overlay.style.display !== 'none') setOpen(false);
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -12248,6 +12475,7 @@ function init() {
     initPlayButton();
     initContextMenu();
     initWhatsNew();
+    initUserGuide();
     updateWarnModeLabel();
     initHealthToggle();
     initDebugToggle();

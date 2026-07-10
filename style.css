@@ -765,10 +765,10 @@ body {
     margin-bottom: 2px;
 }
 .whats-new-item {
-    font-size: 10.5px;
-    line-height: 1.35;
+    font-size: 11.5px;
+    line-height: 1.45;
     color: #c2ccd6;
-    padding: 1px 0 1px 12px;
+    padding: 2px 0 2px 12px;
     position: relative;
 }
 .whats-new-item::before {
@@ -776,6 +776,167 @@ body {
     position: absolute;
     left: 2px;
     color: var(--accent-green);
+}
+.whats-new-guide-link {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed #1e2a35;
+    font-size: 10.5px;
+    color: var(--text-dim);
+}
+.whats-new-guide-link a {
+    color: var(--accent-cyan);
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+/* ─── User Guide (sidebar button + full-screen manual) ─── */
+.user-guide-btn {
+    margin: 6px 8px 0;
+    border: 1px solid #1e2a35;
+    border-radius: 4px;
+    background: #0a1018;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 9px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--accent-cyan);
+    user-select: none;
+    flex: none;
+}
+.user-guide-btn:hover { background: #101a26; }
+.user-guide-btn i { width: 13px; height: 13px; }
+.user-guide-btn > span:first-child { display: flex; align-items: center; gap: 6px; }
+.user-guide-btn .badge { margin-left: auto; }
+
+.guide-panel {
+    width: min(1150px, 95vw);
+    height: 92vh;
+    background: #0a0f16;
+    border: 1px solid #24303d;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 12px 50px rgba(0, 0, 0, 0.7);
+}
+.guide-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #24303d;
+    background: #0d1420;
+    flex: none;
+}
+.guide-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    color: var(--accent-cyan);
+    white-space: nowrap;
+}
+.guide-title i { width: 16px; height: 16px; }
+#guide-search {
+    flex: 1;
+    max-width: 380px;
+    margin-left: auto;
+    background: #060a10;
+    color: #dce4ec;
+    border: 1px solid #24303d;
+    border-radius: 4px;
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+}
+#guide-search:focus { border-color: var(--accent-cyan); }
+.guide-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+}
+.guide-toc {
+    width: 230px;
+    flex: none;
+    overflow-y: auto;
+    border-right: 1px solid #24303d;
+    background: #0d1420;
+    padding: 10px 0;
+}
+.guide-toc a {
+    display: block;
+    padding: 7px 16px;
+    font-size: 12px;
+    color: #aeb9c4;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    user-select: none;
+}
+.guide-toc a:hover { color: #fff; background: #111b28; }
+.guide-toc a.active {
+    color: var(--accent-cyan);
+    border-left-color: var(--accent-cyan);
+    background: #101a26;
+    font-weight: 700;
+}
+.guide-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px 30px 60px;
+}
+.guide-sec { margin-bottom: 30px; }
+.guide-sec h2 {
+    font-size: 17px;
+    font-weight: 800;
+    color: var(--accent-cyan);
+    letter-spacing: 0.5px;
+    margin: 0 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #24303d;
+}
+.guide-sec h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: #ffd166;
+    margin: 16px 0 5px;
+}
+.guide-sec p, .guide-sec li {
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: #cdd6df;
+}
+.guide-sec p { margin: 6px 0; }
+.guide-sec ul { margin: 6px 0 6px 4px; padding-left: 18px; }
+.guide-sec li { margin: 3px 0; }
+.guide-sec b { color: #fff; }
+.guide-sec kbd {
+    background: #1a2430;
+    border: 1px solid #34424f;
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 11.5px;
+    font-family: inherit;
+    color: #ffd166;
+}
+.guide-sec mark {
+    background: #ffd166;
+    color: #1a1208;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+.guide-no-results {
+    font-size: 13px;
+    color: var(--text-dim);
+    padding: 30px;
+    text-align: center;
 }
 
 .pane {

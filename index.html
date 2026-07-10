@@ -14,7 +14,7 @@
     <script src="vendor/maplibre-gl.js"></script>
     <link href="vendor/maplibre-gl.css" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=115">
+    <link rel="stylesheet" href="style.css?v=116">
     <!-- Vercel Speed Insights -->
     <script type="module">
       import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
@@ -50,6 +50,12 @@
                     <i data-lucide="chevron-down" id="whats-new-chevron" class="whats-new-chevron"></i>
                 </div>
                 <div id="whats-new-body" class="whats-new-body" style="display:none;"></div>
+            </div>
+
+            <!-- USER GUIDE (full reference manual) -->
+            <div id="user-guide-btn" class="user-guide-btn" title="Open the User Guide — full reference for every workstation feature">
+                <span><i data-lucide="book-open"></i> USER GUIDE</span>
+                <span class="badge blue">MANUAL</span>
             </div>
 
             <div class="product-browser">
@@ -1022,7 +1028,22 @@
         </div>
     </div>
 
-    <script src="app.js?v=231"></script>
+    <!-- USER GUIDE (full-screen reference manual) -->
+    <div id="guide-overlay" class="modal-overlay" style="display:none;">
+        <div class="guide-panel">
+            <div class="guide-header">
+                <span class="guide-title"><i data-lucide="book-open"></i> FX-NET NEXTGEN &mdash; USER GUIDE</span>
+                <input id="guide-search" type="text" placeholder="Search the guide&hellip; (e.g. SRM, preset, loop, tilt)" autocomplete="off">
+                <button id="guide-close" class="btn-icon" title="Close (Esc)"><i data-lucide="x"></i></button>
+            </div>
+            <div class="guide-body">
+                <nav id="guide-toc" class="guide-toc"></nav>
+                <div id="guide-content" class="guide-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=232"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
