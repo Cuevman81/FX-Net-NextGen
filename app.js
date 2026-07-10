@@ -167,10 +167,19 @@ let watchesGeoJSON = { type: 'FeatureCollection', features: [] };
 let greatLakesLoaded = false;
 let greatLakesGeoJSON = { type: 'FeatureCollection', features: [] };
 let activeSpcDay = null;
-let activeQpfLayer = null;
-let activeMrmsQpe = null;
-let activeCpcTempLayer = null;
-let activeCpcPrecipLayer = null;
+// Per-pane product selections for tile-swap WMS layers. These MUST be keyed by
+// pane — a single global + retiling every map's shared source made Panel 4's
+// QPF flip to whatever Panel 2 selected (the "mirrored WPC QPF" bug).
+let paneQpf = {};          // paneId -> WPC QPF sublayer id
+let paneMrmsQpe = {};      // paneId -> MRMS QPE period ('1h'|'24h'|'48h'|'72h')
+let paneCpcTemp = {};      // paneId -> CPC temp outlook period
+let paneCpcPrecip = {};    // paneId -> CPC precip outlook period
+const qpfWmsUrl = qpfId =>
+    `https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=102100&layers=show:${qpfId}&size=512,512&imageSR=102100&format=png32&transparent=true&f=image`;
+const mrmsQpeWmsUrl = period => {
+    const layerMap = { '1h': 'mrms_p1h', '24h': 'mrms_p24h', '48h': 'mrms_p48h', '72h': 'mrms_p72h' };
+    return `https://mesonet.agron.iastate.edu/cgi-bin/wms/us/mrms_nn.cgi?service=WMS&version=1.1.1&request=GetMap&layers=${layerMap[period] || 'mrms_p1h'}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`;
+};
 let isSyncingMaps = false;
 // Panes pinned to an independent view — they neither drive nor follow the
 // tab's pan/zoom sync. Session-only (resets on reload). Keyed by pane id.
@@ -879,10 +888,10 @@ function initMap(paneId) {
                         if (mrmsEtVis) {
                             const readout = decodeMrmsPixel(data[0], data[1], data[2], 'echotops');
                             if (valSamplerEl) valSamplerEl.innerText = `MRMS ECHO TOPS: ${readout}`;
-                        } else if (mrmsQpeVis && activeMrmsQpe) {
+                        } else if (mrmsQpeVis && paneMrmsQpe[paneId]) {
                             const readout = decodeMrmsPixel(data[0], data[1], data[2], 'qpe');
                             const periodLabels = { '1h': '1-HR', '24h': '24-HR', '48h': '48-HR', '72h': '72-HR' };
-                            const pLabel = periodLabels[activeMrmsQpe] || 'QPE';
+                            const pLabel = periodLabels[paneMrmsQpe[paneId]] || 'QPE';
                             if (valSamplerEl) valSamplerEl.innerText = `MRMS ${pLabel} QPE: ${readout}`;
                         } else {
                             const prod = paneRadarProducts[paneId] || 'sr_bref';
@@ -3231,6 +3240,10 @@ function initFrontalPipIcons(map) {
     // Interrogation tools intercept clicks/moves when a tool mode is active.
     map.on('click', e => { if (window.interrogationMode) handleToolClick(map, paneId, e); });
     map.on('mousemove', e => { if (window.interrogationMode === 'measure') updateMeasurePreview(map, paneId, e.lngLat); });
+    // Double-click finishes a measure line (and must not zoom the map)
+    map.on('dblclick', e => {
+        if (window.interrogationMode === 'measure') { e.preventDefault(); finishMeasure(map); }
+    });
 
     map.on('click', async e => {
         if (window.interrogationMode) return;   // tool mode owns the click
@@ -7726,22 +7739,22 @@ function productItemActiveOn(pid, item) {
     else if (layer === 'wpc-fronts') isActive = isLayerVisible(map, 'wpc-fronts-solid');
     else if (layer === 'wpc-qpf') {
         const qpfId = item.getAttribute('data-qpf');
-        isActive = isLayerVisible(map, 'wpc-qpf-layer') && activeQpfLayer === qpfId;
+        isActive = isLayerVisible(map, 'wpc-qpf-layer') && paneQpf[pid] === qpfId;
     }
     else if (layer === 'nhc-storms') isActive = isLayerVisible(map, 'nhc-track-pts');
     else if (layer === 'nhc-outlook') isActive = isLayerVisible(map, 'nhc-outlook-fill');
     else if (layer === 'cpc-temp') {
         const period = item.getAttribute('data-period');
-        isActive = isLayerVisible(map, 'cpc-temp-layer') && activeCpcTempLayer === period;
+        isActive = isLayerVisible(map, 'cpc-temp-layer') && paneCpcTemp[pid] === period;
     }
     else if (layer === 'cpc-precip') {
         const period = item.getAttribute('data-period');
-        isActive = isLayerVisible(map, 'cpc-precip-layer') && activeCpcPrecipLayer === period;
+        isActive = isLayerVisible(map, 'cpc-precip-layer') && paneCpcPrecip[pid] === period;
     }
     else if (layer === 'mrms-echotops') isActive = isLayerVisible(map, 'mrms-echotops-layer');
     else if (layer === 'mrms-qpe') {
         const qpePeriod = item.getAttribute('data-qpe');
-        isActive = isLayerVisible(map, 'mrms-qpe-layer') && activeMrmsQpe === qpePeriod;
+        isActive = isLayerVisible(map, 'mrms-qpe-layer') && paneMrmsQpe[pid] === qpePeriod;
     }
     else if (layer === 'drought-monitor') isActive = isLayerVisible(map, 'drought-fill');
     else if (layer === 'cpc-drought-outlook') isActive = isLayerVisible(map, 'cpc-drought-layer');
@@ -8429,13 +8442,12 @@ function initProductSidebar() {
 
                 if (isAlreadyActive) {
                     map.setLayoutProperty('wpc-qpf-layer', 'visibility', 'none');
-                    activeQpfLayer = null;
+                    delete paneQpf[activePaneId];
                 } else {
-                    activeQpfLayer = qpfId;
-                    const wmsUrl = `https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=102100&layers=show:${qpfId}&size=512,512&imageSR=102100&format=png32&transparent=true&f=image`;
-                    Object.values(maps).forEach(m => {
-                        if (m.getSource('wpc-qpf')) m.getSource('wpc-qpf').setTiles([wmsUrl]);
-                    });
+                    // Per-pane: retile ONLY this pane's source so other panes
+                    // keep their own QPF product (no cross-pane mirroring)
+                    paneQpf[activePaneId] = qpfId;
+                    if (map.getSource('wpc-qpf')) map.getSource('wpc-qpf').setTiles([qpfWmsUrl(qpfId)]);
                     map.setLayoutProperty('wpc-qpf-layer', 'visibility', 'visible');
                     updateHealth('wpcQpf');
                 }
@@ -8460,15 +8472,11 @@ function initProductSidebar() {
 
                 if (isAlreadyActive) {
                     map.setLayoutProperty('mrms-qpe-layer', 'visibility', 'none');
-                    activeMrmsQpe = null;
+                    delete paneMrmsQpe[activePaneId];
                 } else {
-                    activeMrmsQpe = qpePeriod;
-                    const layerMap = { '1h': 'mrms_p1h', '24h': 'mrms_p24h', '48h': 'mrms_p48h', '72h': 'mrms_p72h' };
-                    const wmsLayer = layerMap[qpePeriod] || 'mrms_p1h';
-                    const wmsUrl = `https://mesonet.agron.iastate.edu/cgi-bin/wms/us/mrms_nn.cgi?service=WMS&version=1.1.1&request=GetMap&layers=${wmsLayer}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`;
-                    Object.values(maps).forEach(m => {
-                        if (m.getSource('mrms-qpe')) m.getSource('mrms-qpe').setTiles([wmsUrl]);
-                    });
+                    // Per-pane: retile ONLY this pane's source (see paneQpf note)
+                    paneMrmsQpe[activePaneId] = qpePeriod;
+                    if (map.getSource('mrms-qpe')) map.getSource('mrms-qpe').setTiles([mrmsQpeWmsUrl(qpePeriod)]);
                     map.setLayoutProperty('mrms-qpe-layer', 'visibility', 'visible');
                     updateHealth('mrmsQpe');
                 }
@@ -8516,16 +8524,15 @@ function initProductSidebar() {
 
                 if (isAlreadyActive) {
                     map.setLayoutProperty('cpc-temp-layer', 'visibility', 'none');
-                    activeCpcTempLayer = null;
+                    delete paneCpcTemp[activePaneId];
                 } else {
-                    activeCpcTempLayer = period;
+                    // Per-pane: retile ONLY this pane's source (see paneQpf note)
+                    paneCpcTemp[activePaneId] = period;
                     const svcMap = { '6-10': 'cpc_6_10_day_outlk', '8-14': 'cpc_8_14_day_outlk', 'monthly': 'cpc_mthly_temp_outlk', 'seasonal': 'cpc_sea_temp_outlk' };
                     const svc = svcMap[period] || svcMap['6-10'];
                     const layerId = (period === '6-10' || period === '8-14') ? '1' : '0';
                     const wmsUrl = `https://mapservices.weather.noaa.gov/vector/services/outlooks/${svc}/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&layers=${layerId}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`;
-                    Object.values(maps).forEach(m => {
-                        if (m.getSource('cpc-temp')) m.getSource('cpc-temp').setTiles([wmsUrl]);
-                    });
+                    if (map.getSource('cpc-temp')) map.getSource('cpc-temp').setTiles([wmsUrl]);
                     map.setLayoutProperty('cpc-temp-layer', 'visibility', 'visible');
                     updateHealth('cpcTemp');
                 }
@@ -8540,16 +8547,15 @@ function initProductSidebar() {
 
                 if (isAlreadyActive) {
                     map.setLayoutProperty('cpc-precip-layer', 'visibility', 'none');
-                    activeCpcPrecipLayer = null;
+                    delete paneCpcPrecip[activePaneId];
                 } else {
-                    activeCpcPrecipLayer = period;
+                    // Per-pane: retile ONLY this pane's source (see paneQpf note)
+                    paneCpcPrecip[activePaneId] = period;
                     const svcMap = { '6-10': 'cpc_6_10_day_outlk', '8-14': 'cpc_8_14_day_outlk', 'monthly': 'cpc_mthly_precip_outlk', 'seasonal': 'cpc_sea_precip_outlk' };
                     const svc = svcMap[period] || svcMap['6-10'];
                     const layerId = (period === '6-10' || period === '8-14') ? '0' : '0';
                     const wmsUrl = `https://mapservices.weather.noaa.gov/vector/services/outlooks/${svc}/MapServer/WMSServer?service=WMS&version=1.1.1&request=GetMap&layers=${layerId}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`;
-                    Object.values(maps).forEach(m => {
-                        if (m.getSource('cpc-precip')) m.getSource('cpc-precip').setTiles([wmsUrl]);
-                    });
+                    if (map.getSource('cpc-precip')) map.getSource('cpc-precip').setTiles([wmsUrl]);
                     map.setLayoutProperty('cpc-precip-layer', 'visibility', 'visible');
                     updateHealth('cpcPrecip');
                 }
@@ -9440,9 +9446,9 @@ function updateRadarLegend(paneId) {
             color: `rgb(${s.r},${s.g},${s.b})`,
             label: `${s.kft}`
         })));
-    } else if (mrmsQpeVis && activeMrmsQpe) {
+    } else if (mrmsQpeVis && paneMrmsQpe[pid]) {
         const qpeTitles = { '1h': 'MRMS 1-HR QPE (in)', '24h': 'MRMS 24-HR QPE (in)', '48h': 'MRMS 48-HR QPE (in)', '72h': 'MRMS 72-HR QPE (in)' };
-        const title = qpeTitles[activeMrmsQpe] || 'MRMS QPE (in)';
+        const title = qpeTitles[paneMrmsQpe[pid]] || 'MRMS QPE (in)';
         html = buildBarLegend(title, MRMS_QPE_SCALE.map(s => ({
             color: `rgb(${s.r},${s.g},${s.b})`,
             label: `${s.inches}`
@@ -9653,10 +9659,10 @@ function clearPane(map, paneId) {
     });
     paneGoesChannels[paneId] = null;
     if (paneId === activePaneId) activeGoesChannel = null;
-    activeQpfLayer = null;
-    activeMrmsQpe = null;
-    activeCpcTempLayer = null;
-    activeCpcPrecipLayer = null;
+    delete paneQpf[paneId];
+    delete paneMrmsQpe[paneId];
+    delete paneCpcTemp[paneId];
+    delete paneCpcPrecip[paneId];
     delete paneL3[paneId];
     delete paneGibs[paneId];
     updateRadarLegend(paneId);
@@ -10274,12 +10280,12 @@ function startAutoRefresh() {
             });
             updateHealth('mrmsEchotops');
         }
-        if (activeMrmsQpe) {
-            const layerMap = { '1h': 'mrms_p1h', '24h': 'mrms_p24h', '48h': 'mrms_p48h', '72h': 'mrms_p72h' };
-            const wmsLayer = layerMap[activeMrmsQpe] || 'mrms_p1h';
-            const qpeUrl = cacheBust(`https://mesonet.agron.iastate.edu/cgi-bin/wms/us/mrms_nn.cgi?service=WMS&version=1.1.1&request=GetMap&layers=${wmsLayer}&format=image/png&transparent=true&styles=&srs=EPSG:3857&width=256&height=256&bbox={bbox-epsg-3857}`);
-            Object.values(maps).forEach(m => {
-                if (m.getSource('mrms-qpe')) m.getSource('mrms-qpe').setTiles([qpeUrl]);
+        if (Object.values(paneMrmsQpe).some(Boolean)) {
+            // Per-pane refresh: each pane re-pulls its OWN period's tiles
+            Object.entries(maps).forEach(([pid, m]) => {
+                if (paneMrmsQpe[pid] && m.getSource('mrms-qpe')) {
+                    m.getSource('mrms-qpe').setTiles([cacheBust(mrmsQpeWmsUrl(paneMrmsQpe[pid]))]);
+                }
             });
             updateHealth('mrmsQpe');
         }
@@ -10358,11 +10364,12 @@ function startAutoRefresh() {
             fetchRiverGauges(true);
         }
 
-        // WPC QPF tile refresh
-        if (activeQpfLayer) {
-            const wmsUrl = cacheBust(`https://mapservices.weather.noaa.gov/vector/rest/services/precip/wpc_qpf/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=102100&layers=show:${activeQpfLayer}&size=512,512&imageSR=102100&format=png32&transparent=true&f=image`);
-            Object.values(maps).forEach(m => {
-                if (m.getSource('wpc-qpf')) m.getSource('wpc-qpf').setTiles([wmsUrl]);
+        // WPC QPF tile refresh — per-pane, each pane keeps its own product
+        if (Object.values(paneQpf).some(Boolean)) {
+            Object.entries(maps).forEach(([pid, m]) => {
+                if (paneQpf[pid] && m.getSource('wpc-qpf')) {
+                    m.getSource('wpc-qpf').setTiles([cacheBust(qpfWmsUrl(paneQpf[pid]))]);
+                }
             });
             updateHealth('wpcQpf');
         }
@@ -10910,6 +10917,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 10, 2026', items: [
+        'WPC QPF no longer mirrors across panels: selecting Day 2 QPF in one panel used to silently flip every other panel’s QPF to Day 2 (and vice versa). QPF product choice is now truly per-panel — Day 1 / Day 2 / Day 3 can each live in their own pane, like the ERO products already did. The same cross-panel mirroring was fixed for MRMS QPE periods (1/24/48/72-hr) and the CPC temperature & precipitation outlooks.',
+        'Distance/Bearing tool: DOUBLE-CLICK now finishes the line — it freezes on screen with its totals (no more rubber-band segment chasing the cursor off the edge of the pane), the map no longer zooms on that double-click, and the accidental stacked points it used to drop are cleaned up automatically. Click again to start a fresh line; Esc or re-clicking the tool still exits.'
+    ]},
     { date: 'Jul 8, 2026', items: [
         'Multi-panel loops now start in sync: in a 2/4-panel loop, panel 2+ no longer joins mid-cycle after panel 1 is already halfway through. Frame imagery downloads pane-by-pane, and the loop used to start on a fixed timer while later panes were still loading. Play now waits until every panel reports its frames loaded (capped at ~12–20s so a slow tile can’t stall it), shows the first frame while loading, and logs when all panes are ready.'
     ]},
@@ -11055,7 +11066,7 @@ function initWhatsNew() {
 // in the generic click handler. All math is great-circle (nautical miles).
 
 window.interrogationMode = null;          // 'measure' | 'rings' | 'eta' | null
-const _measure = { pts: [], map: null };
+const _measure = { pts: [], map: null, done: false };
 const _eta = { pts: [], head: null, speedKt: 0, dirDeg: 0 };
 const _EARTH_NM = 3440.065;
 
@@ -11095,7 +11106,11 @@ function _clearAllToolOverlays() { Object.values(maps).forEach(m => _setToolData
 function handleToolClick(map, paneId, e) {
     const p = [e.lngLat.lng, e.lngLat.lat];
     if (window.interrogationMode === 'measure') {
-        if (_measure.map !== map) { _measure.pts = []; _measure.map = map; }
+        // A finished line stays on screen; the next click starts a fresh one
+        if (_measure.map !== map || _measure.done) {
+            if (_measure.map && _measure.map !== map) _setToolData(_measure.map, [], []);
+            _measure.pts = []; _measure.map = map; _measure.done = false;
+        }
         _measure.pts.push(p);
         renderMeasure(map);
     } else if (window.interrogationMode === 'rings') {
@@ -11105,8 +11120,24 @@ function handleToolClick(map, paneId, e) {
     }
 }
 function updateMeasurePreview(map, paneId, lngLat) {
-    if (_measure.map !== map || _measure.pts.length === 0) return;
+    if (_measure.map !== map || _measure.pts.length === 0 || _measure.done) return;
     renderMeasure(map, [lngLat.lng, lngLat.lat]);
+}
+// Double-click ends the measurement: the line freezes on screen (no more
+// rubber-band preview chasing the cursor) and the next single click starts a
+// new line. The dblclick is preceded by two click events that each dropped a
+// point at ~the same spot, so trailing near-duplicates are trimmed first.
+function finishMeasure(map) {
+    if (_measure.map !== map || _measure.pts.length === 0 || _measure.done) return;
+    while (_measure.pts.length >= 2 &&
+           _nm(_measure.pts[_measure.pts.length - 2], _measure.pts[_measure.pts.length - 1]) < 0.2) {
+        _measure.pts.pop();
+    }
+    _measure.done = true;
+    renderMeasure(map);
+    let total = 0;
+    for (let i = 1; i < _measure.pts.length; i++) total += _nm(_measure.pts[i - 1], _measure.pts[i]);
+    addLiveLog(`MEASURE: line finished — ${total.toFixed(1)} nm total (${_measure.pts.length} points). Click to start a new line, Esc to exit.`, '#00e5ff');
 }
 function renderMeasure(map, preview) {
     const pts = preview ? _measure.pts.concat([preview]) : _measure.pts.slice();
@@ -11173,7 +11204,7 @@ function ringCenterForPane(paneId, map) {
 function setInterrogationMode(mode) {
     const newMode = (window.interrogationMode === mode) ? null : mode;
     window.interrogationMode = newMode;
-    _measure.pts = []; _measure.map = null;
+    _measure.pts = []; _measure.map = null; _measure.done = false;
     _eta.pts = []; _eta.head = null; _eta.speedKt = 0; _eta.dirDeg = 0;
     _clearAllToolOverlays();
     [['tool-measure', 'measure'], ['tool-range-rings', 'rings'], ['tool-storm-eta', 'eta']].forEach(([id, md]) => {
@@ -11186,7 +11217,7 @@ function setInterrogationMode(mode) {
         drawRangeRings(map, ringCenterForPane(activePaneId, map));
         addLiveLog('RANGE RINGS: 25 / 50 / 100 / 150 / 200 nm from the active site (click map to recenter).', '#ffcc00');
     } else if (newMode === 'measure') {
-        addLiveLog('MEASURE: click two or more points for great-circle range & bearing. Re-click the tool to exit.', '#00e5ff');
+        addLiveLog('MEASURE: click points for great-circle range & bearing — DOUBLE-CLICK to finish the line. Esc or re-click the tool to exit.', '#00e5ff');
     } else if (newMode === 'eta') {
         addLiveLog('STORM ETA: click the storm\'s PREVIOUS position, then its CURRENT position (Δt = loop STEP).', '#ff9e3b');
     } else {
