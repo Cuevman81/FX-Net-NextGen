@@ -7180,19 +7180,33 @@ function initTextModal() {
 
         versionSelect.innerHTML = '<option value="">Loading history...</option>';
         try {
-            let res;
+            let data = null;
             const nationalCenters = ['NHC', 'SPC', 'CPC', 'WPC', 'OPC', 'AWC'];
             if (nationalCenters.includes(wfo)) {
-                res = await fetch(`https://api.weather.gov/products/types/${product}`);
+                const res = await fetch(`https://api.weather.gov/products/types/${product}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                data = await res.json();
             } else {
-                res = await fetch(`https://api.weather.gov/products/types/${product}/locations/${wfo}`);
-                if (!res.ok) {
-                    res = await fetch(`https://api.weather.gov/products/types/${product}`);
+                let res = await fetch(`https://api.weather.gov/products/types/${product}/locations/${wfo}`);
+                if (res.ok) data = await res.json();
+                if (!data || !(data['@graph'] || []).length) {
+                    // Some products aren't filed under the WFO code — TAFs, for
+                    // example, live under airport IDs (MEM, not MEG), so the
+                    // locations/{wfo} lookup comes back EMPTY (not 404) for any
+                    // office whose code differs from its airports'. Query by
+                    // issuing office instead, which works for all of them.
+                    res = await fetch(`https://api.weather.gov/products?type=${product}&office=K${wfo}&limit=25`);
+                    if (res.ok) {
+                        const byOffice = await res.json();
+                        if ((byOffice['@graph'] || []).length) data = byOffice;
+                    }
+                }
+                if (!data) {
+                    const res2 = await fetch(`https://api.weather.gov/products/types/${product}`);
+                    if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
+                    data = await res2.json();
                 }
             }
-
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
             let products = data['@graph'] || [];
 
             // Filter by issuing office for national centers
@@ -7214,6 +7228,7 @@ function initTextModal() {
             versionSelect.innerHTML = '';
             if (products.length === 0) {
                 const opt = document.createElement('option');
+                opt.value = '';   // explicit: an <option> without value returns its TEXT as .value, which FETCH then requested as a URL (the "Error: HTTP 404")
                 opt.textContent = '-- No Products Found --';
                 versionSelect.appendChild(opt);
                 return;
@@ -7221,7 +7236,7 @@ function initTextModal() {
 
             products.slice(0, 25).forEach((p, i) => {
                 const opt = document.createElement('option');
-                opt.value = p['@id'] || p.id;
+                opt.value = p['@id'] || `https://api.weather.gov/products/${p.id}`;
                 const d = new Date(p.issuanceTime);
                 const dateStr = d.toLocaleString('en-US', { 
                     month: 'short', day: 'numeric', 
@@ -10917,6 +10932,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 10, 2026 (update 3)', items: [
+        'Text Browser fix — TAFs (and other airport-filed products) now load for every WFO. TAFs are filed under airport IDs rather than the forecast office code (Memphis’ TAFs live under MEM/TUP/etc., not MEG), so offices whose code doesn’t match an airport showed “No Products Found”. The browser now falls back to querying by issuing office, which works for all 122 WFOs. Also fixed the stray “Error: HTTP 404” that appeared when pressing FETCH PRODUCT with an empty product list.'
+    ]},
     { date: 'Jul 10, 2026 (update 2)', items: [
         'New USER GUIDE: a full-screen reference manual for the whole workstation, opened from the USER GUIDE button under What’s New. Larger, readable text; a table of contents to jump straight to any topic (radar tilts, loops, procedures, analysis tools…); and a search box that filters the guide and highlights matches. What’s New stays as the short release log — the deep how-it-works documentation now lives in the guide. The What’s New text also got a small readability bump.'
     ]},
