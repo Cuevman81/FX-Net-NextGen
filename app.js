@@ -2636,6 +2636,45 @@ function initFrontalPipIcons(map) {
         paint: { 'line-color': '#ff0000', 'line-width': 2 }
     });
 
+    // ─── Layer 7f2: Hurricane Hunter recon obs (HDOB flight tracks) ───
+    // 30-second aircraft observations decoded from URNT15/URPA15 messages.
+    // Points colored by the stronger of SFMR surface wind / flight-level wind.
+    map.addSource('recon-hdob', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+    });
+    map.addLayer({
+        id: 'recon-hdob-line', type: 'line', source: 'recon-hdob',
+        filter: ['==', ['get', 'layerType'], 'track'],
+        layout: { visibility: 'none' },
+        paint: { 'line-color': '#b0bec5', 'line-width': 1.2, 'line-dasharray': [2, 2] }
+    });
+    map.addLayer({
+        id: 'recon-hdob-pts', type: 'circle', source: 'recon-hdob',
+        filter: ['==', ['get', 'layerType'], 'ob'],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['case', ['==', ['get', 'latest'], 1], 6, 3],
+            'circle-color': ['step', ['coalesce', ['get', 'windMax'], 0],
+                '#34d5eb', 34, '#ffd166', 50, '#ff9e3b', 64, '#ff3b3b'],
+            'circle-stroke-width': ['case', ['==', ['get', 'latest'], 1], 2, 0.5],
+            'circle-stroke-color': '#000'
+        }
+    });
+    map.addLayer({
+        id: 'recon-hdob-labels', type: 'symbol', source: 'recon-hdob',
+        filter: ['==', ['get', 'latest'], 1],
+        layout: {
+            visibility: 'none',
+            'text-field': ['concat', ['get', 'callsign'], ' · ', ['get', 'storm']],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': 10,
+            'text-offset': [0, 1.6],
+            'text-allow-overlap': true
+        },
+        paint: { 'text-color': '#7fff9e', 'text-halo-color': '#000', 'text-halo-width': 1.5 }
+    });
+
     // ─── Layer 7g: NHC Tropical Outlook Areas (GeoJSON) ───
     map.addSource('nhc-outlook', {
         type: 'geojson',
@@ -3175,6 +3214,28 @@ function initFrontalPipIcons(map) {
     });
     map.on('mouseenter', 'nhc-track-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'nhc-track-pts', () => { map.getCanvas().style.cursor = ''; });
+
+    // Hurricane Hunter obs click → decoded observation popup
+    map.on('click', 'recon-hdob-pts', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties;
+        const row = (k, v) => v != null && v !== '' ?
+            `<div style="display:flex;justify-content:space-between;gap:14px;"><span style="color:#8b97a3;">${k}</span><span style="color:#fff;">${v}</span></div>` : '';
+        const html = `
+            <div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:230px;">
+                <div style="color:#7fff9e;font-weight:700;margin-bottom:4px;">✈ ${p.callsign} · ${p.storm}<span style="color:#8b97a3;font-weight:400;"> · ${p.timeStr}Z</span></div>
+                ${row('Flight-level wind', p.flWind)}
+                ${row('Peak FL wind (10s)', p.peak != null ? p.peak + ' kt' : null)}
+                ${row('SFMR sfc wind', p.sfmr != null ? p.sfmr + ' kt' : null)}
+                ${row('Extrap sfc pressure', p.psfc != null ? p.psfc + ' mb' : null)}
+                ${row('Flight-level temp', p.temp != null ? p.temp + '°C' : null)}
+                ${row('Dew point', p.dp != null ? p.dp + '°C' : null)}
+                ${row('Rain rate (SFMR)', p.rain != null ? p.rain + ' mm/hr' : null)}
+            </div>`;
+        new maplibregl.Popup({ maxWidth: '320px' }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'recon-hdob-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'recon-hdob-pts', () => { map.getCanvas().style.cursor = ''; });
 
     // NHC Tropical Outlook area click — shows probabilities + loads TWO discussion
     map.on('click', 'nhc-outlook-fill', e => {
@@ -4779,6 +4840,184 @@ async function fetchWPCFronts(show) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const NHC_BASE = 'https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather_summary/MapServer';
+
+// ─── Hurricane Hunter reconnaissance (IEM AFOS feeds, CORS-open) ───
+// HDOBs (URNT15/URPA15): 30-sec aircraft obs transmitted in 10-min batches
+// while a mission is airborne. TCPOD (REPRPD): CARCAH's daily recon tasking.
+// VDM (REPNT2/REPPN2): vortex center fixes. All fetched as raw AFOS text.
+const AFOS_RETRIEVE = 'https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py';
+
+async function fetchAfos(pil, limit) {
+    const res = await fetch(cacheBust(`${AFOS_RETRIEVE}?pil=${pil}&fmt=text&limit=${limit}`));
+    if (!res.ok) throw new Error(`AFOS ${pil}: HTTP ${res.status}`);
+    const raw = await res.text();
+    if (raw.startsWith('ERROR')) return [];
+    // Products are separated by \x01; each starts with a byte-count line
+    return raw.split('\x01')
+        .map(p => p.replace(/^\s*\d+\s*\n/, '').trim())
+        .filter(p => p.length > 20);
+}
+
+// Decode one HDOB product → { callsign, mission, storm, dateStr, txMs, obs: [...] }
+function parseHdob(text) {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    // WMO line: "URNT15 KWBC 172317" → transmission day/time
+    const wmo = lines[0]?.match(/^UR\w{2}\d{2}\s+\w{4}\s+(\d{2})(\d{2})(\d{2})/);
+    // Header: "AF303 0891A AL91 HDOB 04 20260718" (or "NOAA9 WXWXA TRAIN HDOB ...")
+    // [ \t] only — \s would let the match swallow the WMO line above it
+    const hdr = text.match(/^(\S+)[ \t]+(\S+)[ \t]+(\S+(?:[ \t]+\S+)*?)[ \t]+HDOB[ \t]+(\d+)[ \t]+(\d{8})[ \t]*$/m);
+    if (!hdr) return null;
+    const [, callsign, mission, storm, , dateStr] = hdr;
+    const y = +dateStr.slice(0, 4), mo = +dateStr.slice(4, 6) - 1, dy = +dateStr.slice(6, 8);
+    const obs = [];
+    for (const line of lines) {
+        const t = line.split(/\s+/);
+        if (t.length < 13) continue;
+        const m = t[0].match(/^(\d{2})(\d{2})(\d{2})$/);
+        const lat = t[1].match(/^(\d{2})(\d{2})([NS])$/);
+        const lon = t[2].match(/^(\d{3})(\d{2})([EW])$/);
+        if (!m || !lat || !lon) continue;
+        const num = (s, div = 1) => /^[+-]?\d+$/.test(s) ? +s / div : null;
+        let psfc = num(t[5], 10);
+        if (psfc != null) { if (psfc < 500) psfc += 1000; if (psfc < 850 || psfc > 1060) psfc = null; }
+        const wind = t[8].match(/^(\d{3})(\d{3})$/);
+        obs.push({
+            ms: Date.UTC(y, mo, dy, +m[1], +m[2], +m[3]),
+            timeStr: `${m[1]}:${m[2]}:${m[3]}`,
+            lat: (+lat[1] + lat[2] / 60) * (lat[3] === 'S' ? -1 : 1),
+            lon: (+lon[1] + lon[2] / 60) * (lon[3] === 'W' ? -1 : 1),
+            psfc,
+            temp: num(t[6], 10),
+            dp: num(t[7], 10),
+            wdir: wind ? +wind[1] : null,
+            wspd: wind ? +wind[2] : null,
+            peak: num(t[9]),
+            sfmr: num(t[10]),
+            rain: num(t[11])
+        });
+    }
+    return { callsign, mission, storm, dateStr, wmo, obs };
+}
+
+function updateReconBadge(newestMs) {
+    const badge = document.getElementById('recon-badge');
+    if (!badge) return;
+    const ageMin = newestMs ? (Date.now() - newestMs) / 60000 : Infinity;
+    if (ageMin < 90) {
+        badge.textContent = 'IN AIR';
+        badge.className = 'badge green';
+        badge.title = `Hurricane Hunters transmitting — last ob ${Math.round(ageMin)} min ago`;
+    } else {
+        badge.textContent = 'RECON';
+        badge.className = 'badge blue';
+        badge.title = newestMs
+            ? `No aircraft airborne — last obs ${(ageMin / 60).toFixed(1)} h ago`
+            : 'No recent reconnaissance observations';
+    }
+}
+
+async function fetchReconHdob(show) {
+    try {
+        // ~24 messages/pil ≈ last 4 flight-hours per basin
+        const [atl, epac] = await Promise.all([
+            fetchAfos('AHONT1', 24).catch(() => []),
+            fetchAfos('AHOPN1', 12).catch(() => [])
+        ]);
+        const cutoff = Date.now() - 24 * 3600 * 1000;
+        const byAircraft = {};   // callsign|mission -> merged obs
+        [...atl, ...epac].forEach(prod => {
+            const d = parseHdob(prod);
+            if (!d || !d.obs.length) return;
+            const key = `${d.callsign}|${d.mission}`;
+            if (!byAircraft[key]) byAircraft[key] = { ...d, obs: [] };
+            byAircraft[key].obs.push(...d.obs.filter(o => o.ms > cutoff));
+        });
+        const features = [];
+        let newestMs = 0, aircraftUp = [];
+        Object.values(byAircraft).forEach(ac => {
+            if (!ac.obs.length) return;
+            const seen = new Set();
+            ac.obs = ac.obs.filter(o => !seen.has(o.ms) && seen.add(o.ms)).sort((a, b) => a.ms - b.ms);
+            const last = ac.obs[ac.obs.length - 1];
+            if (last.ms > newestMs) newestMs = last.ms;
+            aircraftUp.push(`${ac.callsign} (${ac.storm})`);
+            features.push({
+                type: 'Feature', properties: { layerType: 'track' },
+                geometry: { type: 'LineString', coordinates: ac.obs.map(o => [o.lon, o.lat]) }
+            });
+            ac.obs.forEach((o, i) => features.push({
+                type: 'Feature',
+                properties: {
+                    layerType: 'ob', latest: i === ac.obs.length - 1 ? 1 : 0,
+                    callsign: ac.callsign, storm: ac.storm, timeStr: o.timeStr,
+                    windMax: Math.max(o.sfmr || 0, o.wspd || 0),
+                    flWind: o.wdir != null ? `${String(o.wdir).padStart(3, '0')}° @ ${o.wspd} kt` : null,
+                    peak: o.peak, sfmr: o.sfmr, psfc: o.psfc, temp: o.temp, dp: o.dp, rain: o.rain
+                },
+                geometry: { type: 'Point', coordinates: [o.lon, o.lat] }
+            }));
+        });
+        const data = { type: 'FeatureCollection', features };
+        Object.values(maps).forEach(m => {
+            if (m.getSource && m.getSource('recon-hdob')) m.getSource('recon-hdob').setData(data);
+        });
+        updateReconBadge(newestMs);
+        if (show) {
+            addLiveLog(features.length
+                ? `RECON: ${aircraftUp.join(', ')} — ${features.filter(f => f.properties.layerType === 'ob').length} obs plotted (last ${((Date.now() - newestMs) / 60000).toFixed(0)} min ago)`
+                : 'RECON: no Hurricane Hunter obs in the last 24 h. Check the TCPOD for upcoming missions.',
+                features.length ? '#7fff9e' : '#ffb300');
+        }
+    } catch (e) {
+        if (show) addLiveLog(`RECON ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+async function openReconText(kind) {
+    const panel = document.getElementById('recon-text-panel');
+    const title = document.getElementById('recon-text-title');
+    const body = document.getElementById('recon-text-body');
+    if (!panel || !body) return;
+    panel.style.display = 'block';
+    title.textContent = kind === 'tcpod' ? 'RECON SCHEDULE — TROPICAL CYCLONE PLAN OF THE DAY' : 'VORTEX DATA MESSAGE (RECON CENTER FIX)';
+    body.textContent = 'Loading…';
+    try {
+        if (kind === 'tcpod') {
+            const prods = await fetchAfos('REPRPD', 1);
+            body.textContent = prods[0] || 'No Plan of the Day available.';
+        } else {
+            const [atl, epac] = await Promise.all([
+                fetchAfos('REPNT2', 1).catch(() => []),
+                fetchAfos('REPPN2', 1).catch(() => [])
+            ]);
+            const parts = [];
+            if (atl[0]) parts.push('════ ATLANTIC ════\n\n' + atl[0]);
+            if (epac[0]) parts.push('════ EAST PACIFIC ════\n\n' + epac[0]);
+            body.textContent = parts.join('\n\n') || 'No Vortex Data Messages available.';
+        }
+    } catch (e) {
+        body.textContent = `Error: ${e.message}`;
+    }
+}
+
+function initRecon() {
+    document.getElementById('recon-tcpod')?.addEventListener('click', () => openReconText('tcpod'));
+    document.getElementById('recon-vdm')?.addEventListener('click', () => openReconText('vdm'));
+    document.getElementById('recon-text-close')?.addEventListener('click', () => {
+        const p = document.getElementById('recon-text-panel');
+        if (p) p.style.display = 'none';
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            const p = document.getElementById('recon-text-panel');
+            if (p) p.style.display = 'none';
+        }
+    });
+    // Startup + periodic badge refresh so "IN AIR" shows even before the layer
+    // is toggled on — this is the "are the Hurricane Hunters up?" indicator.
+    setTimeout(() => fetchReconHdob(false), 8000);
+    setInterval(() => fetchReconHdob(false), 15 * 60 * 1000);
+}
 
 async function fetchNHCStorms(show) {
     if (!show) { updateSidebarToActivePane(); return; }
@@ -7758,6 +7997,7 @@ function productItemActiveOn(pid, item) {
     }
     else if (layer === 'nhc-storms') isActive = isLayerVisible(map, 'nhc-track-pts');
     else if (layer === 'nhc-outlook') isActive = isLayerVisible(map, 'nhc-outlook-fill');
+    else if (layer === 'recon-hdob') isActive = isLayerVisible(map, 'recon-hdob-pts');
     else if (layer === 'cpc-temp') {
         const period = item.getAttribute('data-period');
         isActive = isLayerVisible(map, 'cpc-temp-layer') && paneCpcTemp[pid] === period;
@@ -8496,6 +8736,17 @@ function initProductSidebar() {
                     updateHealth('mrmsQpe');
                 }
                 updateRadarLegend();
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Hurricane Hunter recon obs ───
+            if (layer === 'recon-hdob') {
+                const isActive = !item.classList.contains('active');
+                ['recon-hdob-line', 'recon-hdob-pts', 'recon-hdob-labels'].forEach(l => {
+                    if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
+                });
+                if (isActive) await fetchReconHdob(true);
                 updateSidebarToActivePane();
                 return;
             }
@@ -9667,7 +9918,8 @@ function clearPane(map, paneId) {
         'ndfd-temp-layer',
         'storm-attr-track', 'storm-attr-fpos', 'storm-attr-cell', 'storm-attr-label',
         'meso-circ', 'meso-tvs', 'meso-label',
-        'nws-cwa-layer', 'nws-cwa-label-layer'
+        'nws-cwa-layer', 'nws-cwa-label-layer',
+        'recon-hdob-line', 'recon-hdob-pts', 'recon-hdob-labels'
     ];
     allToggleLayers.forEach(l => {
         if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
@@ -10304,6 +10556,10 @@ function startAutoRefresh() {
             });
             updateHealth('mrmsQpe');
         }
+        // Hurricane Hunter obs arrive every ~10 min while a mission is airborne
+        if (Object.values(maps).some(m => isLayerVisible(m, 'recon-hdob-pts'))) {
+            fetchReconHdob(false);
+        }
     }, 5 * 60 * 1000);
 
     // Dedicated Top-of-Hour AirNow AQI Sync (:12, :27, :42 past the hour)
@@ -10932,6 +11188,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 18, 2026', items: [
+        'Hurricane Hunters come to the NHC menu: a live Recon Flight Obs map layer plots the aircraft’s actual track from its 30-second observations (wind-colored points, callsign label on the newest position, click any point for SFMR surface wind / flight-level wind / extrapolated pressure), with an IN AIR badge that turns green whenever a Hurricane Hunter is transmitting. Recon Schedule (TCPOD) shows CARCAH’s daily flight plan — which aircraft fly which storm and when — and Vortex Data Message shows the latest center fix from inside the storm. See the User Guide → Tropical for details.'
+    ]},
     { date: 'Jul 10, 2026 (update 3)', items: [
         'Text Browser fix — TAFs (and other airport-filed products) now load for every WFO. TAFs are filed under airport IDs rather than the forecast office code (Memphis’ TAFs live under MEM/TUP/etc., not MEG), so offices whose code doesn’t match an airport showed “No Products Found”. The browser now falls back to querying by issuing office, which works for all 122 WFOs. Also fixed the stray “Error: HTTP 404” that appeared when pressing FETCH PRODUCT with an empty product list.'
     ]},
@@ -11173,11 +11432,18 @@ const USER_GUIDE = [
             <li><b>CPC Climate Outlooks</b> — temperature and precipitation probability outlooks for 6–10 day, 8–14 day, monthly, and seasonal periods. The period is <b>per panel</b>.</li>
         </ul>` },
 
-    { id: 'tropical', title: 'Tropical — NHC', html: `
+    { id: 'tropical', title: 'Tropical — NHC & Hurricane Hunters', html: `
         <ul>
             <li><b>Active Storms</b> — forecast cones, track points with intensities, and coastal watch/warning segments.</li>
             <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details.</li>
             <li><b>Tropical Discussions</b> open the full NHC text products.</li>
+        </ul>
+        <h3>Hurricane Hunters (Recon)</h3>
+        <p>The badge on <b>Recon Flight Obs</b> tells you at a glance whether an aircraft is up: <b>IN AIR</b> (green) means a Hurricane Hunter is transmitting right now; RECON means no one is airborne.</p>
+        <ul>
+            <li><b>Recon Flight Obs (live)</b> — plots the aircraft’s actual flight track from its 30-second high-density observations (HDOBs, updated every ~10 minutes in flight). Points are colored by wind: cyan &lt;34 kt, yellow 34–49, orange 50–63, red 64+ (the stronger of SFMR surface wind or flight-level wind). The newest position is enlarged and labeled with the callsign and storm ID. Click any point for the decoded observation — flight-level wind, peak wind, SFMR surface wind, extrapolated surface pressure, temperature and dew point.</li>
+            <li><b>Recon Schedule (TCPOD)</b> — CARCAH’s daily Tropical Cyclone Plan of the Day: which aircraft fly which systems, takeoff and fix times for the next 24 hours, and the outlook for the following day.</li>
+            <li><b>Vortex Data Message</b> — the crew’s center-fix report from inside the storm: fix position, minimum pressure, max winds, and eye character.</li>
         </ul>` },
 
     { id: 'aviation', title: 'Aviation Hazards', html: `
@@ -12494,6 +12760,7 @@ function init() {
     initContextMenu();
     initWhatsNew();
     initUserGuide();
+    initRecon();
     updateWarnModeLabel();
     initHealthToggle();
     initDebugToggle();

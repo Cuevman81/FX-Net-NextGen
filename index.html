@@ -226,6 +226,10 @@
                     <div class="sub-category">Tropical Discussions</div>
                     <div class="product-item" data-layer="nhc-two-atl"><span>Atlantic TWO</span></div>
                     <div class="product-item" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
+                    <div class="sub-category">Hurricane Hunters (Recon)</div>
+                    <div class="product-item" data-layer="recon-hdob"><span>Recon Flight Obs (live)</span> <span class="badge blue" id="recon-badge">RECON</span></div>
+                    <div class="product-item" id="recon-tcpod"><span>Recon Schedule (TCPOD)</span> <span class="badge blue">DAILY</span></div>
+                    <div class="product-item" id="recon-vdm"><span>Vortex Data Message</span> <span class="badge orange">FIX</span></div>
                 </div>
 
                 <!-- CPC CLIMATE OUTLOOKS -->
@@ -1028,6 +1032,15 @@
         </div>
     </div>
 
+    <!-- RECON TEXT PANEL (TCPOD schedule / Vortex Data Message) -->
+    <div id="recon-text-panel" style="display:none; position:fixed; top:80px; right:20px; z-index:901; background:rgba(10,12,18,0.97); border:1px solid rgba(0,229,255,0.35); border-radius:4px; padding:10px 14px; font-family:'Roboto Mono',monospace; min-width:340px; max-width:560px; box-shadow:0 4px 20px rgba(0,0,0,0.6); max-height:80vh; overflow-y:auto;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span id="recon-text-title" style="color:#00e5ff; font-size:9px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase;">RECON</span>
+            <span id="recon-text-close" style="color:#ff6666; cursor:pointer; font-size:14px; line-height:1;">&times;</span>
+        </div>
+        <pre id="recon-text-body" style="font-size:10.5px; color:rgba(255,255,255,0.88); line-height:1.5; white-space:pre-wrap; margin:0;"></pre>
+    </div>
+
     <!-- USER GUIDE (full-screen reference manual) -->
     <div id="guide-overlay" class="modal-overlay" style="display:none;">
         <div class="guide-panel">
@@ -1043,7 +1056,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=233"></script>
+    <script src="app.js?v=234"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
