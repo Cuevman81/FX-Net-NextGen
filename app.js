@@ -5452,6 +5452,68 @@ function initAdeck() {
         fetchAdeckList();
         if (adeckMode && adeckStorm) fetchAdeck(false);
     }, 60 * 60 * 1000);
+}
+
+// ─── Unified toggle behavior for panel-opening menu items ───
+// Map-layer items highlight while on and un-toggle on a second click; these
+// entries give every panel-opening item the same contract: highlight while its
+// panel is open, second click closes, and any close path (×, Esc) un-highlights.
+const PANEL_MENU_ITEMS = [
+    { item: 'btn-vad',           panel: 'vad-panel' },
+    { item: 'btn-soundings',     panel: 'sounding-modal' },
+    { item: 'btn-skewt',         panel: 'skewt-panel' },
+    { item: 'btn-spcmeso',       panel: 'spcmeso-panel' },
+    { item: 'recon-tcpod',       panel: 'recon-text-panel' },
+    { item: 'recon-vdm',         panel: 'recon-text-panel' },
+    { item: 'adeck-int-early',   panel: 'intensity-panel' },
+    { item: 'adeck-int-late',    panel: 'intensity-panel' },
+    { item: 'btn-text-products', panel: 'text-panel' },
+    { item: 'btn-meteogram',     panel: 'meteogram-panel' },
+    { item: 'nhc-two-atl',       panel: 'text-panel' },
+    { item: 'nhc-two-epac',      panel: 'text-panel' }
+];
+
+function syncPanelHighlights() {
+    PANEL_MENU_ITEMS.forEach(p => {
+        const item = document.getElementById(p.item);
+        const panel = document.getElementById(p.panel);
+        if (!item || !panel) return;
+        const on = getComputedStyle(panel).display !== 'none' && panel.dataset.openedBy === p.item;
+        item.classList.toggle('active', on);
+    });
+}
+
+function initPanelToggles() {
+    // Document-level CAPTURE handler: runs before each item's own open handler,
+    // so a click on an already-active item can close the panel and swallow the
+    // click (otherwise the original handler would immediately reopen it).
+    document.addEventListener('click', e => {
+        const t = e.target instanceof Element ? e.target : null;
+        if (!t) return;
+        const entry = PANEL_MENU_ITEMS.find(p => t.closest('#' + p.item));
+        if (!entry) return;
+        const panel = document.getElementById(entry.panel);
+        if (!panel) return;
+        const isOpen = getComputedStyle(panel).display !== 'none';
+        if (isOpen && panel.dataset.openedBy === entry.item) {
+            e.stopPropagation();
+            panel.style.display = 'none';
+            delete panel.dataset.openedBy;
+            syncPanelHighlights();
+        } else {
+            panel.dataset.openedBy = entry.item;
+            setTimeout(syncPanelHighlights, 0);
+        }
+    }, true);
+    // Keep highlights honest for every close path (× button, Esc, other code)
+    const seen = new Set();
+    PANEL_MENU_ITEMS.forEach(p => {
+        if (seen.has(p.panel)) return;
+        seen.add(p.panel);
+        const panel = document.getElementById(p.panel);
+        if (panel) new MutationObserver(syncPanelHighlights)
+            .observe(panel, { attributes: true, attributeFilter: ['style'] });
+    });
     // New model runs arrive continuously through each cycle
     setInterval(() => {
         if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(false);
@@ -8439,6 +8501,10 @@ function productItemActiveOn(pid, item) {
     else if (layer === 'recon-hdob') isActive = isLayerVisible(map, 'recon-hdob-pts');
     else if (layer === 'adeck') {
         isActive = isLayerVisible(map, 'adeck-lines') && adeckMode === item.getAttribute('data-adeck');
+    }
+    else if (layer === 'nhc-two-atl' || layer === 'nhc-two-epac') {
+        const tp = document.getElementById('text-panel');
+        isActive = !!tp && tp.style.display !== 'none' && tp.dataset.openedBy === layer;
     }
     else if (layer === 'cpc-temp') {
         const period = item.getAttribute('data-period');
@@ -11652,6 +11718,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026', items: [
+        'Menu items that open panels now behave exactly like map-layer items: the item highlights while its panel is open, clicking it again closes the panel, and closing any other way (× or Esc) un-highlights it. Applies everywhere — VAD Wind Profile, Skew-T Soundings, Interactive Skew-T, SPC Mesoanalysis, Recon Schedule (TCPOD), Vortex Data Message, both Intensity Guidance charts, Text Browser, Forecast Meteogram, and the Atlantic / East Pacific TWO discussions.'
+    ]},
     { date: 'Jul 18, 2026 (update 4)', items: [
         'Intensity guidance joins the spaghetti: two new items under NHC Tropical → Model Guidance open a kt-vs-forecast-hour chart built from the same live a-deck — Early Cycle Intensity (Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the interpolated HAFS-A/B, HWRF, COAMPS-TC, GFS and Google DeepMind aids, plus the NHC Official forecast) and Late Cycle Intensity (experimental — the raw synoptic-time runs). Dashed lines mark the TS and Category 1–5 thresholds, the legend is sorted by each model’s end-of-run intensity, and the freshness note shows the newest run time and any aids still on older cycles. Uses the same storm selector as the track spaghetti; Esc or × closes the chart.'
     ]},
@@ -13245,6 +13314,7 @@ function init() {
     initUserGuide();
     initRecon();
     initAdeck();
+    initPanelToggles();
     updateWarnModeLabel();
     initHealthToggle();
     initDebugToggle();

@@ -224,8 +224,8 @@
                     <div class="product-item" data-layer="nhc-storms"><span>Active Storms & Cones</span> <span class="badge red">LIVE</span></div>
                     <div class="product-item" data-layer="nhc-outlook"><span>Tropical Outlook Areas</span> <span class="badge orange">NHC</span></div>
                     <div class="sub-category">Tropical Discussions</div>
-                    <div class="product-item" data-layer="nhc-two-atl"><span>Atlantic TWO</span></div>
-                    <div class="product-item" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
+                    <div class="product-item" id="nhc-two-atl" data-layer="nhc-two-atl"><span>Atlantic TWO</span></div>
+                    <div class="product-item" id="nhc-two-epac" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
                     <div class="sub-category">Hurricane Hunters (Recon)</div>
                     <div class="product-item" data-layer="recon-hdob"><span>Recon Flight Obs (live)</span> <span class="badge blue" id="recon-badge">RECON</span></div>
                     <div class="product-item" id="recon-tcpod"><span>Recon Schedule (TCPOD)</span> <span class="badge blue">DAILY</span></div>
@@ -1078,7 +1078,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=237"></script>
+    <script src="app.js?v=238"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
