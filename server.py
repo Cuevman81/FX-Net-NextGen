@@ -203,6 +203,8 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     self._send(200, 'text/plain', ad.fetch_ships(qs.get('ships', [''])[0].lower()).encode())
                 elif qs.get('rip', [''])[0]:
                     self._send(200, 'text/plain', ad.fetch_rip(qs.get('rip', [''])[0].lower()).encode())
+                elif qs.get('fcst', [''])[0]:
+                    self._send(200, 'text/plain', ad.fetch_ofcl(qs.get('fcst', [''])[0].lower()).encode())
                 else:
                     sid = qs.get('id', [''])[0].lower()
                     self._send(200, 'text/plain', ad.fetch_adeck(sid).encode())

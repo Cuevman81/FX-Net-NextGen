@@ -175,6 +175,18 @@ def fetch_nhc():
     return {'storms': out}
 
 
+def fetch_ofcl(sid):
+    """Return every OFCL (NHC official forecast) row across ALL cycles in the
+    a-deck — the run-to-run history of the forecast track. OFCL is ~10 rows per
+    advisory, so the full-season set is still small."""
+    if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
+        raise ValueError('bad storm id')
+    raw = gzip.decompress(_fetch(f'{AID_PUBLIC}a{sid}.dat.gz'))
+    lines = raw.decode('utf-8', errors='replace').splitlines()
+    out = [ln for ln in lines if len(ln.split(',')) > 4 and ln.split(',')[4].strip() == 'OFCL']
+    return '\n'.join(out)
+
+
 def fetch_adeck(sid):
     """Return the a-deck text for one storm, trimmed to the latest 3 cycles."""
     if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
@@ -211,6 +223,9 @@ class handler(BaseHTTPRequestHandler):
                 ctype = 'text/plain'
             elif q.get('rip', [''])[0]:
                 body = fetch_rip(q.get('rip', [''])[0].lower()).encode()
+                ctype = 'text/plain'
+            elif q.get('fcst', [''])[0]:
+                body = fetch_ofcl(q.get('fcst', [''])[0].lower()).encode()
                 ctype = 'text/plain'
             else:
                 sid = q.get('id', [''])[0].lower()

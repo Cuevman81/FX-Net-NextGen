@@ -2640,6 +2640,55 @@ function initFrontalPipIcons(map) {
         paint: { 'line-color': '#ff0000', 'line-width': 2 }
     });
 
+    // ─── Forecast History (run-to-run): past OFCL tracks + actual best-track path ───
+    // Each prior advisory's official forecast track is drawn faded (older fainter,
+    // newest highlighted) anchored at its fixed position, over the storm's actual
+    // traveled path — showing how the forecast has trended cycle to cycle.
+    map.addSource('nhc-fcst-history', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'nhc-fcst-actual-line', type: 'line', source: 'nhc-fcst-history',
+        filter: ['==', ['get', 'kind'], 'actual'],
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#ff8c00', 'line-width': 3 }
+    });
+    map.addLayer({
+        id: 'nhc-fcst-lines', type: 'line', source: 'nhc-fcst-history',
+        filter: ['==', ['get', 'kind'], 'fcst'],
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+            'line-color': ['coalesce', ['get', 'color'], '#00e5ff'],
+            'line-width': ['coalesce', ['get', 'w'], 1.5],
+            'line-opacity': ['coalesce', ['get', 'op'], 0.6],
+            'line-dasharray': [2.5, 2]
+        }
+    });
+    map.addLayer({
+        id: 'nhc-fcst-actual-pts', type: 'circle', source: 'nhc-fcst-history',
+        filter: ['==', ['get', 'kind'], 'fix'],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['case', ['==', ['get', 'latest'], 1], 6, 3.2],
+            'circle-color': ['step', ['coalesce', ['get', 'mw'], 0],
+                '#00e5ff', 34, '#ffff00', 64, '#ff6600', 96, '#ff0000', 130, '#ff00ff'],
+            'circle-stroke-width': 1.4,
+            'circle-stroke-color': '#1a0e00'
+        }
+    });
+    map.addLayer({
+        id: 'nhc-fcst-labels', type: 'symbol', source: 'nhc-fcst-history',
+        filter: ['==', ['get', 'kind'], 'fcstlabel'],
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'lbl'], 'text-font': ['Noto Sans Bold'],
+            'text-size': 9, 'text-offset': [0, 0.8], 'text-allow-overlap': false
+        },
+        paint: {
+            'text-color': ['coalesce', ['get', 'color'], '#00e5ff'],
+            'text-opacity': ['coalesce', ['get', 'op'], 0.85],
+            'text-halo-color': '#000', 'text-halo-width': 1.3
+        }
+    });
+
     // ─── Layer 7f2: Hurricane Hunter recon obs (HDOB flight tracks) ───
     // 30-second aircraft observations decoded from URNT15/URPA15 messages.
     // Points colored by the stronger of SFMR surface wind / flight-level wind.
@@ -3244,6 +3293,12 @@ function initFrontalPipIcons(map) {
         }
 
         const validTime = p.fldatelbl || p.FLDATELBL || p.datelbl || p.DATELBL || '';
+        const advNum = p.ADVISNUM || p.advisnum || 'N/A';
+        // A trailing letter (e.g. 1A) marks an intermediate advisory — NHC updates
+        // the position/watches on these, but the forecast track/cone only refreshes
+        // on the full advisory. advdate is the actual issuance time.
+        const isInter = /[A-Za-z]$/.test(String(advNum));
+        const advDate = p.advdate || p.ADVDATE || '';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:300px;">
             <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:2px;">${name}${ptcTag}</div>
             <div style="color:#888;font-size:10px;margin-bottom:6px;">${tauLabel}${validTime ? ' — ' + validTime : ''}</div>
@@ -3252,8 +3307,10 @@ function initFrontalPipIcons(map) {
                 <span style="color:#888;">Max Wind:</span><span>${wind} kt${gust > 0 ? ' (gusts ' + Math.round(gust) + ' kt)' : ''}</span>
                 ${mslp ? `<span style="color:#888;">Min Pressure:</span><span>${mslp}</span>` : ''}
                 ${movement ? `<span style="color:#888;">Movement:</span><span>${movement}</span>` : ''}
-                <span style="color:#888;">Advisory:</span><span>#${p.ADVISNUM || p.advisnum || 'N/A'}</span>
+                <span style="color:#888;">Advisory:</span><span>#${advNum}${isInter ? ' <span style="color:#8fd3ff;">(intermediate)</span>' : ''}</span>
+                ${advDate ? `<span style="color:#888;">Issued:</span><span>${advDate}</span>` : ''}
             </div>
+            ${isInter ? '<div style="color:#8fd3ff;font-size:9px;margin-top:5px;line-height:1.4;">Intermediate advisory — position &amp; watches updated; the forecast track/cone refreshes on the next full advisory.</div>' : ''}
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -5657,6 +5714,7 @@ function setActiveStorm(id) {
     const ap = document.getElementById('nhcadv-panel');
     if (ap && ap.style.display === 'block' && ap.dataset.prod) openNhcAdv(ap.dataset.prod, true);
     renderRecon(false);
+    if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-fcst-lines'))) fetchFcstHistory(false);
 }
 
 async function fetchAdeckList() {
@@ -5689,9 +5747,77 @@ function parseBdeck(text) {
         const dtg = p[2];
         if (dtg.length !== 10 || !dtg.match(/^\d{10}$/) || seen.has(dtg)) return;
         seen.add(dtg);
-        pts.push({ ms: adeckDtgMs(dtg), dtg, vmax: +p[8] || null, mslp: +p[9] || null, type: p[10] || '' });
+        const la = p[6].match(/^(\d+)([NS])$/), lo = p[7].match(/^(\d+)([EW])$/);
+        pts.push({
+            ms: adeckDtgMs(dtg), dtg, vmax: +p[8] || null, mslp: +p[9] || null, type: p[10] || '',
+            lat: la ? (+la[1] / 10) * (la[2] === 'S' ? -1 : 1) : null,
+            lon: lo ? (+lo[1] / 10) * (lo[2] === 'W' ? -1 : 1) : null
+        });
     });
     return pts.sort((a, b) => a.ms - b.ms);
+}
+
+// Build the run-to-run forecast-history overlay for the active storm: every past
+// OFCL forecast track (faded by age) over the actual best-track traveled path.
+async function fetchFcstHistory(show) {
+    const setAll = feats => Object.values(maps).forEach(m => {
+        if (m.getSource && m.getSource('nhc-fcst-history'))
+            m.getSource('nhc-fcst-history').setData({ type: 'FeatureCollection', features: feats });
+    });
+    if (!activeStorm) { setAll([]); if (show) addLiveLog('FORECAST HISTORY: no active system selected', '#ffb300'); return; }
+    const sid = activeStorm;
+    try {
+        const [fRes, bRes] = await Promise.all([
+            fetch(cacheBust(`/api/adeck?fcst=${sid}`)),
+            fetch(cacheBust(`/api/adeck?btk=${sid}`)).catch(() => null)
+        ]);
+        const ofcl = fRes.ok ? parseAdeckText(await fRes.text()) : [];
+        const bpts = (bRes && bRes.ok) ? parseBdeck(await bRes.text()).filter(p => p.lat != null) : [];
+        const features = [];
+
+        // Actual traveled path (best track) with fix dots colored by intensity
+        if (bpts.length >= 2) features.push({
+            type: 'Feature', properties: { kind: 'actual' },
+            geometry: { type: 'LineString', coordinates: bpts.map(p => [p.lon, p.lat]) }
+        });
+        bpts.forEach((p, i) => features.push({
+            type: 'Feature',
+            properties: { kind: 'fix', mw: p.vmax || 0, latest: i === bpts.length - 1 ? 1 : 0 },
+            geometry: { type: 'Point', coordinates: [p.lon, p.lat] }
+        }));
+
+        // Past forecast tracks: one OFCL polyline per cycle, faded oldest→newest,
+        // anchored at that advisory's fixed (tau 0) position
+        const byCycle = {};
+        ofcl.forEach(r => {
+            if (r.tau < 0) return;
+            (byCycle[r.dtg] = byCycle[r.dtg] || {})[r.tau] = r;   // dedupe wind-radii rows by tau
+        });
+        const cycles = Object.keys(byCycle).sort();
+        const N = cycles.length;
+        cycles.forEach((dtg, idx) => {
+            const pts = Object.values(byCycle[dtg]).sort((a, b) => a.tau - b.tau);
+            if (pts.length < 2) return;
+            const newest = idx === N - 1;
+            const op = +(0.28 + 0.72 * (N > 1 ? idx / (N - 1) : 1)).toFixed(2);
+            const color = newest ? '#00e5ff' : '#5fa8c8';
+            const coords = pts.map(p => [p.lon, p.lat]);
+            features.push({
+                type: 'Feature', properties: { kind: 'fcst', op, color, w: newest ? 3 : 1.6 },
+                geometry: { type: 'LineString', coordinates: coords }
+            });
+            features.push({
+                type: 'Feature',
+                properties: { kind: 'fcstlabel', op: Math.max(op, 0.6), color, lbl: `${+dtg.slice(8, 10)}Z ${+dtg.slice(4, 6)}/${+dtg.slice(6, 8)}` },
+                geometry: { type: 'Point', coordinates: coords[coords.length - 1] }
+            });
+        });
+
+        setAll(features);
+        if (show) addLiveLog(`FORECAST HISTORY: ${stormShortId(sid)} — ${N} forecast cycle${N === 1 ? '' : 's'} + ${bpts.length} best-track fixes`, N ? '#00e5ff' : '#ffb300');
+    } catch (e) {
+        if (show) addLiveLog(`FORECAST HISTORY ERROR: ${e.message}`, '#ff3333');
+    }
 }
 
 // Decode one URNT12/URPN12 Vortex Data Message → { id, ms, mslp, flWind }
@@ -9159,6 +9285,7 @@ function productItemActiveOn(pid, item) {
         isActive = isLayerVisible(map, 'wpc-qpf-layer') && paneQpf[pid] === qpfId;
     }
     else if (layer === 'nhc-storms') isActive = isLayerVisible(map, 'nhc-track-pts');
+    else if (layer === 'nhc-fcst-history') isActive = isLayerVisible(map, 'nhc-fcst-lines');
     else if (layer === 'nhc-outlook') isActive = isLayerVisible(map, 'nhc-outlook-fill');
     else if (layer === 'recon-hdob') isActive = isLayerVisible(map, 'recon-hdob-pts');
     else if (layer === 'adeck') {
@@ -9951,6 +10078,17 @@ function initProductSidebar() {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
                 if (isActive) await fetchNHCStorms(true);
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Forecast History (run-to-run) for the active storm ───
+            if (layer === 'nhc-fcst-history') {
+                const isActive = !item.classList.contains('active');
+                ['nhc-fcst-actual-line', 'nhc-fcst-lines', 'nhc-fcst-actual-pts', 'nhc-fcst-labels'].forEach(l => {
+                    if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
+                });
+                if (isActive) await fetchFcstHistory(true);
                 updateSidebarToActivePane();
                 return;
             }
@@ -11101,6 +11239,7 @@ function clearPane(map, paneId) {
         'solar-night-fill', 'solar-twilight-fill', 'solar-terminator-line',
         'nhc-cone-fill', 'nhc-cone-outline', 'nhc-track-line', 'nhc-track-pts', 'nhc-track-labels',
         'nhc-warn-fill', 'nhc-warn-outline', 'nhc-outlook-fill', 'nhc-outlook-outline',
+        'nhc-fcst-actual-line', 'nhc-fcst-lines', 'nhc-fcst-actual-pts', 'nhc-fcst-labels',
         'cpc-temp-layer', 'cpc-precip-layer',
         'drought-fill', 'drought-outline', 'cpc-drought-layer',
         'probsevere-fill', 'probsevere-outline', 'probsevere-label',
@@ -11858,6 +11997,7 @@ function startAutoRefresh() {
     setInterval(() => {
         if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-track-pts'))) fetchNHCStorms(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-outlook-fill'))) fetchNHCOutlook(true);
+        if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-fcst-lines'))) fetchFcstHistory(false);
     }, 5 * 60 * 1000);
 }
 
@@ -12382,6 +12522,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 13)', items: [
+        'New “Forecast History (run-to-run)” overlay under NHC Tropical. For the active storm it draws the storm’s actual traveled path (best-track, with fix dots colored by intensity) and overlays every past advisory’s official forecast track — newest bright, older ones faded — each anchored at the fixed position it was issued from. So you can see at a glance how the forecast has trended cycle to cycle and where the center has actually gone. Forecast tracks accumulate one per full (6-hourly) advisory, so a just-formed storm starts with one and fills in over time; the actual path is complete back to the invest stage.',
+        'The Active Storms popup now shows the advisory issue time and clearly flags intermediate advisories (e.g. #1A) — NHC updates the position and watches on those, but the graphical forecast track/cone only refreshes on the next full advisory, which is why the cone can look “an advisory behind” between full runs.'
+    ]},
     { date: 'Jul 19, 2026 (update 12)', items: [
         'The whole NHC section now follows ONE active storm. Picking a system in either storm dropdown (Model Guidance or Official Advisories) selects it everywhere — spaghetti tracks, intensity, Storm Trends, SHIPS, advisories, and recon all switch together. Both dropdowns now list the same union of systems (numbered storms and invests, Atlantic + Pacific).',
         'Recon is now storm-aware. The Hurricane Hunters map layer and the IN AIR badge track the storm you’ve selected, matching each flight to a storm by position (the HDOB storm field is often just a “CYCLONE” placeholder, so proximity is used instead). When aircraft are flying your selected storm the badge is a solid green IN AIR; when they’re airborne in a different system it dims to “IN AIR · AL02” so you can still see someone’s up — just not on your storm. Select an invest with no advisories and the advisory panel explains that official products begin once it’s designated.'
@@ -12674,7 +12818,8 @@ const USER_GUIDE = [
 
     { id: 'tropical', title: 'Tropical — NHC & Hurricane Hunters', html: `
         <ul>
-            <li><b>Active Storms</b> — forecast cones, track points with intensities, and coastal watch/warning segments.</li>
+            <li><b>Active Storms</b> — forecast cones, track points with intensities, and coastal watch/warning segments. Click a point for the decoded advisory; the popup shows the issue time and flags <b>intermediate</b> advisories (e.g. #1A), where NHC updates the position/watches but the graphical track and cone only refresh on the next full (6-hourly) advisory.</li>
+            <li><b>Forecast History (run-to-run)</b> — for the active storm, the storm’s actual traveled path (best-track, fix dots colored by intensity) with every past advisory’s official forecast track overlaid, newest bright and older ones faded, each anchored at the position it was issued from. Shows how the forecast has trended cycle to cycle and where the center has actually gone. Forecast tracks accumulate one per full advisory (sparse for a new storm, richer over time); the actual path reaches back to the invest stage.</li>
             <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details.</li>
             <li><b>Tropical Discussions</b> open the full NHC text products.</li>
         </ul>
