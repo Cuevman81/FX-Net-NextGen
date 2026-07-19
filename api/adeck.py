@@ -53,7 +53,47 @@ def list_storms():
             'modified': mod.strftime('%Y-%m-%dT%H:%MZ')
         })
     storms.sort(key=lambda s: (s['basin'], s['num']))
+    _mark_graduated(storms)
     return storms
+
+
+def _latest_pos(sid):
+    """(lat, lon) of a storm's newest best-track fix, or None."""
+    try:
+        txt = _fetch(f'https://ftp.nhc.noaa.gov/atcf/btk/b{sid}.dat', timeout=10).decode('utf-8', errors='replace')
+        for ln in reversed(txt.splitlines()):
+            p = ln.split(',')
+            if len(p) > 7 and p[4].strip() == 'BEST':
+                la, lo = p[6].strip(), p[7].strip()
+                lat = int(la[:-1]) / 10 * (-1 if la.endswith('S') else 1)
+                lon = int(lo[:-1]) / 10 * (-1 if lo.endswith('W') else 1)
+                return (lat, lon)
+    except Exception:
+        return None
+    return None
+
+
+def _mark_graduated(storms):
+    """Flag an invest as graduated when a numbered storm in the same basin sits
+    on top of it (invest AL91 upgraded to TD AL02 → both files linger). Only
+    probes positions for basins that actually have both, to stay cheap."""
+    for basin in {s['basin'] for s in storms}:
+        grp = [s for s in storms if s['basin'] == basin]
+        invests = [s for s in grp if s['invest']]
+        numbered = [s for s in grp if not s['invest']]
+        if not invests or not numbered:
+            continue
+        for s in grp:
+            s['_pos'] = _latest_pos(s['id'])
+        for inv in invests:
+            if not inv['_pos']:
+                continue
+            for n in numbered:
+                if n['_pos'] and abs(n['_pos'][0] - inv['_pos'][0]) < 0.6 and abs(n['_pos'][1] - inv['_pos'][1]) < 0.6:
+                    inv['graduated_to'] = n['id']
+                    break
+    for s in storms:
+        s.pop('_pos', None)
 
 
 def fetch_btk(sid):

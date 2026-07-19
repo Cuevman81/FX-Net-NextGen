@@ -5395,8 +5395,15 @@ async function fetchAdeckList() {
     try {
         const res = await fetch(cacheBust('/api/adeck?list=1'));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const { storms } = await res.json();
-        const prev = adeckStorm;
+        const all = (await res.json()).storms || [];
+        // Drop invests that have been upgraded to a numbered storm (AL91→AL02):
+        // their files linger but their guidance is frozen at the last pre-upgrade
+        // cycle. Migrate any current selection to the upgraded system.
+        const graduated = {};
+        all.forEach(s => { if (s.graduated_to) graduated[s.id] = s.graduated_to; });
+        const storms = all.filter(s => !s.graduated_to);
+        let prev = adeckStorm;
+        if (prev && graduated[prev]) prev = graduated[prev];
         sel.innerHTML = '';
         if (!storms.length) {
             const o = document.createElement('option');
@@ -12130,6 +12137,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 8)', items: [
+        'Invest → tropical cyclone upgrades are now handled cleanly. When an invest is upgraded (AL91 → TD Two/AL02), both files linger in NHC’s archive, so the old invest used to keep showing in the Model Guidance dropdown with data frozen at its last pre-upgrade cycle. FX-Net now detects the upgrade (the invest and the numbered storm sitting on the same position) and removes the superseded invest from the list, automatically moving your selection to the upgraded system. So every product that follows the selector — spaghetti tracks, intensity charts, Storm Trends, SHIPS, and the CIRA RI/decapitation guidance — stays on the live TD Two data with nothing left pointing at the old AL91.'
+    ]},
     { date: 'Jul 19, 2026 (update 7)', items: [
         'The Environment / RI (SHIPS) panel now also folds in CIRA’s rapid-intensification guidance: a “CIRA RI Consensus & Decapitation” block adds a second, independent RI probability estimate (30 kt/24 h, 25 kt/24 h, 45 kt/36 h) plus — new and not in SHIPS — the Convective Decapitation probability (odds the convection gets sheared off the low-level center and the storm rapidly weakens/decays), and current structure predictors (cold-cloud fraction &lt;−50 °C, IR core symmetry) that show how organized the storm is right now. Decapitation is the weakening counterpart to RI; green means low decap risk. Pulled straight from CIRA’s realtime product.'
     ]},
