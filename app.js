@@ -5090,13 +5090,17 @@ function initRecon() {
 // advisory time; Late cycle = the raw synoptic-time model runs; EPS = GEFS
 // ensemble members. Each model plots from its own most recent cycle.
 const ADECK_MODELS = {
-    // tech: [display name, color, line width, sets ("E" early / "L" late)]
-    OFCL: ['NHC Official Forecast', '#ffffff', 3.5, 'EL'],
+    // tech: [display name, color, line width, sets]
+    // Sets: "E"/"L" = early/late TRACK spaghetti; "e"/"l" = early/late INTENSITY chart
+    OFCL: ['NHC Official Forecast', '#ffffff', 3.5, 'ELel'],
     TVCN: ['Track Consensus', '#00e5ff', 3, 'E'],
-    HCCA: ['HCCA Corrected Consensus', '#76ff03', 2.5, 'E'],
-    IVCN: ['Intensity Consensus', '#00bfa5', 2, ''],
-    AVNI: ['GFS (interp)', '#ff4d4d', 2, 'E'],
-    AVNO: ['GFS', '#ff4d4d', 2, 'L'],
+    HCCA: ['HCCA Corrected Consensus', '#76ff03', 2.5, 'Ee'],
+    IVCN: ['Intensity Consensus', '#00e5ff', 3, 'e'],
+    DSHP: ['Decay-SHIPS', '#ff8a65', 2, 'e'],
+    LGEM: ['LGEM', '#00e676', 2, 'e'],
+    SHIP: ['SHIPS (no decay)', '#ff8a65', 2, 'l'],
+    AVNI: ['GFS (interp)', '#ff4d4d', 2, 'Ee'],
+    AVNO: ['GFS', '#ff4d4d', 2, 'Ll'],
     EMXI: ['ECMWF (interp)', '#ffa500', 2, 'E'],
     EMX:  ['ECMWF', '#ffa500', 2, 'L'],
     UKXI: ['UKMET (interp)', '#40c4ff', 2, 'E'],
@@ -5105,16 +5109,16 @@ const ADECK_MODELS = {
     EGRR: ['UKMET', '#40c4ff', 2, 'L'],
     CMCI: ['Canadian GDPS (interp)', '#ab47bc', 2, 'E'],
     CMC:  ['Canadian GDPS', '#ab47bc', 2, 'L'],
-    HFAI: ['HAFS-A (interp)', '#66bb6a', 2, 'E'],
-    HFSA: ['HAFS-A', '#66bb6a', 2, 'L'],
-    HFBI: ['HAFS-B (interp)', '#26a69a', 2, 'E'],
-    HFSB: ['HAFS-B', '#26a69a', 2, 'L'],
-    HWFI: ['HWRF (interp)', '#9ccc65', 2, 'E'],
-    HWRF: ['HWRF', '#9ccc65', 2, 'L'],
-    CTCI: ['COAMPS-TC (interp)', '#d4e157', 2, 'E'],
-    CTCX: ['COAMPS-TC', '#d4e157', 2, 'L'],
-    GDMI: ['Google DeepMind (interp)', '#f06292', 2, 'E'],
-    GDMN: ['Google DeepMind', '#f06292', 2, 'L'],
+    HFAI: ['HAFS-A (interp)', '#66bb6a', 2, 'Ee'],
+    HFSA: ['HAFS-A', '#66bb6a', 2, 'Ll'],
+    HFBI: ['HAFS-B (interp)', '#26a69a', 2, 'Ee'],
+    HFSB: ['HAFS-B', '#26a69a', 2, 'Ll'],
+    HWFI: ['HWRF (interp)', '#9ccc65', 2, 'Ee'],
+    HWRF: ['HWRF', '#9ccc65', 2, 'Ll'],
+    CTCI: ['COAMPS-TC (interp)', '#d4e157', 2, 'Ee'],
+    CTCX: ['COAMPS-TC', '#d4e157', 2, 'Ll'],
+    GDMI: ['Google DeepMind (interp)', '#f06292', 2, 'Ee'],
+    GDMN: ['Google DeepMind', '#f06292', 2, 'Ll'],
     NVGI: ['NAVGEM (interp)', '#8d6e63', 2, 'E'],
     NVGM: ['NAVGEM', '#8d6e63', 2, 'L'],
     AEMI: ['GFS Ensemble Mean (interp)', '#ffee58', 2.2, 'E'],
@@ -5220,6 +5224,131 @@ const adeckAgeStr = ms => {
     return h < 1 ? `${Math.round(h * 60)} min ago` : `${h.toFixed(1)} h ago`;
 };
 
+// ─── Intensity guidance chart (vmax time series from the same a-deck) ───
+function buildIntensitySeries(rows, mode) {
+    const flag = mode === 'early' ? 'e' : 'l';
+    const wanted = t => { const m = ADECK_MODELS[t]; return m && m[3].includes(flag); };
+    const latest = {};
+    rows.forEach(r => {
+        if (r.tau < 0 || !r.vmax || !wanted(r.tech)) return;
+        if (!latest[r.tech] || r.dtg > latest[r.tech]) latest[r.tech] = r.dtg;
+    });
+    const series = [];
+    Object.keys(latest).sort().forEach(tech => {
+        const m = ADECK_MODELS[tech];
+        const seen = new Set();
+        const pts = rows
+            .filter(r => r.tech === tech && r.dtg === latest[tech] && r.tau >= 0 && r.vmax)
+            .filter(r => !seen.has(r.tau) && seen.add(r.tau))
+            .sort((a, b) => a.tau - b.tau)
+            .map(r => ({ tau: r.tau, v: r.vmax }));
+        if (pts.length >= 2) series.push({ tech, name: m[0], color: m[1], wide: m[2] >= 3, pts, dtg: latest[tech] });
+    });
+    return series;
+}
+
+const SS_THRESHOLDS = [[34, 'TS'], [64, 'C1'], [83, 'C2'], [96, 'C3'], [113, 'C4'], [137, 'C5']];
+
+function drawIntensityChart(canvas, series) {
+    const cssW = 660, cssH = 400;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    if (!series.length) {
+        ctx.fillStyle = '#8b97a3'; ctx.font = '12px "Roboto Mono",monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('No intensity guidance available for this system yet.', cssW / 2, cssH / 2);
+        return;
+    }
+    const mL = 42, mR = 150, mT = 12, mB = 30;
+    const pw = cssW - mL - mR, ph = cssH - mT - mB;
+    const maxTau = Math.max(72, ...series.map(s => s.pts[s.pts.length - 1].tau));
+    const xMax = Math.ceil(maxTau / 24) * 24;
+    const vTop = Math.max(...series.map(s => Math.max(...s.pts.map(p => p.v))));
+    const yMax = Math.max(60, Math.ceil((vTop + 15) / 20) * 20);
+    const X = tau => mL + (tau / xMax) * pw;
+    const Y = v => mT + ph - (v / yMax) * ph;
+    ctx.font = '9px "Roboto Mono",monospace';
+    // grid: x every 24 h, y every 20 kt
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (let t = 0; t <= xMax; t += 24) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(X(t), mT); ctx.lineTo(X(t), mT + ph); ctx.stroke();
+        ctx.fillStyle = '#8b97a3'; ctx.fillText(`F${t}`, X(t), mT + ph + 6);
+    }
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let v = 0; v <= yMax; v += 20) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.beginPath(); ctx.moveTo(mL, Y(v)); ctx.lineTo(mL + pw, Y(v)); ctx.stroke();
+        ctx.fillStyle = '#8b97a3'; ctx.fillText(`${v}`, mL - 6, Y(v));
+    }
+    ctx.save(); ctx.translate(12, mT + ph / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#8b97a3'; ctx.fillText('MAX WIND (KT)', 0, 0);
+    ctx.restore();
+    // Saffir-Simpson thresholds
+    SS_THRESHOLDS.forEach(([v, lab]) => {
+        if (v > yMax) return;
+        ctx.strokeStyle = 'rgba(255,209,102,0.35)'; ctx.setLineDash([5, 4]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(mL, Y(v)); ctx.lineTo(mL + pw, Y(v)); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(255,209,102,0.8)'; ctx.textAlign = 'left';
+        ctx.fillText(lab, mL + pw + 4, Y(v));
+    });
+    // model lines (OFCL/consensus drawn last, on top)
+    [...series].sort((a, b) => (a.wide ? 1 : 0) - (b.wide ? 1 : 0)).forEach(s => {
+        ctx.strokeStyle = s.color; ctx.lineWidth = s.wide ? 2.6 : 1.5;
+        ctx.beginPath();
+        s.pts.forEach((p, i) => { i ? ctx.lineTo(X(p.tau), Y(p.v)) : ctx.moveTo(X(p.tau), Y(p.v)); });
+        ctx.stroke();
+        ctx.fillStyle = s.color;
+        s.pts.forEach(p => { ctx.beginPath(); ctx.arc(X(p.tau), Y(p.v), s.wide ? 2.6 : 1.8, 0, Math.PI * 2); ctx.fill(); });
+    });
+    // legend (right column), ordered by end-point intensity so it reads like the chart
+    const legX = mL + pw + 34;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    [...series].sort((a, b) => b.pts[b.pts.length - 1].v - a.pts[a.pts.length - 1].v).forEach((s, i) => {
+        const ly = mT + 8 + i * 15;
+        ctx.strokeStyle = s.color; ctx.lineWidth = s.wide ? 2.6 : 1.5;
+        ctx.beginPath(); ctx.moveTo(legX, ly); ctx.lineTo(legX + 16, ly); ctx.stroke();
+        ctx.fillStyle = s.color; ctx.font = `${s.wide ? 'bold ' : ''}9px "Roboto Mono",monospace`;
+        ctx.fillText(s.tech, legX + 21, ly);
+        ctx.fillStyle = '#8b97a3'; ctx.font = '8px "Roboto Mono",monospace';
+        ctx.fillText(`${s.pts[s.pts.length - 1].v} kt`, legX + 62, ly);
+    });
+}
+
+async function openIntensityChart(mode) {
+    const panel = document.getElementById('intensity-panel');
+    const title = document.getElementById('intensity-title');
+    const note = document.getElementById('intensity-note');
+    if (!panel || !title || !note) return;
+    if (!adeckStorm) await fetchAdeckList();
+    if (!adeckStorm) { addLiveLog('INTENSITY: no active systems with model guidance right now', '#ffb300'); return; }
+    panel.style.display = 'block';
+    const sid = adeckStorm.toUpperCase().slice(0, 4);
+    title.textContent = `${sid} — ${mode === 'early' ? 'EARLY CYCLE' : 'LATE CYCLE (EXPERIMENTAL)'} INTENSITY GUIDANCE`;
+    note.textContent = 'Loading…';
+    try {
+        const res = await fetch(cacheBust(`/api/adeck?id=${adeckStorm}`));
+        if (!res.ok) throw new Error(`a-deck HTTP ${res.status}`);
+        const rows = parseAdeckText(await res.text());
+        const series = buildIntensitySeries(rows, mode);
+        drawIntensityChart(document.getElementById('intensity-canvas'), series);
+        const newest = series.length ? series.map(s => s.dtg).sort().pop() : null;
+        const laggards = newest ? series.filter(s => s.dtg !== newest).length : 0;
+        note.textContent = newest
+            ? `Newest run ${newest.slice(8, 10)}Z ${newest.slice(6, 8)} (${adeckAgeStr(adeckDtgMs(newest))}) · ${series.length} aids${laggards ? ` · ${laggards} from older runs` : ''} · dashed lines mark TS / Cat 1–5 thresholds`
+            : 'No intensity guidance available for this system yet.';
+        if (newest) updateHealth('adeck', adeckDtgMs(newest));
+        if (series.length) addLiveLog(`INTENSITY: ${sid} ${mode}-cycle — ${series.length} aids, newest run ${newest.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newest))}) — ${series.map(s => s.tech).join(', ')}`, '#00e5ff');
+    } catch (e) {
+        note.textContent = `Error: ${e.message}`;
+    }
+}
+
 async function fetchAdeck(show) {
     if (!adeckStorm || !adeckMode) return;
     try {
@@ -5293,6 +5422,28 @@ function initAdeck() {
     if (sel) sel.addEventListener('change', () => {
         adeckStorm = sel.value || null;
         if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(true);
+        const panel = document.getElementById('intensity-panel');
+        if (panel && panel.style.display === 'block' && panel.dataset.mode) openIntensityChart(panel.dataset.mode);
+    });
+    document.getElementById('adeck-int-early')?.addEventListener('click', () => {
+        const p = document.getElementById('intensity-panel');
+        if (p) p.dataset.mode = 'early';
+        openIntensityChart('early');
+    });
+    document.getElementById('adeck-int-late')?.addEventListener('click', () => {
+        const p = document.getElementById('intensity-panel');
+        if (p) p.dataset.mode = 'late';
+        openIntensityChart('late');
+    });
+    document.getElementById('intensity-close')?.addEventListener('click', () => {
+        const p = document.getElementById('intensity-panel');
+        if (p) p.style.display = 'none';
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            const p = document.getElementById('intensity-panel');
+            if (p) p.style.display = 'none';
+        }
     });
     setTimeout(fetchAdeckList, 9000);
     // Hourly: refresh the system list, and (once guidance has been used) re-pull
@@ -11501,6 +11652,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 18, 2026 (update 4)', items: [
+        'Intensity guidance joins the spaghetti: two new items under NHC Tropical → Model Guidance open a kt-vs-forecast-hour chart built from the same live a-deck — Early Cycle Intensity (Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the interpolated HAFS-A/B, HWRF, COAMPS-TC, GFS and Google DeepMind aids, plus the NHC Official forecast) and Late Cycle Intensity (experimental — the raw synoptic-time runs). Dashed lines mark the TS and Category 1–5 thresholds, the legend is sorted by each model’s end-of-run intensity, and the freshness note shows the newest run time and any aids still on older cycles. Uses the same storm selector as the track spaghetti; Esc or × closes the chart.'
+    ]},
     { date: 'Jul 18, 2026 (update 3)', items: [
         'Guidance freshness at a glance: a run-time stamp now sits under the Model Guidance storm selector — newest cycle (e.g. “00Z 19 Jul, 1.2 h ago”), how many aids are plotted, and how many are still on older runs (hover it for every model’s cycle). The Live Log line reports the same when you toggle a view. Data Health (TROPICAL group) gained two rows: Model Guidance, stamped with the model RUN time so it goes amber/red when a newer cycle should exist, and Recon HDOB Feed, refreshed by the background Hurricane Hunter check every 15 minutes.'
     ]},
@@ -11770,6 +11924,7 @@ const USER_GUIDE = [
             <li><b>Early Cycle Track Guidance</b> — the interpolated aids available at advisory time: GFS (AVNI), ECMWF (EMXI), UKMET, Canadian, HAFS-A/B, COAMPS-TC, Google DeepMind, ensemble means, beta-advection trackers, and the TVCN / HCCA consensus (wide cyan / green). The NHC Official forecast plots in white when the system is a numbered cyclone.</li>
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
+            <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows the raw synoptic-time runs (experimental). Esc or × closes it.</li>
         </ul>
         <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>
         <p>The stamp under the storm selector tells you how fresh the plot is: the newest run time and its age, the number of aids plotted, and how many are still on an older cycle (hover for every model’s run). Data Health → TROPICAL tracks the same — the <b>Model Guidance</b> row is stamped with the run time itself, so it turns amber/red when a newer cycle should have arrived, and <b>Recon HDOB Feed</b> confirms the Hurricane Hunter feed is being checked (every 15 minutes in the background).</p>` },

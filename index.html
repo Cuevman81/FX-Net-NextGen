@@ -240,6 +240,8 @@
                     <div class="product-item" data-layer="adeck" data-adeck="early"><span>Early Cycle Track Guidance</span> <span class="badge blue">A-DECK</span></div>
                     <div class="product-item" data-layer="adeck" data-adeck="late"><span>Late Cycle Track Guidance</span></div>
                     <div class="product-item" data-layer="adeck" data-adeck="eps"><span>GEFS Ensemble Members (EPS)</span></div>
+                    <div class="product-item" id="adeck-int-early"><span>Early Cycle Intensity Guidance</span> <span class="badge blue">CHART</span></div>
+                    <div class="product-item" id="adeck-int-late"><span>Late Cycle Intensity Guidance</span> <span class="badge orange">EXP</span></div>
                 </div>
 
                 <!-- CPC CLIMATE OUTLOOKS -->
@@ -1051,6 +1053,16 @@
         <pre id="recon-text-body" style="font-size:10.5px; color:rgba(255,255,255,0.88); line-height:1.5; white-space:pre-wrap; margin:0;"></pre>
     </div>
 
+    <!-- INTENSITY GUIDANCE CHART (a-deck vmax time series) -->
+    <div id="intensity-panel" style="display:none; position:fixed; top:70px; left:50%; transform:translateX(-50%); z-index:901; background:rgba(10,12,18,0.97); border:1px solid rgba(0,229,255,0.35); border-radius:4px; padding:10px 14px; box-shadow:0 4px 20px rgba(0,0,0,0.6);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:20px;">
+            <span id="intensity-title" style="color:#00e5ff; font-size:9px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase; font-family:'Roboto Mono',monospace;">INTENSITY GUIDANCE</span>
+            <span id="intensity-close" style="color:#ff6666; cursor:pointer; font-size:14px; line-height:1;">&times;</span>
+        </div>
+        <canvas id="intensity-canvas" style="display:block;"></canvas>
+        <div id="intensity-note" style="font-size:9px; color:#8b97a3; margin-top:5px; font-family:'Roboto Mono',monospace;"></div>
+    </div>
+
     <!-- USER GUIDE (full-screen reference manual) -->
     <div id="guide-overlay" class="modal-overlay" style="display:none;">
         <div class="guide-panel">
@@ -1066,7 +1078,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=236"></script>
+    <script src="app.js?v=237"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
