@@ -5484,7 +5484,8 @@ function drawTrendsChart(canvas, best, vdms) {
     const presAll = best.map(p => p.mslp).filter(v => v != null)
         .concat(vdms.map(v => v.mslp).filter(v => v != null));
     const pMin = Math.min(...presAll) - 3, pMax = Math.max(...presAll) + 3;
-    const YP = v => mT + ((v - pMin) / (pMax - pMin)) * ph * 0.92 + ph * 0.04;
+    // Standard axis: low pressure at the BOTTOM, higher pressure toward the top
+    const YP = v => mT + ph - ((v - pMin) / (pMax - pMin)) * ph * 0.92 - ph * 0.04;
     ctx.font = '9px "Roboto Mono",monospace';
     // x grid: one line per UTC day
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -11930,6 +11931,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 5)', items: [
+        'Storm Trends pressure axis flipped to the intuitive orientation: lower pressure values now sit at the bottom and increase going up. A deepening storm shows its pressure line falling toward the bottom while the wind line rises — the two lines cross as it intensifies, and the axis numbers read the way you expect.'
+    ]},
     { date: 'Jul 19, 2026 (update 4)', items: [
         'STORM TRENDS joins NHC Tropical → Model Guidance: an observed intensity-history chart for the selected system (invests included) built from NHC’s live best track — wind (cyan, left axis) and central pressure (yellow, right axis) through the storm’s whole life, with classification changes (DB → LO → TD → TS…) marked along the top. Hurricane Hunter vortex fixes overlay in magenta (◆ = measured minimum pressure, ✕ = max flight-level wind) so you can see the aircraft measurements between the 6-hourly analyses. The header line gives the current intensity plus 6/12/24-hour pressure and wind tendencies, labeled DEEPENING / FILLING and STRENGTHENING / WEAKENING (red = intensifying). Auto-refreshes every 15 minutes while open and follows the storm selector.'
     ]},
