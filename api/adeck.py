@@ -64,6 +64,26 @@ def fetch_btk(sid):
     return _fetch(f'https://ftp.nhc.noaa.gov/atcf/btk/b{sid}.dat').decode('utf-8', errors='replace')
 
 
+def fetch_rip(sid):
+    """Return the newest CIRA rapid-intensification / decapitation guidance
+    (ripastbl) for one storm. Filenames are timestamped by synoptic cycle;
+    directory listing is disabled, so probe recent 6-hourly cycles."""
+    if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
+        raise ValueError('bad storm id')
+    stormdir = f'{sid[4:8]}{sid[:2]}{sid[2:4]}'   # al022026 -> 2026al02
+    base = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    base -= datetime.timedelta(hours=base.hour % 6)
+    for k in range(6):   # newest cycle first, ~30 h back
+        stamp = (base - datetime.timedelta(hours=6 * k)).strftime('%Y%m%d%H%M')
+        url = (f'https://rammb-data.cira.colostate.edu/tc_realtime/products/'
+               f'storms/{stormdir}/ripastbl/{stormdir}_ripastbl_{stamp}.txt')
+        try:
+            return _fetch(url).decode('utf-8', errors='replace')
+        except Exception:
+            continue
+    raise ValueError('no RI guidance for this system yet')
+
+
 def fetch_ships(sid):
     """Return the newest SHIPS diagnostic text for one storm. NHC files are
     named {YYMMDDHH}{BASIN}{NN}{YY}_ships.txt (e.g. 26071912AL0226_ships.txt);
@@ -109,6 +129,9 @@ class handler(BaseHTTPRequestHandler):
                 ctype = 'text/plain'
             elif q.get('ships', [''])[0]:
                 body = fetch_ships(q.get('ships', [''])[0].lower()).encode()
+                ctype = 'text/plain'
+            elif q.get('rip', [''])[0]:
+                body = fetch_rip(q.get('rip', [''])[0].lower()).encode()
                 ctype = 'text/plain'
             else:
                 sid = q.get('id', [''])[0].lower()

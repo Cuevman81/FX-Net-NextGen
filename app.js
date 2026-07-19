@@ -5684,6 +5684,52 @@ function shipsAssessment(s) {
     return { verdict, color, pros, cons, headroom };
 }
 
+// CIRA rapid-intensification / decapitation guidance (ripastbl) — adds the
+// decapitation risk, a 2nd independent RI consensus, and structure predictors
+function parseRip(text) {
+    const riBlock = (text.split(/Probabilities\[%\] of Rapid intensification/)[1] || '').split(/Decapitation/)[0];
+    const decapBlock = text.split(/Probabilities\[%\] of Storm Decapitation/)[1] || '';
+    const cons = (block, thresh) => {
+        const m = block.match(new RegExp(thresh.replace('/', '\\s*/\\s*') + '\\s+[\\d.]+%\\s+[\\d.]+%\\s+([\\d.]+)%'));
+        return m ? +m[1] : null;
+    };
+    const pred = label => {
+        const m = text.match(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s+([\\d.]+)\\s+(\\w+)'));
+        return m ? { val: +m[1], flag: m[2] } : null;
+    };
+    return {
+        ri30_24: cons(riBlock, '30kt / 24h'),
+        ri25_24: cons(riBlock, '25kt / 24h'),
+        ri45_36: cons(riBlock, '45kt / 36h'),
+        decap24: cons(decapBlock, '-30kt / 24h'),
+        cold50: pred('CONVECTION <-50C [%]'),
+        symmetry: pred('IR CORE SYMMETRY [K]')
+    };
+}
+
+const RIP_FLAG = { VF: ['very favorable', '#00e676'], F: ['favorable', '#9ccc65'], N: ['neutral', '#c0c0c0'], U: ['unfavorable', '#ffb300'], VU: ['very unfavorable', '#ff5252'] };
+
+function shipsRipBlock(rip) {
+    const riColor = v => v == null ? '#8b97a3' : v >= 30 ? '#ff5252' : v >= 15 ? '#ffb300' : v >= 5 ? '#9ccc65' : '#8b97a3';
+    // Decapitation = convection sheared off the center → rapid weakening; high is bad
+    const dcColor = v => v == null ? '#8b97a3' : v >= 30 ? '#ff5252' : v >= 15 ? '#ffb300' : v >= 5 ? '#ffd166' : '#00e676';
+    const stat = (lab, v, col, suf = '%') => v == null ? '' :
+        `<span style="display:inline-block;margin-right:16px;"><span style="color:#5a6570;">${lab}:</span> <span style="color:${col(v)};font-weight:600;">${v.toFixed(v < 10 && suf === '%' ? 1 : 0)}${suf}</span></span>`;
+    const pred = (lab, p) => !p ? '' :
+        `<span style="display:inline-block;margin-right:16px;"><span style="color:#5a6570;">${lab}:</span> <span style="color:${(RIP_FLAG[p.flag] || ['', '#c0c0c0'])[1]};">${p.val}${lab.includes('symmetry') ? ' K' : '%'} (${p.flag})</span></span>`;
+    return `
+        <div style="border-top:1px solid rgba(255,255,255,0.12);margin-top:8px;padding-top:6px;font-size:10.5px;font-family:'Roboto Mono',monospace;">
+            <div style="color:#00e5ff;font-weight:700;margin-bottom:3px;">CIRA RI CONSENSUS &amp; DECAPITATION</div>
+            <div style="color:#c0c0c0;line-height:1.8;">
+                ${stat('RI 30 kt / 24 h', rip.ri30_24, riColor)}
+                ${stat('RI 25 kt / 24 h', rip.ri25_24, riColor)}
+                ${stat('RI 45 kt / 36 h', rip.ri45_36, riColor)}
+                ${rip.decap24 != null ? `<span style="display:inline-block;margin-right:16px;"><span style="color:#5a6570;">Decapitation 24 h:</span> <span style="color:${dcColor(rip.decap24)};font-weight:600;">${rip.decap24.toFixed(rip.decap24 < 10 ? 1 : 0)}%</span></span>` : ''}
+            </div>
+            ${(rip.cold50 || rip.symmetry) ? `<div style="color:#c0c0c0;line-height:1.8;margin-top:2px;"><span style="color:#5a6570;">Structure now — </span>${pred('cold cloud &lt;−50°C', rip.cold50)}${pred('IR symmetry', rip.symmetry)}</div>` : ''}
+        </div>`;
+}
+
 async function openShipsPanel(announce = true) {
     const panel = document.getElementById('ships-panel');
     const title = document.getElementById('ships-title');
@@ -5697,10 +5743,14 @@ async function openShipsPanel(announce = true) {
     title.textContent = `${sid} — SHIPS ENVIRONMENTAL DIAGNOSTICS`;
     if (announce) { body.innerHTML = '<div style="color:#8b97a3;padding:20px;">Loading…</div>'; note.textContent = ''; }
     try {
-        const res = await fetch(cacheBust(`/api/adeck?ships=${adeckStorm}`));
+        const [res, ripRes] = await Promise.all([
+            fetch(cacheBust(`/api/adeck?ships=${adeckStorm}`)),
+            fetch(cacheBust(`/api/adeck?rip=${adeckStorm}`)).catch(() => null)
+        ]);
         if (!res.ok) throw new Error(res.status === 500 ? 'no SHIPS diagnostics for this system yet' : `HTTP ${res.status}`);
         const s = parseShips(await res.text());
         const a = shipsAssessment(s);
+        const rip = (ripRes && ripRes.ok) ? parseRip(await ripRes.text()) : null;
         // pick display columns: 0/12/24/48/72 h where present
         const wantH = [0, 12, 24, 48, 72];
         const cols = wantH.map(h => s.hours.indexOf(h)).filter(i => i >= 0);
@@ -5744,8 +5794,9 @@ async function openShipsPanel(announce = true) {
                 <div style="color:#00e5ff;font-weight:700;margin-bottom:3px;">RAPID INTENSIFICATION OUTLOOK ${ri24val != null ? `— <span style="color:${ri24val >= 30 ? '#ff5252' : ri24val >= 15 ? '#ffb300' : '#9ccc65'};">${ri24val.toFixed(0)}% (${climoKey.replace('/', ' kt / ')} h)</span>` : ''}</div>
                 <div style="color:#c0c0c0;line-height:1.7;">${riChips}</div>
                 ${climoInfo ? `<div style="color:#8b97a3;font-size:9.5px;margin-top:3px;">${climoKey.split('/')[0]}-kt/${climoKey.split('/')[1]}-h RI odds are <b style="color:${climoInfo.mult >= 1.5 ? '#ffb300' : '#c0c0c0'};">${climoInfo.mult.toFixed(1)}×</b> the climatological mean (${climoInfo.mean.toFixed(1)}%)</div>` : ''}
-            </div>`;
-        note.textContent = `SHIPS (GFS) init ${s.initStr} · shear/SST/RH/OHC = environment; green favors intensification, red hostile · consensus RI probabilities`;
+            </div>
+            ${rip ? shipsRipBlock(rip) : ''}`;
+        note.textContent = `SHIPS (GFS) init ${s.initStr} · shear/SST/RH/OHC = environment; green favors intensification, red hostile${rip ? ' · RI/decap consensus from CIRA' : ''}`;
         if (announce) addLiveLog(`SHIPS: ${sid} — ${a.verdict}; shear ${s.shear[0]} kt, mid-RH ${s.rh[0]}%, 24h RI ${ri24val != null ? ri24val.toFixed(0) + '%' : 'n/a'}`, a.color);
     } catch (e) {
         body.innerHTML = `<div style="color:#ff8a80;padding:16px;">${e.message}</div>`;
@@ -12079,6 +12130,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 7)', items: [
+        'The Environment / RI (SHIPS) panel now also folds in CIRA’s rapid-intensification guidance: a “CIRA RI Consensus & Decapitation” block adds a second, independent RI probability estimate (30 kt/24 h, 25 kt/24 h, 45 kt/36 h) plus — new and not in SHIPS — the Convective Decapitation probability (odds the convection gets sheared off the low-level center and the storm rapidly weakens/decays), and current structure predictors (cold-cloud fraction &lt;−50 °C, IR core symmetry) that show how organized the storm is right now. Decapitation is the weakening counterpart to RI; green means low decap risk. Pulled straight from CIRA’s realtime product.'
+    ]},
     { date: 'Jul 19, 2026 (update 6)', items: [
         'Environment / RI (SHIPS) joins NHC Tropical → Model Guidance: the environmental diagnostics behind the intensity forecast, so you can see whether the atmosphere and ocean favor strengthening. A color-coded table shows vertical wind shear, sea-surface temperature, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind at 0/12/24/48/72 h (green = favorable for intensification, red = hostile). Below it, the Rapid Intensification Outlook gives the consensus RI probabilities across every threshold, highlights the 24-hour number, and tells you how those odds compare to climatology. A plain-language banner up top reads FAVORABLE / MARGINAL / MIXED / HOSTILE with the specific reasons (e.g. “−high shear, dry mid-levels”). Data straight from NHC’s SHIPS text; follows the storm selector and refreshes every 15 minutes.'
     ]},
@@ -12371,7 +12425,7 @@ const USER_GUIDE = [
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
             <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones.</li>
             <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
-            <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance.</li>
+            <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance. A CIRA block below adds a second independent RI consensus, the Convective <b>Decapitation</b> probability (odds the convection gets sheared off the center → rapid weakening — the counterpart to RI), and current structure predictors (cold-cloud fraction, IR core symmetry).</li>
         </ul>
         <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>
         <p>The stamp under the storm selector tells you how fresh the plot is: the newest run time and its age, the number of aids plotted, and how many are still on an older cycle (hover for every model’s run). Data Health → TROPICAL tracks the same — the <b>Model Guidance</b> row is stamped with the run time itself, so it turns amber/red when a newer cycle should have arrived, and <b>Recon HDOB Feed</b> confirms the Hurricane Hunter feed is being checked (every 15 minutes in the background).</p>` },
