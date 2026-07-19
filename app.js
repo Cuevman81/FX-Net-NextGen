@@ -228,7 +228,9 @@ const HEALTH_THRESHOLDS = {
     pireps:      { label: 'PIREPs',           thresholdMs: 20 * 60 * 1000 },
     taf:         { label: 'TAF',              thresholdMs: 30 * 60 * 1000 },
     cwa:         { label: 'CWAs',             thresholdMs: 20 * 60 * 1000 },
-    ndbc:        { label: 'NDBC Buoys',       thresholdMs: 30 * 60 * 1000 }
+    ndbc:        { label: 'NDBC Buoys',       thresholdMs: 30 * 60 * 1000 },
+    reconHdob:   { label: 'Recon HDOB Feed',  thresholdMs: 40 * 60 * 1000 },
+    adeck:       { label: 'Model Guidance',   thresholdMs: 8 * 60 * 60 * 1000 }
 };
 
 // Data-health feeds organized into collapsible sections that mirror the left
@@ -242,7 +244,7 @@ const HEALTH_GROUPS = [
     { name: 'SPC PRODUCTS',      ids: ['spcOutlook', 'spcMd', 'spcLsr', 'probSevere'] },
     { name: 'AVIATION',          ids: ['airSigmet', 'gairmet', 'pireps', 'taf', 'cwa'] },
     { name: 'WPC PRODUCTS',      ids: ['wpcQpf', 'wpcEro', 'wpcMpd'] },
-    { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook'] },
+    { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook', 'reconHdob', 'adeck'] },
     { name: 'CLIMATE & OUTLOOKS',ids: ['cpcTemp', 'cpcPrecip', 'drought'] },
     { name: 'FIRE & AIR',        ids: ['firms', 'hms', 'spcFireWx', 'aqi'] },
     { name: 'HYDRO & SOLAR',     ids: ['riverGauges', 'solar'] }
@@ -702,10 +704,12 @@ function initHealthTracker(id, label, thresholdMs) {
     };
 }
 
-function updateHealth(id) {
+function updateHealth(id, ts) {
+    // ts (optional) stamps the DATA's own valid time instead of the fetch time,
+    // so freshness decays against the product's real cadence (e.g. model cycles)
     if (!healthTrackers[id]) return;
     healthTrackers[id].status = 'LIVE';
-    healthTrackers[id].lastUpdate = Date.now();
+    healthTrackers[id].lastUpdate = ts || Date.now();
 }
 
 // Legend "as of" stamp for products whose freshness is the last successful pull
@@ -5022,6 +5026,7 @@ async function fetchReconHdob(show) {
             if (m.getSource && m.getSource('recon-hdob')) m.getSource('recon-hdob').setData(data);
         });
         updateReconBadge(newestMs);
+        updateHealth('reconHdob');
         if (show) {
             addLiveLog(features.length
                 ? `RECON: ${aircraftUp.join(', ')} — ${features.filter(f => f.properties.layerType === 'ob').length} obs plotted (last ${((Date.now() - newestMs) / 60000).toFixed(0)} min ago)`
@@ -5204,8 +5209,16 @@ function buildAdeckFeatures(rows, mode) {
             geometry: { type: 'Point', coordinates: coords[coords.length - 1] }
         });
     });
-    return { features, models };
+    return { features, models, cycles: latest };
 }
+
+const adeckDtgMs = dtg =>
+    Date.UTC(+dtg.slice(0, 4), +dtg.slice(4, 6) - 1, +dtg.slice(6, 8), +dtg.slice(8, 10));
+
+const adeckAgeStr = ms => {
+    const h = (Date.now() - ms) / 3600000;
+    return h < 1 ? `${Math.round(h * 60)} min ago` : `${h.toFixed(1)} h ago`;
+};
 
 async function fetchAdeck(show) {
     if (!adeckStorm || !adeckMode) return;
@@ -5213,15 +5226,30 @@ async function fetchAdeck(show) {
         const res = await fetch(cacheBust(`/api/adeck?id=${adeckStorm}`));
         if (!res.ok) throw new Error(`a-deck HTTP ${res.status}`);
         const rows = parseAdeckText(await res.text());
-        const { features, models } = buildAdeckFeatures(rows, adeckMode);
+        const { features, models, cycles } = buildAdeckFeatures(rows, adeckMode);
         const data = { type: 'FeatureCollection', features };
         Object.values(maps).forEach(m => {
             if (m.getSource && m.getSource('adeck')) m.getSource('adeck').setData(data);
         });
+        // Freshness: newest cycle among the plotted aids drives the health row
+        // (stamped with the RUN time, not the fetch time) and the sidebar readout
+        const newestDtg = models.length ? models.map(t => cycles[t]).sort().pop() : null;
+        const laggards = models.filter(t => cycles[t] !== newestDtg).length;
+        if (newestDtg) updateHealth('adeck', adeckDtgMs(newestDtg));
+        const info = document.getElementById('adeck-cycle-info');
+        if (info) {
+            if (newestDtg) {
+                info.innerHTML = `Newest run: <b style="color:#00e5ff;">${newestDtg.slice(8, 10)}Z ${newestDtg.slice(6, 8)} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+newestDtg.slice(4, 6) - 1]}</b> (${adeckAgeStr(adeckDtgMs(newestDtg))}) · ${models.length} aids${laggards ? ` · ${laggards} from older runs` : ''}`;
+                info.title = models.map(t => `${t}: ${cycles[t].slice(8, 10)}Z ${cycles[t].slice(6, 8)}`).join('\n');
+            } else {
+                info.textContent = adeckMode ? 'No tracks available for this view yet' : '';
+                info.title = '';
+            }
+        }
         if (show) {
             const modeLabel = { early: 'early-cycle', late: 'late-cycle', eps: 'GEFS ensemble' }[adeckMode];
             addLiveLog(models.length
-                ? `GUIDANCE: ${adeckStorm.toUpperCase().slice(0, 4)} ${modeLabel} — ${models.length} tracks plotted (${models.join(', ')})`
+                ? `GUIDANCE: ${adeckStorm.toUpperCase().slice(0, 4)} ${modeLabel} — ${models.length} tracks, newest run ${newestDtg.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newestDtg))})${laggards ? `, ${laggards} aid(s) still on older runs` : ''} — ${models.join(', ')}`
                 : `GUIDANCE: no ${modeLabel} tracks available yet for ${adeckStorm.toUpperCase().slice(0, 4)}`,
                 models.length ? '#00e5ff' : '#ffb300');
         }
@@ -5267,7 +5295,12 @@ function initAdeck() {
         if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(true);
     });
     setTimeout(fetchAdeckList, 9000);
-    setInterval(fetchAdeckList, 60 * 60 * 1000);
+    // Hourly: refresh the system list, and (once guidance has been used) re-pull
+    // the deck even with the layer off so the health row tracks new cycles
+    setInterval(() => {
+        fetchAdeckList();
+        if (adeckMode && adeckStorm) fetchAdeck(false);
+    }, 60 * 60 * 1000);
     // New model runs arrive continuously through each cycle
     setInterval(() => {
         if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(false);
@@ -11468,6 +11501,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 18, 2026 (update 3)', items: [
+        'Guidance freshness at a glance: a run-time stamp now sits under the Model Guidance storm selector — newest cycle (e.g. “00Z 19 Jul, 1.2 h ago”), how many aids are plotted, and how many are still on older runs (hover it for every model’s cycle). The Live Log line reports the same when you toggle a view. Data Health (TROPICAL group) gained two rows: Model Guidance, stamped with the model RUN time so it goes amber/red when a newer cycle should exist, and Recon HDOB Feed, refreshed by the background Hurricane Hunter check every 15 minutes.'
+    ]},
     { date: 'Jul 18, 2026 (update 2)', items: [
         'Spaghetti models arrive under NHC Tropical → Model Guidance: the real ATCF a-deck tracks (the same data behind the UCAR/RAL guidance plots) drawn natively on the map for any active invest, depression, storm or hurricane. Pick the system from the dropdown, then choose Early Cycle Track Guidance (the interpolated aids available at advisory time — GFS, ECMWF, UKMET, HAFS-A/B, COAMPS-TC, Google DeepMind, consensus TVCN/HCCA and more), Late Cycle (the raw synoptic-time model runs), or GEFS Ensemble Members for the full 31-member EPS spread. Each model draws in its own color with its ID labeled at the end of its track; click any forecast point for the model name, cycle, valid time, and forecast intensity (max wind + category, MSLP). Tracks refresh every 15 minutes as new model runs arrive.'
     ]},
@@ -11735,7 +11771,8 @@ const USER_GUIDE = [
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
         </ul>
-        <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>` },
+        <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>
+        <p>The stamp under the storm selector tells you how fresh the plot is: the newest run time and its age, the number of aids plotted, and how many are still on an older cycle (hover for every model’s run). Data Health → TROPICAL tracks the same — the <b>Model Guidance</b> row is stamped with the run time itself, so it turns amber/red when a newer cycle should have arrived, and <b>Recon HDOB Feed</b> confirms the Hurricane Hunter feed is being checked (every 15 minutes in the background).</p>` },
 
     { id: 'aviation', title: 'Aviation Hazards', html: `
         <ul>
