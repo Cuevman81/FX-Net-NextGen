@@ -64,6 +64,21 @@ def fetch_btk(sid):
     return _fetch(f'https://ftp.nhc.noaa.gov/atcf/btk/b{sid}.dat').decode('utf-8', errors='replace')
 
 
+def fetch_ships(sid):
+    """Return the newest SHIPS diagnostic text for one storm. NHC files are
+    named {YYMMDDHH}{BASIN}{NN}{YY}_ships.txt (e.g. 26071912AL0226_ships.txt);
+    list the dir and grab the most recent for this system."""
+    if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
+        raise ValueError('bad storm id')
+    token = f'{sid[:2].upper()}{sid[2:4]}{sid[6:8]}'   # al022026 -> AL0226
+    idx = _fetch('https://ftp.nhc.noaa.gov/atcf/stext/').decode('utf-8', errors='replace')
+    files = re.findall(rf'(\d{{8}}{token}_ships\.txt)', idx)
+    if not files:
+        raise ValueError('no SHIPS diagnostics for this system yet')
+    newest = sorted(set(files))[-1]
+    return _fetch(f'https://ftp.nhc.noaa.gov/atcf/stext/{newest}').decode('utf-8', errors='replace')
+
+
 def fetch_adeck(sid):
     """Return the a-deck text for one storm, trimmed to the latest 3 cycles."""
     if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
@@ -91,6 +106,9 @@ class handler(BaseHTTPRequestHandler):
                 ctype = 'application/json'
             elif q.get('btk', [''])[0]:
                 body = fetch_btk(q.get('btk', [''])[0].lower()).encode()
+                ctype = 'text/plain'
+            elif q.get('ships', [''])[0]:
+                body = fetch_ships(q.get('ships', [''])[0].lower()).encode()
                 ctype = 'text/plain'
             else:
                 sid = q.get('id', [''])[0].lower()

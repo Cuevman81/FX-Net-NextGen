@@ -5615,6 +5615,144 @@ async function openTrendsChart(announce = true) {
     }
 }
 
+// ─── SHIPS environmental diagnostics (why the storm may strengthen/weaken) ───
+// Parses NHC's SHIPS text: vertical shear, SST, mid-level RH, ocean heat,
+// maximum potential intensity, and the rapid-intensification probabilities.
+function shipsNumsAfter(text, label) {
+    const re = new RegExp('^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s+(.+)$', 'm');
+    const m = text.match(re);
+    if (!m) return [];
+    return (m[1].match(/-?\d+\.?\d*/g) || []).map(Number);
+}
+
+function parseShips(text) {
+    const hdr = text.match(/(\w{2}\d{6})\s+(\d{2})\/(\d{2})\/(\d{2})\s+(\d{2})\s+UTC/);
+    const hours = shipsNumsAfter(text, 'TIME (HR)');
+    // RI probability matrix: threshold header + consensus row
+    const thHdr = text.match(/RI \(kt \/ h\)\s*\|(.+)/);
+    const thresholds = thHdr ? thHdr[1].split('|').map(s => s.trim()).filter(Boolean) : [];
+    const consLine = text.match(/^\s*Consensus:\s*(.+)$/m);
+    const consensus = consLine ? (consLine[1].match(/[\d.]+/g) || []).map(Number) : [];
+    // Climo context for the 24-h 30-kt RI threshold (the common headline)
+    const climo = {};
+    text.replace(/SHIPS Prob RI for (\d+)kt\/\s*(\d+)hr RI threshold=\s*(\d+)% is\s*([\d.]+) times climatological mean \(\s*([\d.]+)%\)/g,
+        (_, dv, hr, prob, mult, mean) => { climo[`${dv}/${hr}`] = { prob: +prob, mult: +mult, mean: +mean }; return _; });
+    const prelim = text.match(/PRELIM RI PROB[^:]*:\s*([\d.]+)/);
+    return {
+        id: hdr ? hdr[1] : '',
+        initStr: hdr ? `${hdr[2]}/${hdr[3]} ${hdr[5]}Z` : '',
+        hours,
+        vmax: shipsNumsAfter(text, 'V (KT) NO LAND'),
+        vlgem: shipsNumsAfter(text, 'V (KT) LGEM'),
+        shear: shipsNumsAfter(text, 'SHEAR (KT)'),
+        sst: shipsNumsAfter(text, 'SST (C)'),
+        mpi: shipsNumsAfter(text, 'POT. INT. (KT)'),
+        rh: shipsNumsAfter(text, '700-500 MB RH'),
+        ohc: shipsNumsAfter(text, 'HEAT CONTENT'),
+        thresholds, consensus, climo,
+        prelimRI: prelim ? +prelim[1] : null
+    };
+}
+
+// Favorability color for each parameter (green good for intensification → red hostile)
+const shipsColor = {
+    shear: v => v == null ? '#8b97a3' : v < 10 ? '#00e676' : v < 20 ? '#9ccc65' : v < 30 ? '#ffb300' : '#ff5252',
+    sst:   v => v == null ? '#8b97a3' : v >= 29 ? '#00e676' : v >= 28 ? '#9ccc65' : v >= 26.5 ? '#ffb300' : '#ff5252',
+    rh:    v => v == null ? '#8b97a3' : v >= 60 ? '#00e676' : v >= 50 ? '#9ccc65' : v >= 40 ? '#ffb300' : '#ff5252',
+    ohc:   v => v == null ? '#8b97a3' : v >= 50 ? '#00e676' : v >= 16 ? '#9ccc65' : v > 0 ? '#ffb300' : '#8b97a3',
+    plain: () => '#e0e0e0'
+};
+
+function shipsAssessment(s) {
+    const at0 = arr => arr && arr.length ? arr[0] : null;
+    const sh = at0(s.shear), sst = at0(s.sst), rh = at0(s.rh), ohc = at0(s.ohc);
+    const mpi = at0(s.mpi), vnow = at0(s.vmax);
+    let score = 0; const pros = [], cons = [];
+    if (sh != null) { if (sh < 10) { score += 2; pros.push('low shear'); } else if (sh < 20) { score += 1; } else if (sh < 30) { score -= 1; cons.push('elevated shear'); } else { score -= 2; cons.push('high shear'); } }
+    if (rh != null) { if (rh >= 60) { score += 1; pros.push('moist mid-levels'); } else if (rh < 40) { score -= 2; cons.push('dry mid-levels'); } else if (rh < 50) { score -= 1; cons.push('marginal moisture'); } }
+    if (sst != null) { if (sst >= 29) { score += 1; pros.push('very warm SST'); } else if (sst < 26.5) { score -= 2; cons.push('cool SST'); } }
+    if (ohc != null && ohc >= 50) { score += 1; pros.push('high ocean heat'); }
+    const headroom = (mpi != null && vnow != null) ? mpi - vnow : null;
+    if (headroom != null && headroom < 20) { score -= 2; cons.push('near potential intensity'); }
+    const ri24 = s.climo['30/24'] || s.climo['25/24'];
+    if (ri24 && ri24.mult >= 2) { score += 1; pros.push('RI odds above normal'); }
+    let verdict, color;
+    if (score >= 3) { verdict = 'FAVORABLE for strengthening'; color = '#00e676'; }
+    else if (score >= 1) { verdict = 'MARGINALLY FAVORABLE'; color = '#9ccc65'; }
+    else if (score >= -1) { verdict = 'MIXED / NEAR-STEADY'; color = '#ffb300'; }
+    else { verdict = 'HOSTILE — favors weakening'; color = '#ff5252'; }
+    return { verdict, color, pros, cons, headroom };
+}
+
+async function openShipsPanel(announce = true) {
+    const panel = document.getElementById('ships-panel');
+    const title = document.getElementById('ships-title');
+    const body = document.getElementById('ships-body');
+    const note = document.getElementById('ships-note');
+    if (!panel || !body) return;
+    if (announce) await fetchAdeckList();
+    if (!adeckStorm) { addLiveLog('SHIPS: no active systems right now', '#ffb300'); return; }
+    panel.style.display = 'block';
+    const sid = adeckStorm.toUpperCase().slice(0, 4);
+    title.textContent = `${sid} — SHIPS ENVIRONMENTAL DIAGNOSTICS`;
+    if (announce) { body.innerHTML = '<div style="color:#8b97a3;padding:20px;">Loading…</div>'; note.textContent = ''; }
+    try {
+        const res = await fetch(cacheBust(`/api/adeck?ships=${adeckStorm}`));
+        if (!res.ok) throw new Error(res.status === 500 ? 'no SHIPS diagnostics for this system yet' : `HTTP ${res.status}`);
+        const s = parseShips(await res.text());
+        const a = shipsAssessment(s);
+        // pick display columns: 0/12/24/48/72 h where present
+        const wantH = [0, 12, 24, 48, 72];
+        const cols = wantH.map(h => s.hours.indexOf(h)).filter(i => i >= 0);
+        const cell = (arr, i, colFn, dp = 0) => {
+            const v = arr && arr[i] != null ? arr[i] : null;
+            return `<td style="text-align:right;padding:2px 8px;color:${colFn(v)};">${v == null ? '—' : v.toFixed(dp)}</td>`;
+        };
+        const rowHtml = (label, arr, colFn, dp = 0, unit = '') =>
+            `<tr><td style="padding:2px 8px 2px 0;color:#8b97a3;white-space:nowrap;">${label}${unit ? ` <span style="color:#5a6570;">${unit}</span>` : ''}</td>` +
+            cols.map(i => cell(arr, i, colFn, dp)).join('') + '</tr>';
+        const hdrCells = cols.map(i => `<th style="text-align:right;padding:2px 8px;color:#00e5ff;font-weight:600;">F${s.hours[i]}</th>`).join('');
+        // RI consensus: pick the 24-h/30-kt column if present, else the 25/24
+        const riIdx = s.thresholds.findIndex(t => t === '30/24');
+        const ri2524 = s.thresholds.findIndex(t => t === '25/24');
+        const riCol = riIdx >= 0 ? riIdx : ri2524;
+        const ri24val = riCol >= 0 && s.consensus[riCol] != null ? s.consensus[riCol] : null;
+        const climoKey = riIdx >= 0 ? '30/24' : '25/24';
+        const climoInfo = s.climo[climoKey];
+        const riChips = s.thresholds.map((t, i) => {
+            const v = s.consensus[i];
+            if (v == null) return '';
+            const hot = v >= 30 ? '#ff5252' : v >= 15 ? '#ffb300' : v >= 5 ? '#9ccc65' : '#8b97a3';
+            return `<span style="display:inline-block;margin:1px 5px 1px 0;"><span style="color:#5a6570;">${t}:</span> <span style="color:${hot};font-weight:600;">${v.toFixed(0)}%</span></span>`;
+        }).join('');
+        body.innerHTML = `
+            <div style="background:${a.color}22;border-left:3px solid ${a.color};padding:5px 9px;margin-bottom:8px;">
+                <span style="color:${a.color};font-weight:700;font-size:11px;">${a.verdict}</span>
+                ${a.pros.length ? `<span style="color:#9ccc65;font-size:9.5px;"> · +${a.pros.join(', ')}</span>` : ''}
+                ${a.cons.length ? `<span style="color:#ff8a80;font-size:9.5px;"> · −${a.cons.join(', ')}</span>` : ''}
+            </div>
+            <table style="border-collapse:collapse;font-size:10.5px;font-family:'Roboto Mono',monospace;margin-bottom:8px;">
+                <tr><th style="text-align:left;padding:2px 8px 2px 0;color:#5a6570;">FORECAST HOUR</th>${hdrCells}</tr>
+                ${rowHtml('Vertical shear', s.shear, shipsColor.shear, 0, 'kt')}
+                ${rowHtml('Sea-surface temp', s.sst, shipsColor.sst, 1, '°C')}
+                ${rowHtml('Mid-level RH', s.rh, shipsColor.rh, 0, '%')}
+                ${rowHtml('Ocean heat content', s.ohc, shipsColor.ohc, 0, '')}
+                ${rowHtml('Max potential intensity', s.mpi, shipsColor.plain, 0, 'kt')}
+                ${rowHtml('SHIPS forecast wind', s.vmax, shipsColor.plain, 0, 'kt')}
+            </table>
+            <div style="font-size:10.5px;font-family:'Roboto Mono',monospace;">
+                <div style="color:#00e5ff;font-weight:700;margin-bottom:3px;">RAPID INTENSIFICATION OUTLOOK ${ri24val != null ? `— <span style="color:${ri24val >= 30 ? '#ff5252' : ri24val >= 15 ? '#ffb300' : '#9ccc65'};">${ri24val.toFixed(0)}% (${climoKey.replace('/', ' kt / ')} h)</span>` : ''}</div>
+                <div style="color:#c0c0c0;line-height:1.7;">${riChips}</div>
+                ${climoInfo ? `<div style="color:#8b97a3;font-size:9.5px;margin-top:3px;">${climoKey.split('/')[0]}-kt/${climoKey.split('/')[1]}-h RI odds are <b style="color:${climoInfo.mult >= 1.5 ? '#ffb300' : '#c0c0c0'};">${climoInfo.mult.toFixed(1)}×</b> the climatological mean (${climoInfo.mean.toFixed(1)}%)</div>` : ''}
+            </div>`;
+        note.textContent = `SHIPS (GFS) init ${s.initStr} · shear/SST/RH/OHC = environment; green favors intensification, red hostile · consensus RI probabilities`;
+        if (announce) addLiveLog(`SHIPS: ${sid} — ${a.verdict}; shear ${s.shear[0]} kt, mid-RH ${s.rh[0]}%, 24h RI ${ri24val != null ? ri24val.toFixed(0) + '%' : 'n/a'}`, a.color);
+    } catch (e) {
+        body.innerHTML = `<div style="color:#ff8a80;padding:16px;">${e.message}</div>`;
+        note.textContent = '';
+    }
+}
+
 function initAdeck() {
     const sel = document.getElementById('adeck-storm-select');
     if (sel) sel.addEventListener('change', () => {
@@ -5624,8 +5762,15 @@ function initAdeck() {
         if (panel && panel.style.display === 'block' && panel.dataset.mode) openIntensityChart(panel.dataset.mode);
         const tp = document.getElementById('trends-panel');
         if (tp && tp.style.display === 'block') openTrendsChart(false);
+        const sp = document.getElementById('ships-panel');
+        if (sp && sp.style.display === 'block') openShipsPanel(false);
     });
     document.getElementById('nhc-trends')?.addEventListener('click', () => openTrendsChart(true));
+    document.getElementById('nhc-ships')?.addEventListener('click', () => openShipsPanel(true));
+    document.getElementById('ships-close')?.addEventListener('click', () => {
+        const p = document.getElementById('ships-panel');
+        if (p) p.style.display = 'none';
+    });
     document.getElementById('trends-close')?.addEventListener('click', () => {
         const p = document.getElementById('trends-panel');
         if (p) p.style.display = 'none';
@@ -5646,7 +5791,7 @@ function initAdeck() {
     });
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape') {
-            ['intensity-panel', 'trends-panel'].forEach(id => {
+            ['intensity-panel', 'trends-panel', 'ships-panel'].forEach(id => {
                 const p = document.getElementById(id);
                 if (p) p.style.display = 'none';
             });
@@ -5661,6 +5806,8 @@ function initAdeck() {
         if (adeckMode && adeckStorm) fetchAdeck(false);
         const tp = document.getElementById('trends-panel');
         if (tp && tp.style.display === 'block') openTrendsChart(false);
+        const sp = document.getElementById('ships-panel');
+        if (sp && sp.style.display === 'block') openShipsPanel(false);
     }, 15 * 60 * 1000);
 }
 
@@ -5678,6 +5825,7 @@ const PANEL_MENU_ITEMS = [
     { item: 'adeck-int-early',   panel: 'intensity-panel' },
     { item: 'adeck-int-late',    panel: 'intensity-panel' },
     { item: 'nhc-trends',        panel: 'trends-panel' },
+    { item: 'nhc-ships',         panel: 'ships-panel' },
     { item: 'btn-text-products', panel: 'text-panel' },
     { item: 'btn-meteogram',     panel: 'meteogram-panel' },
     { item: 'nhc-two-atl',       panel: 'text-panel' },
@@ -11931,6 +12079,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 6)', items: [
+        'Environment / RI (SHIPS) joins NHC Tropical → Model Guidance: the environmental diagnostics behind the intensity forecast, so you can see whether the atmosphere and ocean favor strengthening. A color-coded table shows vertical wind shear, sea-surface temperature, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind at 0/12/24/48/72 h (green = favorable for intensification, red = hostile). Below it, the Rapid Intensification Outlook gives the consensus RI probabilities across every threshold, highlights the 24-hour number, and tells you how those odds compare to climatology. A plain-language banner up top reads FAVORABLE / MARGINAL / MIXED / HOSTILE with the specific reasons (e.g. “−high shear, dry mid-levels”). Data straight from NHC’s SHIPS text; follows the storm selector and refreshes every 15 minutes.'
+    ]},
     { date: 'Jul 19, 2026 (update 5)', items: [
         'Storm Trends pressure axis flipped to the intuitive orientation: lower pressure values now sit at the bottom and increase going up. A deepening storm shows its pressure line falling toward the bottom while the wind line rises — the two lines cross as it intensifies, and the axis numbers read the way you expect.'
     ]},
@@ -12220,6 +12371,7 @@ const USER_GUIDE = [
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
             <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones.</li>
             <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
+            <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance.</li>
         </ul>
         <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>
         <p>The stamp under the storm selector tells you how fresh the plot is: the newest run time and its age, the number of aids plotted, and how many are still on an older cycle (hover for every model’s run). Data Health → TROPICAL tracks the same — the <b>Model Guidance</b> row is stamped with the run time itself, so it turns amber/red when a newer cycle should have arrived, and <b>Recon HDOB Feed</b> confirms the Hurricane Hunter feed is being checked (every 15 minutes in the background).</p>` },
