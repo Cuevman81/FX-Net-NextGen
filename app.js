@@ -5084,6 +5084,119 @@ function initRecon() {
     setInterval(() => fetchReconHdob(false), 15 * 60 * 1000);
 }
 
+// ─── NHC official per-storm advisory text (TCP / TCD / TCM / PWS) ───
+// CurrentStorms.json (proxied by /api/adeck?nhc=1) gives each active storm its
+// AWIPS bin slot (e.g. AT2) — the rotating 1-5 number that can't be derived
+// from the annual storm number (EP06 → bin EP1). The bin maps straight to the
+// product PILs (TCP/TCD/TCM/PWS + bin), which IEM AFOS serves CORS-open, the
+// same path the recon suite already uses.
+const NHC_ADV_PRODUCTS = {
+    tcp: ['TCP', 'Public Advisory'],
+    tcd: ['TCD', 'Forecast Discussion'],
+    tcm: ['TCM', 'Forecast / Advisory'],
+    pws: ['PWS', 'Wind Speed Probabilities']
+};
+let nhcAdvStorms = [];
+let nhcAdvSel = null;
+
+function nhcAdvAgeStr(iso) {
+    const ms = Date.parse(iso || '');
+    if (!isFinite(ms)) return '';
+    const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+    if (mins < 60) return `${mins}m ago`;
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return m ? `${h}h ${m}m ago` : `${h}h ago`;
+}
+
+function updateNhcAdvInfo() {
+    const info = document.getElementById('nhcadv-info');
+    if (!info) return;
+    const s = nhcAdvStorms.find(x => x.id === nhcAdvSel);
+    if (!s) { info.textContent = ''; return; }
+    const p = s.products.tcp || Object.values(s.products)[0];
+    info.textContent = p
+        ? `Latest advisory #${(p.adv || '').replace(/^0+/, '') || '?'} · ${nhcAdvAgeStr(p.issued)}`
+        : 'No public products yet';
+}
+
+async function fetchNhcAdvList() {
+    const sel = document.getElementById('nhcadv-storm-select');
+    if (!sel) return;
+    try {
+        const res = await fetch(cacheBust('/api/adeck?nhc=1'));
+        nhcAdvStorms = (await res.json()).storms || [];
+    } catch (e) {
+        nhcAdvStorms = [];
+    }
+    if (!nhcAdvStorms.length) {
+        sel.innerHTML = '<option value="">No active NHC storms</option>';
+        nhcAdvSel = null;
+        updateNhcAdvInfo();
+        return;
+    }
+    const keep = nhcAdvStorms.some(s => s.id === nhcAdvSel) ? nhcAdvSel : nhcAdvStorms[0].id;
+    nhcAdvSel = keep;
+    sel.innerHTML = nhcAdvStorms.map(s =>
+        `<option value="${s.id}"${s.id === keep ? ' selected' : ''}>${s.id.toUpperCase()} · ${s.name} (${s.class})</option>`
+    ).join('');
+    updateNhcAdvInfo();
+    // If the panel is open, refresh it for the (possibly changed) selection
+    const panel = document.getElementById('nhcadv-panel');
+    if (panel && panel.style.display === 'block' && panel.dataset.prod) openNhcAdv(panel.dataset.prod, false);
+}
+
+async function openNhcAdv(type, announce = true) {
+    const panel = document.getElementById('nhcadv-panel');
+    const title = document.getElementById('nhcadv-title');
+    const meta = document.getElementById('nhcadv-meta');
+    const body = document.getElementById('nhcadv-body');
+    if (!panel || !body) return;
+    if (announce && !nhcAdvStorms.length) await fetchNhcAdvList();
+    const s = nhcAdvStorms.find(x => x.id === nhcAdvSel);
+    if (!s) { addLiveLog('NHC advisories: no active storms right now', '#ffb300'); return; }
+    const [prefix, label] = NHC_ADV_PRODUCTS[type] || [];
+    if (!prefix) return;
+    panel.style.display = 'block';
+    panel.dataset.prod = type;
+    title.textContent = `${s.id.toUpperCase()} ${s.name} — ${label}`;
+    const pm = s.products[type];
+    meta.textContent = pm
+        ? `PIL ${prefix}${s.bin} · Advisory #${(pm.adv || '').replace(/^0+/, '') || '?'} · ${nhcAdvAgeStr(pm.issued)}`
+        : `PIL ${prefix}${s.bin}`;
+    if (announce) body.textContent = 'Loading…';
+    try {
+        const prods = await fetchAfos(prefix + s.bin, 1);
+        body.textContent = prods[0] || `No ${label} available for ${s.name} yet.`;
+        if (announce) addLiveLog(`NHC ${label}: ${s.id.toUpperCase()} ${s.name} loaded`, '#00e5ff');
+    } catch (e) {
+        body.textContent = `Error: ${e.message}`;
+    }
+}
+
+function initNhcAdv() {
+    const sel = document.getElementById('nhcadv-storm-select');
+    if (sel) sel.addEventListener('change', () => {
+        nhcAdvSel = sel.value || null;
+        updateNhcAdvInfo();
+        const panel = document.getElementById('nhcadv-panel');
+        if (panel && panel.style.display === 'block' && panel.dataset.prod) openNhcAdv(panel.dataset.prod, true);
+    });
+    Object.keys(NHC_ADV_PRODUCTS).forEach(type =>
+        document.getElementById('nhcadv-' + type)?.addEventListener('click', () => openNhcAdv(type, true)));
+    document.getElementById('nhcadv-close')?.addEventListener('click', () => {
+        const p = document.getElementById('nhcadv-panel');
+        if (p) { p.style.display = 'none'; delete p.dataset.openedBy; }
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            const p = document.getElementById('nhcadv-panel');
+            if (p) p.style.display = 'none';
+        }
+    });
+    setTimeout(fetchNhcAdvList, 9500);
+    setInterval(fetchNhcAdvList, 15 * 60 * 1000);
+}
+
 // ─── Model track guidance spaghetti (ATCF a-decks via /api/adeck) ───
 // Same data behind the UCAR/RAL "hurricanes.ral.ucar.edu" spaghetti plots,
 // drawn natively on the map. Early cycle = interpolated guidance available at
@@ -5911,6 +6024,10 @@ const PANEL_MENU_ITEMS = [
     { item: 'adeck-int-late',    panel: 'intensity-panel' },
     { item: 'nhc-trends',        panel: 'trends-panel' },
     { item: 'nhc-ships',         panel: 'ships-panel' },
+    { item: 'nhcadv-tcp',        panel: 'nhcadv-panel' },
+    { item: 'nhcadv-tcd',        panel: 'nhcadv-panel' },
+    { item: 'nhcadv-tcm',        panel: 'nhcadv-panel' },
+    { item: 'nhcadv-pws',        panel: 'nhcadv-panel' },
     { item: 'btn-text-products', panel: 'text-panel' },
     { item: 'btn-meteogram',     panel: 'meteogram-panel' },
     { item: 'nhc-two-atl',       panel: 'text-panel' },
@@ -12164,6 +12281,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 11)', items: [
+        'Read NHC’s official text for any active storm. Under NHC Tropical → Official Advisories (per storm), pick a system from the dropdown and open its Public Advisory, Forecast Discussion, Forecast/Advisory, or Wind Speed Probabilities — the full authoritative product, straight from NHC. The dropdown lists every active storm (Atlantic + Pacific) with its current advisory number and age, and it maps each storm to the correct AWIPS product slot automatically (that slot rotates 1–5 through the season and can’t be guessed from the storm number — e.g. EP06 files under bin EP1), so you always get the right storm’s text.'
+    ]},
     { date: 'Jul 19, 2026 (update 10)', items: [
         'AI models now have their own sub-tabs. Under Model Guidance → AI / ML Models (✦) there are dedicated Early Cycle AI Models and Late Cycle AI Models track views, so the data-driven guidance (GraphCast now, plus GenCast / AIFS / AI-GFS / AI-GEFS as NHC adds them) plots on its own instead of mixing into the physics spaghetti. The regular Early/Late Cycle Track Guidance are now physics-only. The intensity charts still show everything together with the ✦ marker so you can compare AI vs physics intensity side by side.'
     ]},
@@ -12453,6 +12573,15 @@ const USER_GUIDE = [
             <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details.</li>
             <li><b>Tropical Discussions</b> open the full NHC text products.</li>
         </ul>
+        <h3>Official Advisories (per storm)</h3>
+        <p>Read NHC’s authoritative text for any active storm. Pick a system from the dropdown — every active Atlantic and Pacific storm is listed with its current advisory number and age — then open a product:</p>
+        <ul>
+            <li><b>Public Advisory</b> (TCP) — the plain-language advisory: location, intensity, movement, and the watches/warnings in effect.</li>
+            <li><b>Forecast Discussion</b> (TCD) — the forecaster’s reasoning behind the track and intensity forecast.</li>
+            <li><b>Forecast / Advisory</b> (TCM) — the technical marine advisory: center fix, the full 5-day forecast positions, and wind-radii by quadrant.</li>
+            <li><b>Wind Speed Probabilities</b> (PWS) — the chances of 34 / 50 / 64 kt winds at specific locations over the next 5 days.</li>
+        </ul>
+        <p>FX-Net maps each storm to the correct AWIPS product slot automatically. That slot rotates 1–5 through the season and can’t be inferred from the storm number (e.g. East Pacific storm EP06 files under bin EP1), so the app always pulls the right storm’s text. Switch storms or products from the panel; × or Esc closes it.</p>
         <h3>Hurricane Hunters (Recon)</h3>
         <p>The badge on <b>Recon Flight Obs</b> tells you at a glance whether an aircraft is up: <b>IN AIR</b> (green) means a Hurricane Hunter is transmitting right now; RECON means no one is airborne.</p>
         <ul>
@@ -13790,6 +13919,7 @@ function init() {
     initUserGuide();
     initRecon();
     initAdeck();
+    initNhcAdv();
     initPanelToggles();
     updateWarnModeLabel();
     initHealthToggle();

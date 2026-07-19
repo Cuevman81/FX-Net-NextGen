@@ -139,6 +139,37 @@ def fetch_ships(sid):
     return _fetch(f'https://ftp.nhc.noaa.gov/atcf/stext/{newest}').decode('utf-8', errors='replace')
 
 
+def fetch_nhc():
+    """Proxy NHC's CurrentStorms.json (no CORS) into a compact index of active
+    systems that have live public products. Each storm carries its AWIPS bin
+    (e.g. AT2) — the rotating 1-5 slot that maps to the product PILs
+    (TCPAT2/TCDAT2/TCMAT2/PWSAT2) — plus per-product advisory number and issue
+    time for freshness. The bin slot can't be derived from the annual storm
+    number (it recycles across the season), so this index is authoritative."""
+    raw = _fetch('https://www.nhc.noaa.gov/CurrentStorms.json').decode('utf-8', errors='replace')
+    data = json.loads(raw)
+    keys = {'tcp': 'publicAdvisory', 'tcd': 'forecastDiscussion',
+            'tcm': 'forecastAdvisory', 'pws': 'windSpeedProbabilities'}
+    out = []
+    for s in data.get('activeStorms', []):
+        bin_ = (s.get('binNumber') or '').strip().upper()
+        if not re.fullmatch(r'(AT|EP|CP)\d', bin_):
+            continue   # only basins with browser-fetchable AFOS PILs
+        products = {}
+        for short, key in keys.items():
+            p = s.get(key) or {}
+            if p.get('url'):
+                products[short] = {'adv': p.get('advNum', ''), 'issued': p.get('issuance', '')}
+        out.append({
+            'id': (s.get('id') or '').lower(),
+            'bin': bin_,
+            'name': s.get('name', ''),
+            'class': s.get('classification', ''),
+            'products': products,
+        })
+    return {'storms': out}
+
+
 def fetch_adeck(sid):
     """Return the a-deck text for one storm, trimmed to the latest 3 cycles."""
     if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
@@ -163,6 +194,9 @@ class handler(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             if q.get('list', [''])[0]:
                 body = json.dumps({'storms': list_storms()}).encode()
+                ctype = 'application/json'
+            elif q.get('nhc', [''])[0]:
+                body = json.dumps(fetch_nhc()).encode()
                 ctype = 'application/json'
             elif q.get('btk', [''])[0]:
                 body = fetch_btk(q.get('btk', [''])[0].lower()).encode()

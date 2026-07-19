@@ -226,6 +226,17 @@
                     <div class="sub-category">Tropical Discussions</div>
                     <div class="product-item" id="nhc-two-atl" data-layer="nhc-two-atl"><span>Atlantic TWO</span></div>
                     <div class="product-item" id="nhc-two-epac" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
+                    <div class="sub-category">Official Advisories (per storm)</div>
+                    <div style="padding:3px 12px 5px;">
+                        <select id="nhcadv-storm-select" style="width:100%;background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;">
+                            <option value="">Loading systems…</option>
+                        </select>
+                        <div id="nhcadv-info" style="margin-top:3px;font-size:9px;line-height:1.4;color:#8b97a3;"></div>
+                    </div>
+                    <div class="product-item" id="nhcadv-tcp"><span>Public Advisory</span> <span class="badge red">TCP</span></div>
+                    <div class="product-item" id="nhcadv-tcd"><span>Forecast Discussion</span> <span class="badge orange">TCD</span></div>
+                    <div class="product-item" id="nhcadv-tcm"><span>Forecast / Advisory</span> <span class="badge blue">TCM</span></div>
+                    <div class="product-item" id="nhcadv-pws"><span>Wind Speed Probabilities</span> <span class="badge blue">PWS</span></div>
                     <div class="sub-category">Hurricane Hunters (Recon)</div>
                     <div class="product-item" data-layer="recon-hdob"><span>Recon Flight Obs (live)</span> <span class="badge blue" id="recon-badge">RECON</span></div>
                     <div class="product-item" id="recon-tcpod"><span>Recon Schedule (TCPOD)</span> <span class="badge blue">DAILY</span></div>
@@ -1058,6 +1069,16 @@
         <pre id="recon-text-body" style="font-size:10.5px; color:rgba(255,255,255,0.88); line-height:1.5; white-space:pre-wrap; margin:0;"></pre>
     </div>
 
+    <!-- NHC OFFICIAL STORM ADVISORY TEXT (per-storm TCP/TCD/TCM/PWS) -->
+    <div id="nhcadv-panel" style="display:none; position:fixed; top:80px; right:20px; z-index:901; background:rgba(10,12,18,0.97); border:1px solid rgba(0,229,255,0.35); border-radius:4px; padding:10px 14px; font-family:'Roboto Mono',monospace; min-width:360px; max-width:600px; box-shadow:0 4px 20px rgba(0,0,0,0.6); max-height:82vh; overflow-y:auto;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; gap:16px;">
+            <span id="nhcadv-title" style="color:#00e5ff; font-size:9px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase;">NHC ADVISORY</span>
+            <span id="nhcadv-close" style="color:#ff6666; cursor:pointer; font-size:14px; line-height:1;">&times;</span>
+        </div>
+        <div id="nhcadv-meta" style="font-size:9px; color:#8b97a3; margin-bottom:6px;"></div>
+        <pre id="nhcadv-body" style="font-size:10.5px; color:rgba(255,255,255,0.88); line-height:1.5; white-space:pre-wrap; margin:0;"></pre>
+    </div>
+
     <!-- INTENSITY GUIDANCE CHART (a-deck vmax time series) -->
     <div id="intensity-panel" style="display:none; position:fixed; top:70px; left:50%; transform:translateX(-50%); z-index:901; background:rgba(10,12,18,0.97); border:1px solid rgba(0,229,255,0.35); border-radius:4px; padding:10px 14px; box-shadow:0 4px 20px rgba(0,0,0,0.6);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:20px;">
@@ -1104,7 +1125,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=247"></script>
+    <script src="app.js?v=248"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
