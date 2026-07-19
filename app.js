@@ -2711,7 +2711,7 @@ function initFrontalPipIcons(map) {
         filter: ['==', ['get', 'layerType'], 'end'],
         layout: {
             visibility: 'none',
-            'text-field': ['get', 'tech'],
+            'text-field': ['coalesce', ['get', 'lbl'], ['get', 'tech']],
             'text-font': ['Noto Sans Bold'],
             'text-size': 9.5,
             'text-offset': [0, 1.1],
@@ -3290,7 +3290,7 @@ function initFrontalPipIcons(map) {
             v < 96 ? ' (Cat 2)' : v < 113 ? ' (Cat 3)' : v < 137 ? ' (Cat 4)' : ' (Cat 5)';
         const html = `
             <div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:210px;">
-                <div style="color:${p.color};font-weight:700;margin-bottom:4px;">${p.name} <span style="color:#8b97a3;font-weight:400;">(${p.tech})</span></div>
+                <div style="color:${p.color};font-weight:700;margin-bottom:4px;">${p.name} <span style="color:#8b97a3;font-weight:400;">(${p.tech})</span>${isAiModel(p.tech) ? ' <span style="color:#ea80fc;font-weight:400;">✦ AI</span>' : ''}</div>
                 <div style="color:#8b97a3;">Init ${p.cycle}Z · F${String(p.tau).padStart(3, '0')}</div>
                 <div style="color:#fff;">Valid ${p.valid}</div>
                 ${p.vmax ? `<div style="color:#ffd166;">Max wind ${p.vmax} kt${cat(p.vmax)}</div>` : ''}
@@ -5119,8 +5119,23 @@ const ADECK_MODELS = {
     HMON: ['HMON', '#8c9eff', 2, 'Ll'],
     CTCI: ['COAMPS-TC (interp)', '#d4e157', 2, 'Ee'],
     CTCX: ['COAMPS-TC', '#d4e157', 2, 'Ll'],
-    GDMI: ['Google DeepMind (interp)', '#f06292', 2, 'Ee'],
-    GDMN: ['Google DeepMind', '#f06292', 2, 'Ll'],
+    // ── AI / machine-learning guidance ──
+    // GraphCast ensemble mean is live in the a-decks now; the others are wired
+    // and will plot automatically once NHC begins distributing them.
+    GDMI: ['GraphCast Ens (Google DeepMind, interp)', '#f06292', 2, 'Ee'],
+    GDMN: ['GraphCast Ens (Google DeepMind)', '#f06292', 2, 'Ll'],
+    GRPI: ['GraphCast det (interp)', '#ec407a', 2, 'Ee'],
+    GRPH: ['GraphCast det', '#ec407a', 2, 'Ll'],
+    GENI: ['GenCast (Google, interp)', '#e040fb', 2, 'Ee'],
+    GENC: ['GenCast (Google)', '#e040fb', 2, 'Ll'],
+    EAII: ['AIFS (ECMWF AI, interp)', '#7c4dff', 2, 'Ee'],
+    EAIO: ['AIFS (ECMWF AI)', '#7c4dff', 2, 'Ll'],
+    GAII: ['AI-GFS (interp)', '#ff80ab', 2, 'Ee'],
+    GAIO: ['AI-GFS', '#ff80ab', 2, 'Ll'],
+    EGMI: ['AI-GEFS Ens Mean (interp)', '#b388ff', 2, 'E'],
+    EGMN: ['AI-GEFS Ens Mean', '#b388ff', 2, 'L'],
+    NNIC: ['Neural-Net Intensity Consensus', '#ea80fc', 2.4, 'e'],
+    NNIB: ['Neural-Net Intensity Baseline', '#b39ddb', 1.4, 'e'],
     NVGI: ['NAVGEM (interp)', '#8d6e63', 2, 'E'],
     NVGM: ['NAVGEM', '#8d6e63', 2, 'L'],
     AEMI: ['GFS Ensemble Mean (interp)', '#ffee58', 2.2, 'E'],
@@ -5133,6 +5148,11 @@ const ADECK_MODELS = {
     CLP5: ['CLIPER5 Baseline', '#757575', 1.2, 'E'],
     XTRP: ['Extrapolation', '#616161', 1.2, 'E']
 };
+
+// AI / machine-learning model techs — marked distinctly so forecasters can tell
+// data-driven guidance from physics models at a glance.
+const AI_MODELS = new Set(['GDMI', 'GDMN', 'GRPI', 'GRPH', 'GENI', 'GENC', 'EAII', 'EAIO', 'GAII', 'GAIO', 'EGMI', 'EGMN', 'NNIC', 'NNIB']);
+const isAiModel = tech => AI_MODELS.has(tech);
 
 let adeckMode = null;    // 'early' | 'late' | 'eps' (global, like other overlays)
 let adeckStorm = null;   // e.g. 'al912026'
@@ -5211,7 +5231,7 @@ function buildAdeckFeatures(rows, mode) {
         });
         if (meta.label) features.push({
             type: 'Feature',
-            properties: { layerType: 'end', tech, color: meta.color },
+            properties: { layerType: 'end', tech, lbl: tech + (isAiModel(tech) ? ' ✦' : ''), color: meta.color },
             geometry: { type: 'Point', coordinates: coords[coords.length - 1] }
         });
     });
@@ -5316,7 +5336,7 @@ function drawIntensityChart(canvas, series) {
         ctx.strokeStyle = s.color; ctx.lineWidth = s.wide ? 2.6 : 1.5;
         ctx.beginPath(); ctx.moveTo(legX, ly); ctx.lineTo(legX + 16, ly); ctx.stroke();
         ctx.fillStyle = s.color; ctx.font = `${s.wide ? 'bold ' : ''}9px "Roboto Mono",monospace`;
-        ctx.fillText(s.tech, legX + 21, ly);
+        ctx.fillText(s.tech + (isAiModel(s.tech) ? ' ✦' : ''), legX + 21, ly);   // ✦ = AI/ML
         ctx.fillStyle = '#8b97a3'; ctx.font = '8px "Roboto Mono",monospace';
         ctx.fillText(`${s.pts[s.pts.length - 1].v} kt`, legX + 62, ly);
     });
@@ -5341,8 +5361,9 @@ async function openIntensityChart(mode) {
         drawIntensityChart(document.getElementById('intensity-canvas'), series);
         const newest = series.length ? series.map(s => s.dtg).sort().pop() : null;
         const laggards = newest ? series.filter(s => s.dtg !== newest).length : 0;
+        const anyAi = series.some(s => isAiModel(s.tech));
         note.textContent = newest
-            ? `Newest run ${newest.slice(8, 10)}Z ${newest.slice(6, 8)} (${adeckAgeStr(adeckDtgMs(newest))}) · ${series.length} aids${laggards ? ` · ${laggards} from older runs` : ''} · dashed lines mark TS / Cat 1–5 thresholds`
+            ? `Newest run ${newest.slice(8, 10)}Z ${newest.slice(6, 8)} (${adeckAgeStr(adeckDtgMs(newest))}) · ${series.length} aids${laggards ? ` · ${laggards} from older runs` : ''} · dashed lines mark TS / Cat 1–5 thresholds${anyAi ? ' · ✦ = AI/ML model' : ''}`
             : 'No intensity guidance available for this system yet.';
         if (newest) updateHealth('adeck', adeckDtgMs(newest));
         if (series.length) addLiveLog(`INTENSITY: ${sid} ${mode}-cycle — ${series.length} aids, newest run ${newest.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newest))}) — ${series.map(s => s.tech).join(', ')}`, '#00e5ff');
@@ -12137,6 +12158,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 9)', items: [
+        'AI / machine-learning guidance is now first-class and clearly marked (✦). Already live in the track spaghetti: GraphCast (Google DeepMind). Added to the intensity charts: the Neural-Net Intensity Consensus (NNIC — NHC’s operational ML intensity model) and its baseline (NNIB). And FX-Net is now wired for the rest of NHC’s AI suite — GraphCast-deterministic, Google GenCast, ECMWF’s AIFS, AI-GFS, and AI-GEFS — so each will appear automatically the moment NHC starts distributing it in the a-decks. AI models carry a ✦ in the intensity legend, on their track end-labels, and in the click popup so you can tell data-driven guidance from the physics models at a glance.'
+    ]},
     { date: 'Jul 19, 2026 (update 8)', items: [
         'Invest → tropical cyclone upgrades are now handled cleanly. When an invest is upgraded (AL91 → TD Two/AL02), both files linger in NHC’s archive, so the old invest used to keep showing in the Model Guidance dropdown with data frozen at its last pre-upgrade cycle. FX-Net now detects the upgrade (the invest and the numbered storm sitting on the same position) and removes the superseded invest from the list, automatically moving your selection to the upgraded system. So every product that follows the selector — spaghetti tracks, intensity charts, Storm Trends, SHIPS, and the CIRA RI/decapitation guidance — stays on the live TD Two data with nothing left pointing at the old AL91.'
     ]},
@@ -12433,6 +12457,7 @@ const USER_GUIDE = [
             <li><b>Early Cycle Track Guidance</b> — the interpolated aids available at advisory time: GFS (AVNI), ECMWF (EMXI), UKMET, Canadian, HAFS-A/B, COAMPS-TC, Google DeepMind, ensemble means, beta-advection trackers, and the TVCN / HCCA consensus (wide cyan / green). The NHC Official forecast plots in white when the system is a numbered cyclone.</li>
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
+            <li><b>AI / machine-learning models (✦)</b> — data-driven guidance is included and flagged with a ✦. GraphCast (Google DeepMind) plots as a track now; the Neural-Net Intensity Consensus (NNIC) and its baseline (NNIB) appear in the intensity charts. GraphCast-deterministic, Google GenCast, ECMWF AIFS, AI-GFS, and AI-GEFS are wired and will draw automatically once NHC distributes them in the a-decks. The ✦ appears in the intensity legend, on track end-labels, and in the click popup.</li>
             <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones.</li>
             <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
             <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance. A CIRA block below adds a second independent RI consensus, the Convective <b>Decapitation</b> probability (odds the convection gets sheared off the center → rapid weakening — the counterpart to RI), and current structure predictors (cold-cloud fraction, IR core symmetry).</li>
