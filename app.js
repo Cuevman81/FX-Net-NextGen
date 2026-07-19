@@ -5184,7 +5184,13 @@ function adeckTechMeta(tech, mode) {
         return null;
     }
     const m = ADECK_MODELS[tech];
-    if (!m || !m[3].includes(mode === 'early' ? 'E' : 'L')) return null;
+    if (!m) return null;
+    // Track set flag: early modes need 'E', late modes need 'L'
+    const wantEarly = (mode === 'early' || mode === 'ai-early');
+    if (!m[3].includes(wantEarly ? 'E' : 'L')) return null;
+    // AI sub-tabs show only AI models; the physics tabs exclude them
+    const ai = isAiModel(tech);
+    if ((mode === 'ai-early' || mode === 'ai-late') !== ai) return null;
     return { name: m[0], color: m[1], width: m[2], opacity: 0.9, label: true };
 }
 
@@ -5399,7 +5405,7 @@ async function fetchAdeck(show) {
             }
         }
         if (show) {
-            const modeLabel = { early: 'early-cycle', late: 'late-cycle', eps: 'GEFS ensemble' }[adeckMode];
+            const modeLabel = { early: 'early-cycle', late: 'late-cycle', eps: 'GEFS ensemble', 'ai-early': 'early-cycle AI', 'ai-late': 'late-cycle AI' }[adeckMode];
             addLiveLog(models.length
                 ? `GUIDANCE: ${adeckStorm.toUpperCase().slice(0, 4)} ${modeLabel} — ${models.length} tracks, newest run ${newestDtg.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newestDtg))})${laggards ? `, ${laggards} aid(s) still on older runs` : ''} — ${models.join(', ')}`
                 : `GUIDANCE: no ${modeLabel} tracks available yet for ${adeckStorm.toUpperCase().slice(0, 4)}`,
@@ -12158,6 +12164,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 10)', items: [
+        'AI models now have their own sub-tabs. Under Model Guidance → AI / ML Models (✦) there are dedicated Early Cycle AI Models and Late Cycle AI Models track views, so the data-driven guidance (GraphCast now, plus GenCast / AIFS / AI-GFS / AI-GEFS as NHC adds them) plots on its own instead of mixing into the physics spaghetti. The regular Early/Late Cycle Track Guidance are now physics-only. The intensity charts still show everything together with the ✦ marker so you can compare AI vs physics intensity side by side.'
+    ]},
     { date: 'Jul 19, 2026 (update 9)', items: [
         'AI / machine-learning guidance is now first-class and clearly marked (✦). Already live in the track spaghetti: GraphCast (Google DeepMind). Added to the intensity charts: the Neural-Net Intensity Consensus (NNIC — NHC’s operational ML intensity model) and its baseline (NNIB). And FX-Net is now wired for the rest of NHC’s AI suite — GraphCast-deterministic, Google GenCast, ECMWF’s AIFS, AI-GFS, and AI-GEFS — so each will appear automatically the moment NHC starts distributing it in the a-decks. AI models carry a ✦ in the intensity legend, on their track end-labels, and in the click popup so you can tell data-driven guidance from the physics models at a glance.'
     ]},
@@ -12457,7 +12466,7 @@ const USER_GUIDE = [
             <li><b>Early Cycle Track Guidance</b> — the interpolated aids available at advisory time: GFS (AVNI), ECMWF (EMXI), UKMET, Canadian, HAFS-A/B, COAMPS-TC, Google DeepMind, ensemble means, beta-advection trackers, and the TVCN / HCCA consensus (wide cyan / green). The NHC Official forecast plots in white when the system is a numbered cyclone.</li>
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
-            <li><b>AI / machine-learning models (✦)</b> — data-driven guidance is included and flagged with a ✦. GraphCast (Google DeepMind) plots as a track now; the Neural-Net Intensity Consensus (NNIC) and its baseline (NNIB) appear in the intensity charts. GraphCast-deterministic, Google GenCast, ECMWF AIFS, AI-GFS, and AI-GEFS are wired and will draw automatically once NHC distributes them in the a-decks. The ✦ appears in the intensity legend, on track end-labels, and in the click popup.</li>
+            <li><b>AI / ML Models (✦)</b> — data-driven guidance has its own <b>Early Cycle AI Models</b> and <b>Late Cycle AI Models</b> track views (the regular Early/Late Track Guidance are physics-only). GraphCast (Google DeepMind) plots now; GraphCast-deterministic, Google GenCast, ECMWF AIFS, AI-GFS, and AI-GEFS are wired and draw automatically once NHC distributes them. In the intensity charts, the AI aids (NNIC neural-net intensity consensus, NNIB baseline, GraphCast) show alongside the physics models flagged with ✦ so you can compare directly. The ✦ also appears on track end-labels and in the click popup.</li>
             <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones.</li>
             <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
             <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance. A CIRA block below adds a second independent RI consensus, the Convective <b>Decapitation</b> probability (odds the convection gets sheared off the center → rapid weakening — the counterpart to RI), and current structure predictors (cold-cloud fraction, IR core symmetry).</li>
