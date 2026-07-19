@@ -5327,7 +5327,7 @@ async function openIntensityChart(mode) {
     const title = document.getElementById('intensity-title');
     const note = document.getElementById('intensity-note');
     if (!panel || !title || !note) return;
-    if (!adeckStorm) await fetchAdeckList();
+    await fetchAdeckList();
     if (!adeckStorm) { addLiveLog('INTENSITY: no active systems with model guidance right now', '#ffb300'); return; }
     panel.style.display = 'block';
     const sid = adeckStorm.toUpperCase().slice(0, 4);
@@ -5448,12 +5448,13 @@ function initAdeck() {
         }
     });
     setTimeout(fetchAdeckList, 9000);
-    // Hourly: refresh the system list, and (once guidance has been used) re-pull
-    // the deck even with the layer off so the health row tracks new cycles
+    // Every 15 min: refresh the system list (catches invest→TC transitions like
+    // AL91→AL02, where a NEW a-deck appears at the first advisory), and once
+    // guidance has been used, re-pull the deck so the health row tracks cycles
     setInterval(() => {
         fetchAdeckList();
         if (adeckMode && adeckStorm) fetchAdeck(false);
-    }, 60 * 60 * 1000);
+    }, 15 * 60 * 1000);
 }
 
 // ─── Unified toggle behavior for panel-opening menu items ───
@@ -9275,7 +9276,9 @@ function initProductSidebar() {
                     ['adeck-lines', 'adeck-pts', 'adeck-labels'].forEach(l => {
                         if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'visible');
                     });
-                    if (!adeckStorm) await fetchAdeckList();
+                    // Always re-check the system list on toggle — a new a-deck
+                    // appears the moment an invest is upgraded (selection is kept)
+                    await fetchAdeckList();
                     await fetchAdeck(true);
                 }
                 updateSidebarToActivePane();
@@ -11720,6 +11723,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 3)', items: [
+        'Faster pickup when an invest is upgraded (AL91 → TD Two): the Model Guidance storm list now re-checks NHC every 15 minutes instead of hourly, and also re-checks every time you toggle a guidance view or open an intensity chart — so the new system’s a-deck (e.g. AL02) shows in the dropdown the moment models start tracking it. Reference for the tropical section’s cadences: Active Storms & Cones and Outlook Areas refresh every 5 minutes while on; recon HDOBs every 5 minutes visible / 15 in background; guidance tracks every 15 minutes. Note NHC’s own map services only carry a new depression once its FIRST advisory package posts — a webpage announcement alone has no data feed behind it.'
+    ]},
     { date: 'Jul 19, 2026 (update 2)', items: [
         'Guidance accuracy audit (verified against the UCAR/RAL reference plots): HMON joins the model set — its raw runs in the late-cycle track and intensity views and its interpolated HMNI aid in the early-cycle views (it was the aid spiking AL91 to 76 kt that our chart was missing). SHIPS (no decay) reclassified from late to early-cycle intensity, where it belongs — the late intensity chart is now purely the raw dynamical runs (HAFS-A/B, HWRF, HMON, COAMPS-TC, GFS, Google DeepMind), matching how UCAR defines the experimental late plot. Reminder on cycle stamps: UCAR renders one frozen plot per init time; FX-Net plots each aid’s own newest run and flags how many are still on older cycles — same a-deck data, never stale.'
     ]},
