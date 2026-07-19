@@ -53,6 +53,13 @@ def list_storms():
             'modified': mod.strftime('%Y-%m-%dT%H:%MZ')
         })
     storms.sort(key=lambda s: (s['basin'], s['num']))
+    # Best-track position for every system — used to associate Hurricane Hunter
+    # recon flights with the storm they're flying, and for the graduated-invest
+    # check below. b-decks are small plain-text files.
+    for s in storms:
+        pos = _latest_pos(s['id'])
+        s['lat'] = pos[0] if pos else None
+        s['lon'] = pos[1] if pos else None
     _mark_graduated(storms)
     return storms
 
@@ -75,25 +82,21 @@ def _latest_pos(sid):
 
 def _mark_graduated(storms):
     """Flag an invest as graduated when a numbered storm in the same basin sits
-    on top of it (invest AL91 upgraded to TD AL02 → both files linger). Only
-    probes positions for basins that actually have both, to stay cheap."""
+    on top of it (invest AL91 upgraded to TD AL02 → both files linger). Uses the
+    lat/lon already resolved for each system in list_storms()."""
     for basin in {s['basin'] for s in storms}:
         grp = [s for s in storms if s['basin'] == basin]
         invests = [s for s in grp if s['invest']]
         numbered = [s for s in grp if not s['invest']]
         if not invests or not numbered:
             continue
-        for s in grp:
-            s['_pos'] = _latest_pos(s['id'])
         for inv in invests:
-            if not inv['_pos']:
+            if inv.get('lat') is None:
                 continue
             for n in numbered:
-                if n['_pos'] and abs(n['_pos'][0] - inv['_pos'][0]) < 0.6 and abs(n['_pos'][1] - inv['_pos'][1]) < 0.6:
+                if n.get('lat') is not None and abs(n['lat'] - inv['lat']) < 0.6 and abs(n['lon'] - inv['lon']) < 0.6:
                     inv['graduated_to'] = n['id']
                     break
-    for s in storms:
-        s.pop('_pos', None)
 
 
 def fetch_btk(sid):
@@ -165,6 +168,8 @@ def fetch_nhc():
             'bin': bin_,
             'name': s.get('name', ''),
             'class': s.get('classification', ''),
+            'lat': s.get('latitudeNumeric'),
+            'lon': s.get('longitudeNumeric'),
             'products': products,
         })
     return {'storms': out}

@@ -4963,76 +4963,125 @@ function parseHdob(text) {
     return { callsign, mission, storm, dateStr, wmo, obs };
 }
 
-function updateReconBadge(newestMs) {
+let reconFlights = [];   // cached parsed flights, re-associated when the storm changes
+
+// The HDOB storm-name field is unreliable (often the placeholder "CYCLONE"), so
+// tie a flight to a storm by proximity: nearest active system in the same basin
+// whose best-track position sits within ~6° (≈360 nm) of the aircraft's latest ob.
+function associateFlight(f) {
+    let best = null, bestD = Infinity;
+    stormIndex.forEach(s => {
+        if (s.lat == null || s.lon == null || s.basin !== f.basin) return;
+        const d = Math.hypot(s.lat - f.lat, s.lon - f.lon);
+        if (d < bestD) { bestD = d; best = s; }
+    });
+    return bestD <= 6 ? best : null;
+}
+
+// IN AIR is reserved for the *selected* storm (full green). If Hurricane Hunters
+// are up in a different system, show a dimmed "IN AIR · <id>" so it's clear
+// someone's flying — just not your storm.
+function updateReconBadge(activeMs, otherLabel, otherMs) {
     const badge = document.getElementById('recon-badge');
     if (!badge) return;
-    const ageMin = newestMs ? (Date.now() - newestMs) / 60000 : Infinity;
-    if (ageMin < 90) {
+    const now = Date.now();
+    if (activeMs && (now - activeMs) < 90 * 60 * 1000) {
         badge.textContent = 'IN AIR';
         badge.className = 'badge green';
-        badge.title = `Hurricane Hunters transmitting — last ob ${Math.round(ageMin)} min ago`;
+        badge.style.opacity = '';
+        badge.title = `Hurricane Hunters flying your selected storm — last ob ${Math.round((now - activeMs) / 60000)} min ago`;
+    } else if (otherMs && (now - otherMs) < 90 * 60 * 1000) {
+        badge.textContent = otherLabel ? `IN AIR · ${otherLabel}` : 'IN AIR · elsewhere';
+        badge.className = 'badge green';
+        badge.style.opacity = '0.5';
+        badge.title = `Hurricane Hunters airborne in ${otherLabel || 'another system'}, not your selected storm`;
     } else {
         badge.textContent = 'RECON';
         badge.className = 'badge blue';
-        badge.title = newestMs
-            ? `No aircraft airborne — last obs ${(ageMin / 60).toFixed(1)} h ago`
-            : 'No recent reconnaissance observations';
+        badge.style.opacity = '';
+        badge.title = 'No Hurricane Hunter aircraft currently airborne';
     }
 }
 
-async function fetchReconHdob(show) {
-    try {
-        // ~24 messages/pil ≈ last 4 flight-hours per basin
-        const [atl, epac] = await Promise.all([
-            fetchAfos('AHONT1', 24).catch(() => []),
-            fetchAfos('AHOPN1', 12).catch(() => [])
-        ]);
-        const cutoff = Date.now() - 24 * 3600 * 1000;
-        const byAircraft = {};   // callsign|mission -> merged obs
-        [...atl, ...epac].forEach(prod => {
-            const d = parseHdob(prod);
-            if (!d || !d.obs.length) return;
-            const key = `${d.callsign}|${d.mission}`;
-            if (!byAircraft[key]) byAircraft[key] = { ...d, obs: [] };
-            byAircraft[key].obs.push(...d.obs.filter(o => o.ms > cutoff));
-        });
-        const features = [];
-        let newestMs = 0, aircraftUp = [];
-        Object.values(byAircraft).forEach(ac => {
-            if (!ac.obs.length) return;
-            const seen = new Set();
-            ac.obs = ac.obs.filter(o => !seen.has(o.ms) && seen.add(o.ms)).sort((a, b) => a.ms - b.ms);
-            const last = ac.obs[ac.obs.length - 1];
-            if (last.ms > newestMs) newestMs = last.ms;
-            aircraftUp.push(`${ac.callsign} (${ac.storm})`);
+// Rebuild the recon layer + badge for the active storm from the cached flights.
+// Called after each fetch and whenever the selected storm changes (no re-fetch).
+function renderRecon(show) {
+    const now = Date.now(), FRESH = 90 * 60 * 1000;
+    const features = [];
+    let activeMs = 0, activeCalls = [];
+    let otherMs = 0, otherLabel = null, otherCall = null;
+    reconFlights.forEach(f => {
+        const s = associateFlight(f);
+        const fresh = (now - f.lastMs) < FRESH;
+        if (s && s.id === activeStorm) {
+            if (fresh && f.lastMs > activeMs) activeMs = f.lastMs;
+            activeCalls.push(f.callsign);
             features.push({
                 type: 'Feature', properties: { layerType: 'track' },
-                geometry: { type: 'LineString', coordinates: ac.obs.map(o => [o.lon, o.lat]) }
+                geometry: { type: 'LineString', coordinates: f.obs.map(o => [o.lon, o.lat]) }
             });
-            ac.obs.forEach((o, i) => features.push({
+            f.obs.forEach((o, i) => features.push({
                 type: 'Feature',
                 properties: {
-                    layerType: 'ob', latest: i === ac.obs.length - 1 ? 1 : 0,
-                    callsign: ac.callsign, storm: ac.storm, timeStr: o.timeStr,
+                    layerType: 'ob', latest: i === f.obs.length - 1 ? 1 : 0,
+                    callsign: f.callsign, storm: f.storm, timeStr: o.timeStr,
                     windMax: Math.max(o.sfmr || 0, o.wspd || 0),
                     flWind: o.wdir != null ? `${String(o.wdir).padStart(3, '0')}° @ ${o.wspd} kt` : null,
                     peak: o.peak, sfmr: o.sfmr, psfc: o.psfc, temp: o.temp, dp: o.dp, rain: o.rain
                 },
                 geometry: { type: 'Point', coordinates: [o.lon, o.lat] }
             }));
-        });
-        const data = { type: 'FeatureCollection', features };
-        Object.values(maps).forEach(m => {
-            if (m.getSource && m.getSource('recon-hdob')) m.getSource('recon-hdob').setData(data);
-        });
-        updateReconBadge(newestMs);
-        updateHealth('reconHdob');
-        if (show) {
-            addLiveLog(features.length
-                ? `RECON: ${aircraftUp.join(', ')} — ${features.filter(f => f.properties.layerType === 'ob').length} obs plotted (last ${((Date.now() - newestMs) / 60000).toFixed(0)} min ago)`
-                : 'RECON: no Hurricane Hunter obs in the last 24 h. Check the TCPOD for upcoming missions.',
-                features.length ? '#7fff9e' : '#ffb300');
+        } else if (fresh && f.lastMs > otherMs) {
+            otherMs = f.lastMs;
+            otherLabel = s ? s.shortId : (/^(AL|EP|CP)\d{2}$/.test(f.storm) ? f.storm : null);
+            otherCall = f.callsign;
         }
+    });
+    Object.values(maps).forEach(m => {
+        if (m.getSource && m.getSource('recon-hdob'))
+            m.getSource('recon-hdob').setData({ type: 'FeatureCollection', features });
+    });
+    updateReconBadge(activeMs, otherLabel, otherMs);
+    updateHealth('reconHdob');
+    if (show) {
+        const activeShort = activeStorm ? stormShortId(activeStorm) : 'the selected storm';
+        if (features.length) {
+            addLiveLog(`RECON: ${[...new Set(activeCalls)].join(', ')} flying ${activeShort} — ${features.filter(f => f.properties.layerType === 'ob').length} obs plotted (last ${((now - activeMs) / 60000).toFixed(0)} min ago)`, '#7fff9e');
+        } else if (otherMs) {
+            addLiveLog(`RECON: no aircraft on ${activeShort}; ${otherCall} is flying ${otherLabel || 'another system'}`, '#ffb300');
+        } else {
+            addLiveLog('RECON: no Hurricane Hunter obs in the last 24 h. Check the TCPOD for upcoming missions.', '#ffb300');
+        }
+    }
+}
+
+async function fetchReconHdob(show) {
+    try {
+        // ~24 messages/pil ≈ last 4 flight-hours per basin. Tag each product with
+        // its basin (AHONT1 = Atlantic, AHOPN1 = East Pacific) for storm matching.
+        const [atl, epac] = await Promise.all([
+            fetchAfos('AHONT1', 24).catch(() => []),
+            fetchAfos('AHOPN1', 12).catch(() => [])
+        ]);
+        const cutoff = Date.now() - 24 * 3600 * 1000;
+        const byAircraft = {};   // basin|callsign|mission -> merged obs
+        [...atl.map(p => ['al', p]), ...epac.map(p => ['ep', p])].forEach(([basin, prod]) => {
+            const d = parseHdob(prod);
+            if (!d || !d.obs.length) return;
+            const key = `${basin}|${d.callsign}|${d.mission}`;
+            if (!byAircraft[key]) byAircraft[key] = { ...d, basin, obs: [] };
+            byAircraft[key].obs.push(...d.obs.filter(o => o.ms > cutoff));
+        });
+        reconFlights = [];
+        Object.values(byAircraft).forEach(ac => {
+            if (!ac.obs.length) return;
+            const seen = new Set();
+            ac.obs = ac.obs.filter(o => !seen.has(o.ms) && seen.add(o.ms)).sort((a, b) => a.ms - b.ms);
+            const last = ac.obs[ac.obs.length - 1];
+            ac.lastMs = last.ms; ac.lat = last.lat; ac.lon = last.lon;
+            reconFlights.push(ac);
+        });
+        renderRecon(show);
     } catch (e) {
         if (show) addLiveLog(`RECON ERROR: ${e.message}`, '#ff3333');
     }
@@ -5111,8 +5160,12 @@ function nhcAdvAgeStr(iso) {
 function updateNhcAdvInfo() {
     const info = document.getElementById('nhcadv-info');
     if (!info) return;
-    const s = nhcAdvStorms.find(x => x.id === nhcAdvSel);
-    if (!s) { info.textContent = ''; return; }
+    const s = nhcAdvStorms.find(x => x.id === activeStorm);
+    if (!s) {
+        const si = stormIndex.find(x => x.id === activeStorm);
+        info.textContent = si && si.invest ? 'Invest — no official advisories yet' : '';
+        return;
+    }
     const p = s.products.tcp || Object.values(s.products)[0];
     info.textContent = p
         ? `Latest advisory #${(p.adv || '').replace(/^0+/, '') || '?'} · ${nhcAdvAgeStr(p.issued)}`
@@ -5120,27 +5173,14 @@ function updateNhcAdvInfo() {
 }
 
 async function fetchNhcAdvList() {
-    const sel = document.getElementById('nhcadv-storm-select');
-    if (!sel) return;
     try {
         const res = await fetch(cacheBust('/api/adeck?nhc=1'));
         nhcAdvStorms = (await res.json()).storms || [];
     } catch (e) {
         nhcAdvStorms = [];
     }
-    if (!nhcAdvStorms.length) {
-        sel.innerHTML = '<option value="">No active NHC storms</option>';
-        nhcAdvSel = null;
-        updateNhcAdvInfo();
-        return;
-    }
-    const keep = nhcAdvStorms.some(s => s.id === nhcAdvSel) ? nhcAdvSel : nhcAdvStorms[0].id;
-    nhcAdvSel = keep;
-    sel.innerHTML = nhcAdvStorms.map(s =>
-        `<option value="${s.id}"${s.id === keep ? ' selected' : ''}>${s.id.toUpperCase()} · ${s.name} (${s.class})</option>`
-    ).join('');
-    updateNhcAdvInfo();
-    // If the panel is open, refresh it for the (possibly changed) selection
+    rebuildStormMenus();
+    // If the panel is open, refresh it for the (possibly changed) advisory number
     const panel = document.getElementById('nhcadv-panel');
     if (panel && panel.style.display === 'block' && panel.dataset.prod) openNhcAdv(panel.dataset.prod, false);
 }
@@ -5152,10 +5192,21 @@ async function openNhcAdv(type, announce = true) {
     const body = document.getElementById('nhcadv-body');
     if (!panel || !body) return;
     if (announce && !nhcAdvStorms.length) await fetchNhcAdvList();
-    const s = nhcAdvStorms.find(x => x.id === nhcAdvSel);
-    if (!s) { addLiveLog('NHC advisories: no active storms right now', '#ffb300'); return; }
     const [prefix, label] = NHC_ADV_PRODUCTS[type] || [];
     if (!prefix) return;
+    const s = nhcAdvStorms.find(x => x.id === activeStorm);
+    if (!s) {
+        // Active system has no NHC advisories yet (e.g. an invest) — explain in-panel
+        const si = stormIndex.find(x => x.id === activeStorm);
+        panel.style.display = 'block';
+        panel.dataset.prod = type;
+        title.textContent = si ? `${si.shortId} — ${label}` : label;
+        meta.textContent = '';
+        body.textContent = si
+            ? `${si.shortId} is an invest — NHC issues no public advisories for it yet. Model guidance, Storm Trends and SHIPS are available; official advisories begin once it’s designated a depression or storm.`
+            : 'No active system selected.';
+        return;
+    }
     panel.style.display = 'block';
     panel.dataset.prod = type;
     title.textContent = `${s.id.toUpperCase()} ${s.name} — ${label}`;
@@ -5175,12 +5226,7 @@ async function openNhcAdv(type, announce = true) {
 
 function initNhcAdv() {
     const sel = document.getElementById('nhcadv-storm-select');
-    if (sel) sel.addEventListener('change', () => {
-        nhcAdvSel = sel.value || null;
-        updateNhcAdvInfo();
-        const panel = document.getElementById('nhcadv-panel');
-        if (panel && panel.style.display === 'block' && panel.dataset.prod) openNhcAdv(panel.dataset.prod, true);
-    });
+    if (sel) sel.addEventListener('change', () => setActiveStorm(sel.value));
     Object.keys(NHC_ADV_PRODUCTS).forEach(type =>
         document.getElementById('nhcadv-' + type)?.addEventListener('click', () => openNhcAdv(type, true)));
     document.getElementById('nhcadv-close')?.addEventListener('click', () => {
@@ -5268,7 +5314,12 @@ const AI_MODELS = new Set(['GDMI', 'GDMN', 'GRPI', 'GRPH', 'GENI', 'GENC', 'EAII
 const isAiModel = tech => AI_MODELS.has(tech);
 
 let adeckMode = null;    // 'early' | 'late' | 'eps' (global, like other overlays)
-let adeckStorm = null;   // e.g. 'al912026'
+// One active tropical system, shared app-wide. adeckStorm / nhcAdvSel mirror it
+// so existing tools keep working; setActiveStorm() is the single writer.
+let activeStorm = null;  // canonical selection, e.g. 'al022026'
+let adeckStorm = null;   // mirror of activeStorm (model guidance / trends / SHIPS)
+let adeckListRaw = [];   // last ?list=1 result (post graduated-invest filter)
+let stormIndex = [];     // merged systems: [{id,shortId,label,basin,num,invest,name,class,bin,products,lat,lon}]
 
 function parseAdeckText(text) {
     const rows = [];
@@ -5529,41 +5580,100 @@ async function fetchAdeck(show) {
     }
 }
 
+const stormShortId = id => id.slice(0, 2).toUpperCase() + id.slice(2, 4);   // al022026 → AL02
+
+// Merge the two storm feeds into one index: a-deck ?list=1 (guidance systems,
+// invests included, with best-track positions) + CurrentStorms.json ?nhc=1
+// (numbered storms with advisory bins/products). Both dropdowns render this
+// union so "the active storm" is a single shared choice across the app.
+function rebuildStormIndex() {
+    const byId = {};
+    adeckListRaw.forEach(s => {
+        byId[s.id] = {
+            id: s.id, shortId: stormShortId(s.id), basin: s.basin.toLowerCase(),
+            num: s.num, invest: s.invest,
+            lat: s.lat != null ? s.lat : null, lon: s.lon != null ? s.lon : null,
+            name: null, class: null, bin: null, products: null
+        };
+    });
+    nhcAdvStorms.forEach(s => {
+        const e = byId[s.id] || {
+            id: s.id, shortId: stormShortId(s.id), basin: s.id.slice(0, 2),
+            num: +s.id.slice(2, 4), invest: +s.id.slice(2, 4) >= 90, lat: null, lon: null
+        };
+        e.name = s.name; e.class = s.class; e.bin = s.bin; e.products = s.products;
+        if (s.lat != null) e.lat = s.lat;     // CurrentStorms position is the advisory fix — prefer it
+        if (s.lon != null) e.lon = s.lon;
+        byId[s.id] = e;
+    });
+    stormIndex = Object.values(byId).sort((a, b) =>
+        a.basin === b.basin ? a.num - b.num : (a.basin < b.basin ? -1 : 1));
+    stormIndex.forEach(e => {
+        e.label = e.name ? `${e.shortId} · ${e.name}${e.class ? ` (${e.class})` : ''}`
+                         : `${e.shortId} · Invest`;
+    });
+}
+
+// Repaint both storm dropdowns from the merged index, keeping the active
+// selection (or defaulting to the first system). Also refreshes the recon
+// association and the advisory freshness line.
+function rebuildStormMenus() {
+    rebuildStormIndex();
+    const selA = document.getElementById('adeck-storm-select');
+    const selB = document.getElementById('nhcadv-storm-select');
+    if (!stormIndex.length) {
+        activeStorm = null;
+        if (selA) selA.innerHTML = '<option value="">-- No Active Systems --</option>';
+        if (selB) selB.innerHTML = '<option value="">No active systems</option>';
+    } else {
+        if (!stormIndex.some(e => e.id === activeStorm)) activeStorm = stormIndex[0].id;
+        const opts = stormIndex.map(e => `<option value="${e.id}">${e.label}</option>`).join('');
+        [selA, selB].forEach(sel => { if (sel) { sel.innerHTML = opts; sel.value = activeStorm; } });
+    }
+    adeckStorm = activeStorm;
+    nhcAdvSel = activeStorm;
+    updateNhcAdvInfo();
+    renderRecon(false);
+}
+
+// The single writer for the shared selection. Mirrors it into the legacy
+// globals, syncs both dropdowns, and refreshes every open storm-scoped view.
+function setActiveStorm(id) {
+    activeStorm = id || null;
+    adeckStorm = activeStorm;
+    nhcAdvSel = activeStorm;
+    const selA = document.getElementById('adeck-storm-select');
+    const selB = document.getElementById('nhcadv-storm-select');
+    if (selA && selA.value !== (activeStorm || '')) selA.value = activeStorm || '';
+    if (selB && selB.value !== (activeStorm || '')) selB.value = activeStorm || '';
+    updateNhcAdvInfo();
+    if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(true);
+    const ip = document.getElementById('intensity-panel');
+    if (ip && ip.style.display === 'block' && ip.dataset.mode) openIntensityChart(ip.dataset.mode);
+    const tp = document.getElementById('trends-panel');
+    if (tp && tp.style.display === 'block') openTrendsChart(false);
+    const sp = document.getElementById('ships-panel');
+    if (sp && sp.style.display === 'block') openShipsPanel(false);
+    const ap = document.getElementById('nhcadv-panel');
+    if (ap && ap.style.display === 'block' && ap.dataset.prod) openNhcAdv(ap.dataset.prod, true);
+    renderRecon(false);
+}
+
 async function fetchAdeckList() {
-    const sel = document.getElementById('adeck-storm-select');
-    if (!sel) return;
     try {
         const res = await fetch(cacheBust('/api/adeck?list=1'));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const all = (await res.json()).storms || [];
-        // Drop invests that have been upgraded to a numbered storm (AL91→AL02):
-        // their files linger but their guidance is frozen at the last pre-upgrade
-        // cycle. Migrate any current selection to the upgraded system.
+        // Drop invests upgraded to a numbered storm (AL91→AL02): files linger but
+        // guidance is frozen. Migrate any current selection to the upgraded system.
         const graduated = {};
         all.forEach(s => { if (s.graduated_to) graduated[s.id] = s.graduated_to; });
-        const storms = all.filter(s => !s.graduated_to);
-        let prev = adeckStorm;
-        if (prev && graduated[prev]) prev = graduated[prev];
-        sel.innerHTML = '';
-        if (!storms.length) {
-            const o = document.createElement('option');
-            o.value = ''; o.textContent = '-- No Active Systems --';
-            sel.appendChild(o);
-            adeckStorm = null;
-            return;
-        }
-        storms.forEach(s => {
-            const o = document.createElement('option');
-            o.value = s.id;
-            o.textContent = `${s.basin}${String(s.num).padStart(2, '0')}${s.invest ? ' — Invest' : ' — TC'}`;
-            sel.appendChild(o);
-        });
-        adeckStorm = storms.some(s => s.id === prev) ? prev : storms[0].id;
-        sel.value = adeckStorm;
+        adeckListRaw = all.filter(s => !s.graduated_to);
+        if (activeStorm && graduated[activeStorm]) activeStorm = graduated[activeStorm];
     } catch (e) {
-        sel.innerHTML = '<option value="">-- Guidance Unavailable --</option>';
-        adeckStorm = null;
+        adeckListRaw = [];
     }
+    rebuildStormMenus();
 }
 
 // ─── Storm Trends: observed intensity history (b-deck + recon VDM fixes) ───
@@ -5953,16 +6063,7 @@ async function openShipsPanel(announce = true) {
 
 function initAdeck() {
     const sel = document.getElementById('adeck-storm-select');
-    if (sel) sel.addEventListener('change', () => {
-        adeckStorm = sel.value || null;
-        if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(true);
-        const panel = document.getElementById('intensity-panel');
-        if (panel && panel.style.display === 'block' && panel.dataset.mode) openIntensityChart(panel.dataset.mode);
-        const tp = document.getElementById('trends-panel');
-        if (tp && tp.style.display === 'block') openTrendsChart(false);
-        const sp = document.getElementById('ships-panel');
-        if (sp && sp.style.display === 'block') openShipsPanel(false);
-    });
+    if (sel) sel.addEventListener('change', () => setActiveStorm(sel.value));
     document.getElementById('nhc-trends')?.addEventListener('click', () => openTrendsChart(true));
     document.getElementById('nhc-ships')?.addEventListener('click', () => openShipsPanel(true));
     document.getElementById('ships-close')?.addEventListener('click', () => {
@@ -12281,6 +12382,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 12)', items: [
+        'The whole NHC section now follows ONE active storm. Picking a system in either storm dropdown (Model Guidance or Official Advisories) selects it everywhere — spaghetti tracks, intensity, Storm Trends, SHIPS, advisories, and recon all switch together. Both dropdowns now list the same union of systems (numbered storms and invests, Atlantic + Pacific).',
+        'Recon is now storm-aware. The Hurricane Hunters map layer and the IN AIR badge track the storm you’ve selected, matching each flight to a storm by position (the HDOB storm field is often just a “CYCLONE” placeholder, so proximity is used instead). When aircraft are flying your selected storm the badge is a solid green IN AIR; when they’re airborne in a different system it dims to “IN AIR · AL02” so you can still see someone’s up — just not on your storm. Select an invest with no advisories and the advisory panel explains that official products begin once it’s designated.'
+    ]},
     { date: 'Jul 19, 2026 (update 11)', items: [
         'Read NHC’s official text for any active storm. Under NHC Tropical → Official Advisories (per storm), pick a system from the dropdown and open its Public Advisory, Forecast Discussion, Forecast/Advisory, or Wind Speed Probabilities — the full authoritative product, straight from NHC. The dropdown lists every active storm (Atlantic + Pacific) with its current advisory number and age, and it maps each storm to the correct AWIPS product slot automatically (that slot rotates 1–5 through the season and can’t be guessed from the storm number — e.g. EP06 files under bin EP1), so you always get the right storm’s text.'
     ]},
@@ -12573,6 +12678,7 @@ const USER_GUIDE = [
             <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details.</li>
             <li><b>Tropical Discussions</b> open the full NHC text products.</li>
         </ul>
+        <p><b>One active storm.</b> The two storm dropdowns (here and under Model Guidance) are the same selection — pick a system in either and everything below follows it: advisories, recon, spaghetti tracks, intensity, Storm Trends, and SHIPS. Both lists show every active system, numbered storms and invests, in both oceans.</p>
         <h3>Official Advisories (per storm)</h3>
         <p>Read NHC’s authoritative text for any active storm. Pick a system from the dropdown — every active Atlantic and Pacific storm is listed with its current advisory number and age — then open a product:</p>
         <ul>
@@ -12583,7 +12689,7 @@ const USER_GUIDE = [
         </ul>
         <p>FX-Net maps each storm to the correct AWIPS product slot automatically. That slot rotates 1–5 through the season and can’t be inferred from the storm number (e.g. East Pacific storm EP06 files under bin EP1), so the app always pulls the right storm’s text. Switch storms or products from the panel; × or Esc closes it.</p>
         <h3>Hurricane Hunters (Recon)</h3>
-        <p>The badge on <b>Recon Flight Obs</b> tells you at a glance whether an aircraft is up: <b>IN AIR</b> (green) means a Hurricane Hunter is transmitting right now; RECON means no one is airborne.</p>
+        <p>The badge on <b>Recon Flight Obs</b> is tied to your <b>selected storm</b>: solid green <b>IN AIR</b> means a Hurricane Hunter is flying the storm you have selected right now; a dimmed <b>IN AIR · AL02</b> means aircraft are airborne, but in a different system (named on the badge), not your storm; <b>RECON</b> means no one is airborne anywhere. The flight-track layer likewise shows only the selected storm’s mission. (Flights are matched to storms by position, since the HDOB storm field is often a generic placeholder.)</p>
         <ul>
             <li><b>Recon Flight Obs (live)</b> — plots the aircraft’s actual flight track from its 30-second high-density observations (HDOBs, updated every ~10 minutes in flight). Points are colored by wind: cyan &lt;34 kt, yellow 34–49, orange 50–63, red 64+ (the stronger of SFMR surface wind or flight-level wind). The newest position is enlarged and labeled with the callsign and storm ID. Click any point for the decoded observation — flight-level wind, peak wind, SFMR surface wind, extrapolated surface pressure, temperature and dew point.</li>
             <li><b>Recon Schedule (TCPOD)</b> — CARCAH’s daily Tropical Cyclone Plan of the Day: which aircraft fly which systems, takeoff and fix times for the next 24 hours, and the outlook for the following day.</li>
