@@ -56,6 +56,14 @@ def list_storms():
     return storms
 
 
+def fetch_btk(sid):
+    """Return the b-deck (best track) text — the storm's analyzed life history,
+    updated with every advisory. Small file, not gzipped."""
+    if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
+        raise ValueError('bad storm id')
+    return _fetch(f'https://ftp.nhc.noaa.gov/atcf/btk/b{sid}.dat').decode('utf-8', errors='replace')
+
+
 def fetch_adeck(sid):
     """Return the a-deck text for one storm, trimmed to the latest 3 cycles."""
     if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
@@ -81,6 +89,9 @@ class handler(BaseHTTPRequestHandler):
             if q.get('list', [''])[0]:
                 body = json.dumps({'storms': list_storms()}).encode()
                 ctype = 'application/json'
+            elif q.get('btk', [''])[0]:
+                body = fetch_btk(q.get('btk', [''])[0].lower()).encode()
+                ctype = 'text/plain'
             else:
                 sid = q.get('id', [''])[0].lower()
                 body = fetch_adeck(sid).encode()

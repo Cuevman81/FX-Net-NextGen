@@ -242,6 +242,7 @@
                     <div class="product-item" data-layer="adeck" data-adeck="eps"><span>GEFS Ensemble Members (EPS)</span></div>
                     <div class="product-item" id="adeck-int-early"><span>Early Cycle Intensity Guidance</span> <span class="badge blue">CHART</span></div>
                     <div class="product-item" id="adeck-int-late"><span>Late Cycle Intensity Guidance</span> <span class="badge orange">EXP</span></div>
+                    <div class="product-item" id="nhc-trends"><span>Storm Trends (Obs History)</span> <span class="badge green">LIVE</span></div>
                 </div>
 
                 <!-- CPC CLIMATE OUTLOOKS -->
@@ -1063,6 +1064,17 @@
         <div id="intensity-note" style="font-size:9px; color:#8b97a3; margin-top:5px; font-family:'Roboto Mono',monospace;"></div>
     </div>
 
+    <!-- STORM TRENDS (best-track history + recon vortex fixes) -->
+    <div id="trends-panel" style="display:none; position:fixed; top:60px; left:50%; transform:translateX(-50%); z-index:901; background:rgba(10,12,18,0.97); border:1px solid rgba(0,229,255,0.35); border-radius:4px; padding:10px 14px; box-shadow:0 4px 20px rgba(0,0,0,0.6);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; gap:20px;">
+            <span id="trends-title" style="color:#00e5ff; font-size:9px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase; font-family:'Roboto Mono',monospace;">STORM TRENDS</span>
+            <span id="trends-close" style="color:#ff6666; cursor:pointer; font-size:14px; line-height:1;">&times;</span>
+        </div>
+        <div id="trends-tendency" style="font-size:9.5px; margin-bottom:5px; font-family:'Roboto Mono',monospace; color:#8b97a3;"></div>
+        <canvas id="trends-canvas" style="display:block;"></canvas>
+        <div id="trends-note" style="font-size:9px; color:#8b97a3; margin-top:5px; font-family:'Roboto Mono',monospace;"></div>
+    </div>
+
     <!-- USER GUIDE (full-screen reference manual) -->
     <div id="guide-overlay" class="modal-overlay" style="display:none;">
         <div class="guide-panel">
@@ -1078,7 +1090,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=240"></script>
+    <script src="app.js?v=241"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

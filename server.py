@@ -195,6 +195,8 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 ad = load_api('adeck.py', 'adeck')
                 if qs.get('list', [''])[0]:
                     self._send_json({'storms': ad.list_storms()})
+                elif qs.get('btk', [''])[0]:
+                    self._send(200, 'text/plain', ad.fetch_btk(qs.get('btk', [''])[0].lower()).encode())
                 else:
                     sid = qs.get('id', [''])[0].lower()
                     self._send(200, 'text/plain', ad.fetch_adeck(sid).encode())

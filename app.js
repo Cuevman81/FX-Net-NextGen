@@ -5419,6 +5419,201 @@ async function fetchAdeckList() {
     }
 }
 
+// ─── Storm Trends: observed intensity history (b-deck + recon VDM fixes) ───
+// Best track = NHC's analyzed wind/pressure at each synoptic time through the
+// storm's whole life (invests included). Recon vortex fixes overlay the actual
+// aircraft measurements between analyses.
+function parseBdeck(text) {
+    const seen = new Set();
+    const pts = [];
+    text.split('\n').forEach(ln => {
+        const p = ln.split(',').map(s => s.trim());
+        if (p.length < 11 || p[4] !== 'BEST') return;
+        const dtg = p[2];
+        if (dtg.length !== 10 || !dtg.match(/^\d{10}$/) || seen.has(dtg)) return;
+        seen.add(dtg);
+        pts.push({ ms: adeckDtgMs(dtg), dtg, vmax: +p[8] || null, mslp: +p[9] || null, type: p[10] || '' });
+    });
+    return pts.sort((a, b) => a.ms - b.ms);
+}
+
+// Decode one URNT12/URPN12 Vortex Data Message → { id, ms, mslp, flWind }
+function parseVdm(text) {
+    const id = text.match(/VORTEX DATA MESSAGE\s+(\w{2}\d{6})/i);
+    const a = text.match(/^A\.\s*(\d{2})\/(\d{2}):?(\d{2})/m);
+    if (!id || !a) return null;
+    // A. gives day/time only — anchor to the most recent matching UTC day
+    const now = new Date();
+    let d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), +a[1], +a[2], +a[3]));
+    if (d.getTime() > Date.now() + 26 * 3600 * 1000) d = new Date(d.setUTCMonth(d.getUTCMonth() - 1));
+    const mslp = text.match(/^D\.\s*(?:EXTRAP\s+)?(\d{3,4})\s*mb/mi);
+    const flw = text.match(/MAX FL WIND\s+(\d+)\s*KT/i);
+    return {
+        id: id[1].toUpperCase(),
+        ms: d.getTime(),
+        mslp: mslp ? +mslp[1] : null,
+        flWind: flw ? +flw[1] : null
+    };
+}
+
+function trendWord(delta, up, down, eps) {
+    if (delta == null) return null;
+    return delta <= -eps ? down : delta >= eps ? up : 'STEADY';
+}
+
+function drawTrendsChart(canvas, best, vdms) {
+    const cssW = 680, cssH = 400;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    if (best.length < 2) {
+        ctx.fillStyle = '#8b97a3'; ctx.font = '12px "Roboto Mono",monospace'; ctx.textAlign = 'center';
+        ctx.fillText('No best-track history available for this system yet.', cssW / 2, cssH / 2);
+        return;
+    }
+    const mL = 44, mR = 52, mT = 26, mB = 34;
+    const pw = cssW - mL - mR, ph = cssH - mT - mB;
+    const t0 = best[0].ms, t1 = Math.max(best[best.length - 1].ms, Date.now());
+    const X = ms => mL + ((ms - t0) / (t1 - t0)) * pw;
+    const winds = best.map(p => p.vmax).filter(v => v != null);
+    const yWMax = Math.max(50, Math.ceil((Math.max(...winds) + 15) / 10) * 10);
+    const YW = v => mT + ph - (v / yWMax) * ph;
+    const presAll = best.map(p => p.mslp).filter(v => v != null)
+        .concat(vdms.map(v => v.mslp).filter(v => v != null));
+    const pMin = Math.min(...presAll) - 3, pMax = Math.max(...presAll) + 3;
+    const YP = v => mT + ((v - pMin) / (pMax - pMin)) * ph * 0.92 + ph * 0.04;
+    ctx.font = '9px "Roboto Mono",monospace';
+    // x grid: one line per UTC day
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (let d = new Date(t0); d.getTime() <= t1; d = new Date(d.getTime() + 24 * 3600 * 1000)) {
+        const dayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+        if (dayMs < t0) continue;
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(X(dayMs), mT); ctx.lineTo(X(dayMs), mT + ph); ctx.stroke();
+        ctx.fillStyle = '#8b97a3';
+        ctx.fillText(`${String(new Date(dayMs).getUTCDate()).padStart(2, '0')} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][new Date(dayMs).getUTCMonth()]}`, X(dayMs), mT + ph + 6);
+    }
+    // left axis: wind
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let v = 0; v <= yWMax; v += 10) {
+        ctx.fillStyle = '#00e5ff'; ctx.fillText(`${v}`, mL - 6, YW(v));
+    }
+    // right axis: pressure
+    ctx.textAlign = 'left';
+    for (let p = Math.ceil(pMin / 2) * 2; p <= pMax; p += 2) {
+        ctx.fillStyle = '#ffd166'; ctx.fillText(`${p}`, mL + pw + 6, YP(p));
+    }
+    ctx.save(); ctx.translate(11, mT + ph / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#00e5ff'; ctx.fillText('WIND (KT)', 0, 0); ctx.restore();
+    ctx.save(); ctx.translate(cssW - 8, mT + ph / 2); ctx.rotate(Math.PI / 2);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffd166'; ctx.fillText('PRESSURE (MB)', 0, 0); ctx.restore();
+    // classification change labels along the top
+    let lastType = null;
+    best.forEach(p => {
+        if (p.type && p.type !== lastType) {
+            ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+            ctx.font = 'bold 9px "Roboto Mono",monospace';
+            ctx.fillText(p.type, X(p.ms), mT - 8);
+            ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.setLineDash([2, 3]);
+            ctx.beginPath(); ctx.moveTo(X(p.ms), mT - 4); ctx.lineTo(X(p.ms), mT + ph); ctx.stroke();
+            ctx.setLineDash([]);
+            lastType = p.type;
+        }
+    });
+    ctx.font = '9px "Roboto Mono",monospace';
+    // pressure line (yellow)
+    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.beginPath();
+    let started = false;
+    best.forEach(p => { if (p.mslp == null) return; started ? ctx.lineTo(X(p.ms), YP(p.mslp)) : ctx.moveTo(X(p.ms), YP(p.mslp)); started = true; });
+    ctx.stroke();
+    ctx.fillStyle = '#ffd166';
+    best.forEach(p => { if (p.mslp == null) return; ctx.beginPath(); ctx.arc(X(p.ms), YP(p.mslp), 2.4, 0, Math.PI * 2); ctx.fill(); });
+    // wind line (cyan)
+    ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2; ctx.beginPath();
+    started = false;
+    best.forEach(p => { if (p.vmax == null) return; started ? ctx.lineTo(X(p.ms), YW(p.vmax)) : ctx.moveTo(X(p.ms), YW(p.vmax)); started = true; });
+    ctx.stroke();
+    ctx.fillStyle = '#00e5ff';
+    best.forEach(p => { if (p.vmax == null) return; ctx.beginPath(); ctx.arc(X(p.ms), YW(p.vmax), 2.4, 0, Math.PI * 2); ctx.fill(); });
+    // recon vortex fixes: pressure diamonds (magenta), FL wind crosses
+    vdms.forEach(v => {
+        if (v.ms < t0 || v.ms > t1) return;
+        if (v.mslp != null) {
+            const x = X(v.ms), y = YP(v.mslp);
+            ctx.fillStyle = '#ff4dd2';
+            ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x + 4, y); ctx.lineTo(x, y + 4); ctx.lineTo(x - 4, y); ctx.closePath(); ctx.fill();
+        }
+        if (v.flWind != null) {
+            const x = X(v.ms), y = YW(v.flWind);
+            ctx.strokeStyle = '#ff4dd2'; ctx.lineWidth = 1.4;
+            ctx.beginPath(); ctx.moveTo(x - 3.5, y - 3.5); ctx.lineTo(x + 3.5, y + 3.5);
+            ctx.moveTo(x - 3.5, y + 3.5); ctx.lineTo(x + 3.5, y - 3.5); ctx.stroke();
+        }
+    });
+    // key
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const key = [['— Best-track wind', '#00e5ff'], ['— Best-track pressure', '#ffd166'], ['◆/✕ Recon fix (SLP / FL wind)', '#ff4dd2']];
+    key.forEach(([lab, col], i) => {
+        ctx.fillStyle = col;
+        ctx.fillText(lab, mL + 8 + i * 165, mT + 6);
+    });
+}
+
+async function openTrendsChart(announce = true) {
+    const panel = document.getElementById('trends-panel');
+    const title = document.getElementById('trends-title');
+    const note = document.getElementById('trends-note');
+    const tend = document.getElementById('trends-tendency');
+    if (!panel || !title || !note || !tend) return;
+    if (announce) await fetchAdeckList();
+    if (!adeckStorm) { addLiveLog('TRENDS: no active systems right now', '#ffb300'); return; }
+    panel.style.display = 'block';
+    const sid = adeckStorm.toUpperCase().slice(0, 4);
+    title.textContent = `${sid} — STORM TRENDS (OBSERVED INTENSITY HISTORY)`;
+    if (announce) { note.textContent = 'Loading…'; tend.innerHTML = ''; }
+    try {
+        const [btkRes, atlVdm, epacVdm] = await Promise.all([
+            fetch(cacheBust(`/api/adeck?btk=${adeckStorm}`)),
+            fetchAfos('REPNT2', 30).catch(() => []),
+            fetchAfos('REPPN2', 15).catch(() => [])
+        ]);
+        if (!btkRes.ok) throw new Error(`best track HTTP ${btkRes.status}`);
+        const best = parseBdeck(await btkRes.text());
+        const stormAtcf = adeckStorm.toUpperCase();   // e.g. AL022026
+        const vdms = [...atlVdm, ...epacVdm].map(parseVdm)
+            .filter(v => v && v.id === stormAtcf && (v.mslp != null || v.flWind != null))
+            .sort((a, b) => a.ms - b.ms);
+        drawTrendsChart(document.getElementById('trends-canvas'), best, vdms);
+        // Tendencies from the best track: latest vs ~6/12/24 h earlier
+        const last = best[best.length - 1];
+        const at = hrs => {
+            const target = last.ms - hrs * 3600 * 1000;
+            return [...best].reverse().find(p => p.ms <= target + 90 * 60 * 1000);
+        };
+        const chips = [];
+        [[6, at(6)], [12, at(12)], [24, at(24)]].forEach(([h, ref]) => {
+            if (!ref || ref.ms === last.ms) return;
+            const dp = last.mslp != null && ref.mslp != null ? last.mslp - ref.mslp : null;
+            const dv = last.vmax != null && ref.vmax != null ? last.vmax - ref.vmax : null;
+            const pw = trendWord(dp, 'FILLING', 'DEEPENING', 1);
+            const vw = trendWord(dv, 'STRENGTHENING', 'WEAKENING', 5);
+            if (dp != null) chips.push(`<span style="color:${dp < 0 ? '#ff6666' : dp > 0 ? '#7fff9e' : '#8b97a3'};">${h}h ΔP ${dp > 0 ? '+' : ''}${dp} mb${pw && pw !== 'STEADY' ? ' ' + pw : ''}</span>`);
+            if (dv != null && h !== 6) chips.push(`<span style="color:${dv > 0 ? '#ff6666' : dv < 0 ? '#7fff9e' : '#8b97a3'};">${h}h ΔV ${dv > 0 ? '+' : ''}${dv} kt${vw && vw !== 'STEADY' ? ' ' + vw : ''}</span>`);
+        });
+        tend.innerHTML = chips.length
+            ? `<b style="color:#fff;">NOW: ${last.vmax || '?'} kt / ${last.mslp || '?'} mb (${last.type || '—'})</b> · ` + chips.join(' · ')
+            : '';
+        note.textContent = `Best track through ${last.dtg.slice(8, 10)}Z ${last.dtg.slice(6, 8)} (${adeckAgeStr(last.ms)}) · ${best.length} analyses` +
+            (vdms.length ? ` · ${vdms.length} recon vortex fix${vdms.length > 1 ? 'es' : ''} overlaid` : ' · no recon fixes yet for this system');
+        if (announce) addLiveLog(`TRENDS: ${sid} — ${best.length} best-track analyses, now ${last.vmax} kt / ${last.mslp} mb${vdms.length ? `, ${vdms.length} recon fixes` : ''}`, '#00e5ff');
+    } catch (e) {
+        note.textContent = `Error: ${e.message}`;
+    }
+}
+
 function initAdeck() {
     const sel = document.getElementById('adeck-storm-select');
     if (sel) sel.addEventListener('change', () => {
@@ -5426,6 +5621,13 @@ function initAdeck() {
         if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(true);
         const panel = document.getElementById('intensity-panel');
         if (panel && panel.style.display === 'block' && panel.dataset.mode) openIntensityChart(panel.dataset.mode);
+        const tp = document.getElementById('trends-panel');
+        if (tp && tp.style.display === 'block') openTrendsChart(false);
+    });
+    document.getElementById('nhc-trends')?.addEventListener('click', () => openTrendsChart(true));
+    document.getElementById('trends-close')?.addEventListener('click', () => {
+        const p = document.getElementById('trends-panel');
+        if (p) p.style.display = 'none';
     });
     document.getElementById('adeck-int-early')?.addEventListener('click', () => {
         const p = document.getElementById('intensity-panel');
@@ -5443,8 +5645,10 @@ function initAdeck() {
     });
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape') {
-            const p = document.getElementById('intensity-panel');
-            if (p) p.style.display = 'none';
+            ['intensity-panel', 'trends-panel'].forEach(id => {
+                const p = document.getElementById(id);
+                if (p) p.style.display = 'none';
+            });
         }
     });
     setTimeout(fetchAdeckList, 9000);
@@ -5454,6 +5658,8 @@ function initAdeck() {
     setInterval(() => {
         fetchAdeckList();
         if (adeckMode && adeckStorm) fetchAdeck(false);
+        const tp = document.getElementById('trends-panel');
+        if (tp && tp.style.display === 'block') openTrendsChart(false);
     }, 15 * 60 * 1000);
 }
 
@@ -5470,6 +5676,7 @@ const PANEL_MENU_ITEMS = [
     { item: 'recon-vdm',         panel: 'recon-text-panel' },
     { item: 'adeck-int-early',   panel: 'intensity-panel' },
     { item: 'adeck-int-late',    panel: 'intensity-panel' },
+    { item: 'nhc-trends',        panel: 'trends-panel' },
     { item: 'btn-text-products', panel: 'text-panel' },
     { item: 'btn-meteogram',     panel: 'meteogram-panel' },
     { item: 'nhc-two-atl',       panel: 'text-panel' },
@@ -11723,6 +11930,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 4)', items: [
+        'STORM TRENDS joins NHC Tropical → Model Guidance: an observed intensity-history chart for the selected system (invests included) built from NHC’s live best track — wind (cyan, left axis) and central pressure (yellow, right axis) through the storm’s whole life, with classification changes (DB → LO → TD → TS…) marked along the top. Hurricane Hunter vortex fixes overlay in magenta (◆ = measured minimum pressure, ✕ = max flight-level wind) so you can see the aircraft measurements between the 6-hourly analyses. The header line gives the current intensity plus 6/12/24-hour pressure and wind tendencies, labeled DEEPENING / FILLING and STRENGTHENING / WEAKENING (red = intensifying). Auto-refreshes every 15 minutes while open and follows the storm selector.'
+    ]},
     { date: 'Jul 19, 2026 (update 3)', items: [
         'Faster pickup when an invest is upgraded (AL91 → TD Two): the Model Guidance storm list now re-checks NHC every 15 minutes instead of hourly, and also re-checks every time you toggle a guidance view or open an intensity chart — so the new system’s a-deck (e.g. AL02) shows in the dropdown the moment models start tracking it. Reference for the tropical section’s cadences: Active Storms & Cones and Outlook Areas refresh every 5 minutes while on; recon HDOBs every 5 minutes visible / 15 in background; guidance tracks every 15 minutes. Note NHC’s own map services only carry a new depression once its FIRST advisory package posts — a webpage announcement alone has no data feed behind it.'
     ]},
@@ -12005,6 +12215,7 @@ const USER_GUIDE = [
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
             <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones.</li>
+            <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
         </ul>
         <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>
         <p>The stamp under the storm selector tells you how fresh the plot is: the newest run time and its age, the number of aids plotted, and how many are still on an older cycle (hover for every model’s run). Data Health → TROPICAL tracks the same — the <b>Model Guidance</b> row is stamped with the run time itself, so it turns amber/red when a newer cycle should have arrived, and <b>Recon HDOB Feed</b> confirms the Hurricane Hunter feed is being checked (every 15 minutes in the background).</p>` },
