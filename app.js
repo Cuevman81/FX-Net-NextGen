@@ -5098,7 +5098,7 @@ const ADECK_MODELS = {
     IVCN: ['Intensity Consensus', '#00e5ff', 3, 'e'],
     DSHP: ['Decay-SHIPS', '#ff8a65', 2, 'e'],
     LGEM: ['LGEM', '#00e676', 2, 'e'],
-    SHIP: ['SHIPS (no decay)', '#ff8a65', 2, 'l'],
+    SHIP: ['SHIPS (no decay)', '#ffab91', 2, 'e'],
     AVNI: ['GFS (interp)', '#ff4d4d', 2, 'Ee'],
     AVNO: ['GFS', '#ff4d4d', 2, 'Ll'],
     EMXI: ['ECMWF (interp)', '#ffa500', 2, 'E'],
@@ -5115,6 +5115,8 @@ const ADECK_MODELS = {
     HFSB: ['HAFS-B', '#26a69a', 2, 'Ll'],
     HWFI: ['HWRF (interp)', '#9ccc65', 2, 'Ee'],
     HWRF: ['HWRF', '#9ccc65', 2, 'Ll'],
+    HMNI: ['HMON (interp)', '#8c9eff', 2, 'Ee'],
+    HMON: ['HMON', '#8c9eff', 2, 'Ll'],
     CTCI: ['COAMPS-TC (interp)', '#d4e157', 2, 'Ee'],
     CTCX: ['COAMPS-TC', '#d4e157', 2, 'Ll'],
     GDMI: ['Google DeepMind (interp)', '#f06292', 2, 'Ee'],
@@ -11718,6 +11720,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 19, 2026 (update 2)', items: [
+        'Guidance accuracy audit (verified against the UCAR/RAL reference plots): HMON joins the model set — its raw runs in the late-cycle track and intensity views and its interpolated HMNI aid in the early-cycle views (it was the aid spiking AL91 to 76 kt that our chart was missing). SHIPS (no decay) reclassified from late to early-cycle intensity, where it belongs — the late intensity chart is now purely the raw dynamical runs (HAFS-A/B, HWRF, HMON, COAMPS-TC, GFS, Google DeepMind), matching how UCAR defines the experimental late plot. Reminder on cycle stamps: UCAR renders one frozen plot per init time; FX-Net plots each aid’s own newest run and flags how many are still on older cycles — same a-deck data, never stale.'
+    ]},
     { date: 'Jul 19, 2026', items: [
         'Menu items that open panels now behave exactly like map-layer items: the item highlights while its panel is open, clicking it again closes the panel, and closing any other way (× or Esc) un-highlights it. Applies everywhere — VAD Wind Profile, Skew-T Soundings, Interactive Skew-T, SPC Mesoanalysis, Recon Schedule (TCPOD), Vortex Data Message, both Intensity Guidance charts, Text Browser, Forecast Meteogram, and the Atlantic / East Pacific TWO discussions.'
     ]},
@@ -11993,7 +11998,7 @@ const USER_GUIDE = [
             <li><b>Early Cycle Track Guidance</b> — the interpolated aids available at advisory time: GFS (AVNI), ECMWF (EMXI), UKMET, Canadian, HAFS-A/B, COAMPS-TC, Google DeepMind, ensemble means, beta-advection trackers, and the TVCN / HCCA consensus (wide cyan / green). The NHC Official forecast plots in white when the system is a numbered cyclone.</li>
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
-            <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows the raw synoptic-time runs (experimental). Esc or × closes it.</li>
+            <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones.</li>
         </ul>
         <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>
         <p>The stamp under the storm selector tells you how fresh the plot is: the newest run time and its age, the number of aids plotted, and how many are still on an older cycle (hover for every model’s run). Data Health → TROPICAL tracks the same — the <b>Model Guidance</b> row is stamped with the run time itself, so it turns amber/red when a newer cycle should have arrived, and <b>Recon HDOB Feed</b> confirms the Hurricane Hunter feed is being checked (every 15 minutes in the background).</p>` },
