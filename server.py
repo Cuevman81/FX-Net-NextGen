@@ -188,6 +188,19 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             except Exception as e:
                 self._send_json({'error': str(e), 'times': []}, 500)
 
+        elif path == '/api/adeck':
+            # ATCF a-deck model guidance (spaghetti), via the Vercel proxy module.
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                ad = load_api('adeck.py', 'adeck')
+                if qs.get('list', [''])[0]:
+                    self._send_json({'storms': ad.list_storms()})
+                else:
+                    sid = qs.get('id', [''])[0].lower()
+                    self._send(200, 'text/plain', ad.fetch_adeck(sid).encode())
+            except Exception as e:
+                self._send(500, 'text/plain', f'ERROR: {str(e)}'.encode())
+
         elif path == '/api/wpc-mpd':
             # WPC Mesoscale Precipitation Discussions, via the Vercel converter.
             try:

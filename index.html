@@ -230,6 +230,15 @@
                     <div class="product-item" data-layer="recon-hdob"><span>Recon Flight Obs (live)</span> <span class="badge blue" id="recon-badge">RECON</span></div>
                     <div class="product-item" id="recon-tcpod"><span>Recon Schedule (TCPOD)</span> <span class="badge blue">DAILY</span></div>
                     <div class="product-item" id="recon-vdm"><span>Vortex Data Message</span> <span class="badge orange">FIX</span></div>
+                    <div class="sub-category">Model Guidance (Spaghetti)</div>
+                    <div style="padding:3px 12px 5px;">
+                        <select id="adeck-storm-select" style="width:100%;background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;">
+                            <option value="">Loading systems…</option>
+                        </select>
+                    </div>
+                    <div class="product-item" data-layer="adeck" data-adeck="early"><span>Early Cycle Track Guidance</span> <span class="badge blue">A-DECK</span></div>
+                    <div class="product-item" data-layer="adeck" data-adeck="late"><span>Late Cycle Track Guidance</span></div>
+                    <div class="product-item" data-layer="adeck" data-adeck="eps"><span>GEFS Ensemble Members (EPS)</span></div>
                 </div>
 
                 <!-- CPC CLIMATE OUTLOOKS -->
@@ -1056,7 +1065,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=234"></script>
+    <script src="app.js?v=235"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

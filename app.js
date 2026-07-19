@@ -2675,6 +2675,47 @@ function initFrontalPipIcons(map) {
         paint: { 'text-color': '#7fff9e', 'text-halo-color': '#000', 'text-halo-width': 1.5 }
     });
 
+    // ─── Layer 7f3: Model track guidance spaghetti (ATCF a-deck) ───
+    // One colored LineString per model tech; points carry forecast intensity.
+    map.addSource('adeck', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+    });
+    map.addLayer({
+        id: 'adeck-lines', type: 'line', source: 'adeck',
+        filter: ['==', ['get', 'layerType'], 'line'],
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+            'line-color': ['get', 'color'],
+            'line-width': ['get', 'width'],
+            'line-opacity': ['coalesce', ['get', 'opacity'], 0.9]
+        }
+    });
+    map.addLayer({
+        id: 'adeck-pts', type: 'circle', source: 'adeck',
+        filter: ['==', ['get', 'layerType'], 'pt'],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['case', ['==', ['get', 'major'], 1], 3.2, 1.8],
+            'circle-color': ['get', 'color'],
+            'circle-stroke-width': 0.5,
+            'circle-stroke-color': '#000'
+        }
+    });
+    map.addLayer({
+        id: 'adeck-labels', type: 'symbol', source: 'adeck',
+        filter: ['==', ['get', 'layerType'], 'end'],
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'tech'],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': 9.5,
+            'text-offset': [0, 1.1],
+            'text-allow-overlap': true
+        },
+        paint: { 'text-color': ['get', 'color'], 'text-halo-color': '#000', 'text-halo-width': 1.2 }
+    });
+
     // ─── Layer 7g: NHC Tropical Outlook Areas (GeoJSON) ───
     map.addSource('nhc-outlook', {
         type: 'geojson',
@@ -3236,6 +3277,25 @@ function initFrontalPipIcons(map) {
     });
     map.on('mouseenter', 'recon-hdob-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'recon-hdob-pts', () => { map.getCanvas().style.cursor = ''; });
+
+    // Model guidance point click → forecast position + intensity popup
+    map.on('click', 'adeck-pts', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties;
+        const cat = v => v == null ? '' : v < 34 ? ' (TD)' : v < 64 ? ' (TS)' : v < 83 ? ' (Cat 1)' :
+            v < 96 ? ' (Cat 2)' : v < 113 ? ' (Cat 3)' : v < 137 ? ' (Cat 4)' : ' (Cat 5)';
+        const html = `
+            <div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:210px;">
+                <div style="color:${p.color};font-weight:700;margin-bottom:4px;">${p.name} <span style="color:#8b97a3;font-weight:400;">(${p.tech})</span></div>
+                <div style="color:#8b97a3;">Init ${p.cycle}Z · F${String(p.tau).padStart(3, '0')}</div>
+                <div style="color:#fff;">Valid ${p.valid}</div>
+                ${p.vmax ? `<div style="color:#ffd166;">Max wind ${p.vmax} kt${cat(p.vmax)}</div>` : ''}
+                ${p.mslp ? `<div style="color:#fff;">MSLP ${p.mslp} mb</div>` : ''}
+            </div>`;
+        new maplibregl.Popup({ maxWidth: '300px' }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'adeck-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'adeck-pts', () => { map.getCanvas().style.cursor = ''; });
 
     // NHC Tropical Outlook area click — shows probabilities + loads TWO discussion
     map.on('click', 'nhc-outlook-fill', e => {
@@ -5017,6 +5077,201 @@ function initRecon() {
     // is toggled on — this is the "are the Hurricane Hunters up?" indicator.
     setTimeout(() => fetchReconHdob(false), 8000);
     setInterval(() => fetchReconHdob(false), 15 * 60 * 1000);
+}
+
+// ─── Model track guidance spaghetti (ATCF a-decks via /api/adeck) ───
+// Same data behind the UCAR/RAL "hurricanes.ral.ucar.edu" spaghetti plots,
+// drawn natively on the map. Early cycle = interpolated guidance available at
+// advisory time; Late cycle = the raw synoptic-time model runs; EPS = GEFS
+// ensemble members. Each model plots from its own most recent cycle.
+const ADECK_MODELS = {
+    // tech: [display name, color, line width, sets ("E" early / "L" late)]
+    OFCL: ['NHC Official Forecast', '#ffffff', 3.5, 'EL'],
+    TVCN: ['Track Consensus', '#00e5ff', 3, 'E'],
+    HCCA: ['HCCA Corrected Consensus', '#76ff03', 2.5, 'E'],
+    IVCN: ['Intensity Consensus', '#00bfa5', 2, ''],
+    AVNI: ['GFS (interp)', '#ff4d4d', 2, 'E'],
+    AVNO: ['GFS', '#ff4d4d', 2, 'L'],
+    EMXI: ['ECMWF (interp)', '#ffa500', 2, 'E'],
+    EMX:  ['ECMWF', '#ffa500', 2, 'L'],
+    UKXI: ['UKMET (interp)', '#40c4ff', 2, 'E'],
+    EGRI: ['UKMET (interp)', '#40c4ff', 2, 'E'],
+    UKX:  ['UKMET', '#40c4ff', 2, 'L'],
+    EGRR: ['UKMET', '#40c4ff', 2, 'L'],
+    CMCI: ['Canadian GDPS (interp)', '#ab47bc', 2, 'E'],
+    CMC:  ['Canadian GDPS', '#ab47bc', 2, 'L'],
+    HFAI: ['HAFS-A (interp)', '#66bb6a', 2, 'E'],
+    HFSA: ['HAFS-A', '#66bb6a', 2, 'L'],
+    HFBI: ['HAFS-B (interp)', '#26a69a', 2, 'E'],
+    HFSB: ['HAFS-B', '#26a69a', 2, 'L'],
+    HWFI: ['HWRF (interp)', '#9ccc65', 2, 'E'],
+    HWRF: ['HWRF', '#9ccc65', 2, 'L'],
+    CTCI: ['COAMPS-TC (interp)', '#d4e157', 2, 'E'],
+    CTCX: ['COAMPS-TC', '#d4e157', 2, 'L'],
+    GDMI: ['Google DeepMind (interp)', '#f06292', 2, 'E'],
+    GDMN: ['Google DeepMind', '#f06292', 2, 'L'],
+    NVGI: ['NAVGEM (interp)', '#8d6e63', 2, 'E'],
+    NVGM: ['NAVGEM', '#8d6e63', 2, 'L'],
+    AEMI: ['GFS Ensemble Mean (interp)', '#ffee58', 2.2, 'E'],
+    AEMN: ['GFS Ensemble Mean', '#ffee58', 2.2, 'L'],
+    CEMI: ['Canadian Ens Mean (interp)', '#ce93d8', 1.6, 'E'],
+    CEMN: ['Canadian Ensemble Mean', '#ce93d8', 1.6, 'L'],
+    TABD: ['Beta-Advection Deep', '#90a4ae', 1.2, 'E'],
+    TABM: ['Beta-Advection Medium', '#78909c', 1.2, 'E'],
+    TABS: ['Beta-Advection Shallow', '#607d8b', 1.2, 'E'],
+    CLP5: ['CLIPER5 Baseline', '#757575', 1.2, 'E'],
+    XTRP: ['Extrapolation', '#616161', 1.2, 'E']
+};
+
+let adeckMode = null;    // 'early' | 'late' | 'eps' (global, like other overlays)
+let adeckStorm = null;   // e.g. 'al912026'
+
+function parseAdeckText(text) {
+    const rows = [];
+    text.split('\n').forEach(ln => {
+        const p = ln.split(',').map(s => s.trim());
+        if (p.length < 9) return;
+        const dtg = p[2], tech = p[4], tau = +p[5];
+        const lat = p[6].match(/^(\d+)([NS])$/);
+        const lon = p[7].match(/^(\d+)([EW])$/);
+        if (dtg.length !== 10 || !tech || !lat || !lon || isNaN(tau)) return;
+        const la = (+lat[1] / 10) * (lat[2] === 'S' ? -1 : 1);
+        const lo = (+lon[1] / 10) * (lon[2] === 'W' ? -1 : 1);
+        if (la === 0 && lo === 0) return;
+        rows.push({ dtg, tech, tau, lat: la, lon: lo, vmax: +p[8] || null, mslp: +p[9] || null });
+    });
+    return rows;
+}
+
+function adeckTechMeta(tech, mode) {
+    if (mode === 'eps') {
+        const ap = tech.match(/^AP(\d{2})$/);
+        if (ap) return { name: `GEFS Member ${+ap[1]}`, color: '#4fc3f7', width: 1, opacity: 0.55, label: false };
+        if (tech === 'AC00') return { name: 'GEFS Control', color: '#ffffff', width: 1.5, opacity: 0.85, label: true };
+        if (tech === 'AEMN' || tech === 'AEMI') return { name: 'GFS Ensemble Mean', color: '#ffee58', width: 2.5, opacity: 1, label: true };
+        if (tech === 'OFCL') return { name: 'NHC Official Forecast', color: '#ff3b3b', width: 3, opacity: 1, label: true };
+        return null;
+    }
+    const m = ADECK_MODELS[tech];
+    if (!m || !m[3].includes(mode === 'early' ? 'E' : 'L')) return null;
+    return { name: m[0], color: m[1], width: m[2], opacity: 0.9, label: true };
+}
+
+function buildAdeckFeatures(rows, mode) {
+    // Every selected tech plots from its own latest available cycle — "latest
+    // guidance" even when late-cycle models lag the current advisory cycle.
+    const latest = {};
+    rows.forEach(r => {
+        if (r.tau < 0 || !adeckTechMeta(r.tech, mode)) return;
+        if (!latest[r.tech] || r.dtg > latest[r.tech]) latest[r.tech] = r.dtg;
+    });
+    const features = [];
+    const models = [];
+    Object.keys(latest).sort().forEach(tech => {
+        const meta = adeckTechMeta(tech, mode);
+        const seen = new Set();
+        // Wind-radii rows repeat a tau with the same position — keep the first
+        const pts = rows
+            .filter(r => r.tech === tech && r.dtg === latest[tech] && r.tau >= 0)
+            .filter(r => !seen.has(r.tau) && seen.add(r.tau))
+            .sort((a, b) => a.tau - b.tau);
+        if (pts.length < 2) return;
+        models.push(tech);
+        const coords = pts.map(p => [p.lon, p.lat]);
+        features.push({
+            type: 'Feature',
+            properties: { layerType: 'line', tech, color: meta.color, width: meta.width, opacity: meta.opacity },
+            geometry: { type: 'LineString', coordinates: coords }
+        });
+        const dtg = latest[tech];
+        const initMs = Date.UTC(+dtg.slice(0, 4), +dtg.slice(4, 6) - 1, +dtg.slice(6, 8), +dtg.slice(8, 10));
+        pts.forEach(p => {
+            const v = new Date(initMs + p.tau * 3600 * 1000);
+            features.push({
+                type: 'Feature',
+                properties: {
+                    layerType: 'pt', tech, name: meta.name, color: meta.color,
+                    tau: p.tau, cycle: dtg, major: p.tau % 24 === 0 ? 1 : 0,
+                    valid: `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][v.getUTCDay()]} ${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCHours()).padStart(2, '0')}Z`,
+                    vmax: p.vmax, mslp: p.mslp && p.mslp > 800 ? p.mslp : null
+                },
+                geometry: { type: 'Point', coordinates: [p.lon, p.lat] }
+            });
+        });
+        if (meta.label) features.push({
+            type: 'Feature',
+            properties: { layerType: 'end', tech, color: meta.color },
+            geometry: { type: 'Point', coordinates: coords[coords.length - 1] }
+        });
+    });
+    return { features, models };
+}
+
+async function fetchAdeck(show) {
+    if (!adeckStorm || !adeckMode) return;
+    try {
+        const res = await fetch(cacheBust(`/api/adeck?id=${adeckStorm}`));
+        if (!res.ok) throw new Error(`a-deck HTTP ${res.status}`);
+        const rows = parseAdeckText(await res.text());
+        const { features, models } = buildAdeckFeatures(rows, adeckMode);
+        const data = { type: 'FeatureCollection', features };
+        Object.values(maps).forEach(m => {
+            if (m.getSource && m.getSource('adeck')) m.getSource('adeck').setData(data);
+        });
+        if (show) {
+            const modeLabel = { early: 'early-cycle', late: 'late-cycle', eps: 'GEFS ensemble' }[adeckMode];
+            addLiveLog(models.length
+                ? `GUIDANCE: ${adeckStorm.toUpperCase().slice(0, 4)} ${modeLabel} — ${models.length} tracks plotted (${models.join(', ')})`
+                : `GUIDANCE: no ${modeLabel} tracks available yet for ${adeckStorm.toUpperCase().slice(0, 4)}`,
+                models.length ? '#00e5ff' : '#ffb300');
+        }
+    } catch (e) {
+        if (show) addLiveLog(`GUIDANCE ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+async function fetchAdeckList() {
+    const sel = document.getElementById('adeck-storm-select');
+    if (!sel) return;
+    try {
+        const res = await fetch(cacheBust('/api/adeck?list=1'));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { storms } = await res.json();
+        const prev = adeckStorm;
+        sel.innerHTML = '';
+        if (!storms.length) {
+            const o = document.createElement('option');
+            o.value = ''; o.textContent = '-- No Active Systems --';
+            sel.appendChild(o);
+            adeckStorm = null;
+            return;
+        }
+        storms.forEach(s => {
+            const o = document.createElement('option');
+            o.value = s.id;
+            o.textContent = `${s.basin}${String(s.num).padStart(2, '0')}${s.invest ? ' — Invest' : ' — TC'}`;
+            sel.appendChild(o);
+        });
+        adeckStorm = storms.some(s => s.id === prev) ? prev : storms[0].id;
+        sel.value = adeckStorm;
+    } catch (e) {
+        sel.innerHTML = '<option value="">-- Guidance Unavailable --</option>';
+        adeckStorm = null;
+    }
+}
+
+function initAdeck() {
+    const sel = document.getElementById('adeck-storm-select');
+    if (sel) sel.addEventListener('change', () => {
+        adeckStorm = sel.value || null;
+        if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(true);
+    });
+    setTimeout(fetchAdeckList, 9000);
+    setInterval(fetchAdeckList, 60 * 60 * 1000);
+    // New model runs arrive continuously through each cycle
+    setInterval(() => {
+        if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(false);
+    }, 15 * 60 * 1000);
 }
 
 async function fetchNHCStorms(show) {
@@ -7998,6 +8253,9 @@ function productItemActiveOn(pid, item) {
     else if (layer === 'nhc-storms') isActive = isLayerVisible(map, 'nhc-track-pts');
     else if (layer === 'nhc-outlook') isActive = isLayerVisible(map, 'nhc-outlook-fill');
     else if (layer === 'recon-hdob') isActive = isLayerVisible(map, 'recon-hdob-pts');
+    else if (layer === 'adeck') {
+        isActive = isLayerVisible(map, 'adeck-lines') && adeckMode === item.getAttribute('data-adeck');
+    }
     else if (layer === 'cpc-temp') {
         const period = item.getAttribute('data-period');
         isActive = isLayerVisible(map, 'cpc-temp-layer') && paneCpcTemp[pid] === period;
@@ -8747,6 +9005,27 @@ function initProductSidebar() {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
                 if (isActive) await fetchReconHdob(true);
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Model track guidance spaghetti (a-deck) ───
+            if (layer === 'adeck') {
+                const mode = item.getAttribute('data-adeck');
+                const isAlreadyActive = item.classList.contains('active');
+                if (isAlreadyActive) {
+                    ['adeck-lines', 'adeck-pts', 'adeck-labels'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
+                    });
+                    adeckMode = null;
+                } else {
+                    adeckMode = mode;
+                    ['adeck-lines', 'adeck-pts', 'adeck-labels'].forEach(l => {
+                        if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'visible');
+                    });
+                    if (!adeckStorm) await fetchAdeckList();
+                    await fetchAdeck(true);
+                }
                 updateSidebarToActivePane();
                 return;
             }
@@ -9919,7 +10198,8 @@ function clearPane(map, paneId) {
         'storm-attr-track', 'storm-attr-fpos', 'storm-attr-cell', 'storm-attr-label',
         'meso-circ', 'meso-tvs', 'meso-label',
         'nws-cwa-layer', 'nws-cwa-label-layer',
-        'recon-hdob-line', 'recon-hdob-pts', 'recon-hdob-labels'
+        'recon-hdob-line', 'recon-hdob-pts', 'recon-hdob-labels',
+        'adeck-lines', 'adeck-pts', 'adeck-labels'
     ];
     allToggleLayers.forEach(l => {
         if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', 'none');
@@ -11188,6 +11468,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 18, 2026 (update 2)', items: [
+        'Spaghetti models arrive under NHC Tropical → Model Guidance: the real ATCF a-deck tracks (the same data behind the UCAR/RAL guidance plots) drawn natively on the map for any active invest, depression, storm or hurricane. Pick the system from the dropdown, then choose Early Cycle Track Guidance (the interpolated aids available at advisory time — GFS, ECMWF, UKMET, HAFS-A/B, COAMPS-TC, Google DeepMind, consensus TVCN/HCCA and more), Late Cycle (the raw synoptic-time model runs), or GEFS Ensemble Members for the full 31-member EPS spread. Each model draws in its own color with its ID labeled at the end of its track; click any forecast point for the model name, cycle, valid time, and forecast intensity (max wind + category, MSLP). Tracks refresh every 15 minutes as new model runs arrive.'
+    ]},
     { date: 'Jul 18, 2026', items: [
         'Hurricane Hunters come to the NHC menu: a live Recon Flight Obs map layer plots the aircraft’s actual track from its 30-second observations (wind-colored points, callsign label on the newest position, click any point for SFMR surface wind / flight-level wind / extrapolated pressure), with an IN AIR badge that turns green whenever a Hurricane Hunter is transmitting. Recon Schedule (TCPOD) shows CARCAH’s daily flight plan — which aircraft fly which storm and when — and Vortex Data Message shows the latest center fix from inside the storm. See the User Guide → Tropical for details.'
     ]},
@@ -11444,7 +11727,15 @@ const USER_GUIDE = [
             <li><b>Recon Flight Obs (live)</b> — plots the aircraft’s actual flight track from its 30-second high-density observations (HDOBs, updated every ~10 minutes in flight). Points are colored by wind: cyan &lt;34 kt, yellow 34–49, orange 50–63, red 64+ (the stronger of SFMR surface wind or flight-level wind). The newest position is enlarged and labeled with the callsign and storm ID. Click any point for the decoded observation — flight-level wind, peak wind, SFMR surface wind, extrapolated surface pressure, temperature and dew point.</li>
             <li><b>Recon Schedule (TCPOD)</b> — CARCAH’s daily Tropical Cyclone Plan of the Day: which aircraft fly which systems, takeoff and fix times for the next 24 hours, and the outlook for the following day.</li>
             <li><b>Vortex Data Message</b> — the crew’s center-fix report from inside the storm: fix position, minimum pressure, max winds, and eye character.</li>
-        </ul>` },
+        </ul>
+        <h3>Model Guidance (Spaghetti)</h3>
+        <p>Live ATCF a-deck model tracks drawn directly on the map for any active system — invests included. Pick the system from the dropdown (populated automatically from NHC), then choose a view:</p>
+        <ul>
+            <li><b>Early Cycle Track Guidance</b> — the interpolated aids available at advisory time: GFS (AVNI), ECMWF (EMXI), UKMET, Canadian, HAFS-A/B, COAMPS-TC, Google DeepMind, ensemble means, beta-advection trackers, and the TVCN / HCCA consensus (wide cyan / green). The NHC Official forecast plots in white when the system is a numbered cyclone.</li>
+            <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
+            <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
+        </ul>
+        <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>` },
 
     { id: 'aviation', title: 'Aviation Hazards', html: `
         <ul>
@@ -12761,6 +13052,7 @@ function init() {
     initWhatsNew();
     initUserGuide();
     initRecon();
+    initAdeck();
     updateWarnModeLabel();
     initHealthToggle();
     initDebugToggle();
