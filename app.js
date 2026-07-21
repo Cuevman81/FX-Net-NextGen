@@ -204,9 +204,10 @@ const HEALTH_THRESHOLDS = {
     radarL3:    { label: 'NODD Dual-Pol', thresholdMs: 15 * 60 * 1000 },
     gibsSat:    { label: 'GIBS Satellite', thresholdMs: 60 * 60 * 1000 },
     wpcEro:     { label: 'WPC ERO',       thresholdMs: 12 * 60 * 60 * 1000 },
-    // Stamped with the GIS feed's own ingest time, not our fetch time — advisories
-    // land every 6 h (3 h when intermediates run), so 7 h means the feed has stalled
-    nhcStorms:  { label: 'NHC Storms',    thresholdMs: 7 * 60 * 60 * 1000 },
+    // Stamped with the source's own advisory/ingest time, not our fetch time.
+    // Advisories land every 6 h (3 h when intermediates run) and the files publish
+    // ~40 min after synoptic time, so 8 h means the feed itself has stalled.
+    nhcStorms:  { label: 'NHC Storms',    thresholdMs: 8 * 60 * 60 * 1000 },
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
     spcOutlook: { label: 'SPC Outlooks',   thresholdMs: 60 * 60 * 1000 },
     spcFireWx:  { label: 'SPC Fire Wx',    thresholdMs: 12 * 60 * 60 * 1000 },
@@ -2639,7 +2640,17 @@ function initFrontalPipIcons(map) {
         id: 'nhc-warn-outline', type: 'line', source: 'nhc-storms',
         filter: ['==', ['get', 'layerType'], 'warning'],
         layout: { visibility: 'none' },
-        paint: { 'line-color': '#ff0000', 'line-width': 2 }
+        paint: {
+            // NHC's coastal-hazard colors, when the source tells us the hazard type
+            // (the NHC-direct KMZ does; the NOAA mirror doesn't, and falls back).
+            'line-color': ['match', ['coalesce', ['get', 'ww'], ''],
+                'TWA', '#ffff00',   // Tropical Storm Watch
+                'TWR', '#0080ff',   // Tropical Storm Warning
+                'HWA', '#ff69b4',   // Hurricane Watch
+                'HWR', '#ff0000',   // Hurricane Warning
+                '#ff0000'],
+            'line-width': 3
+        }
     });
 
     // ─── Forecast History (run-to-run): past OFCL tracks + actual best-track path ───
@@ -3267,9 +3278,12 @@ function initFrontalPipIcons(map) {
             try {
                 const src = map.getSource('nhc-storms');
                 if (src && src._data) {
-                    const stormId = p.binnumber || p.BINNUMBER || '';
+                    // NOAA's mirror groups by bin; NHC-direct features carry the
+                    // ATCF id instead. Either way, only compare within one storm.
+                    const key = f => f.binnumber || f.BINNUMBER || f.atcfid || '';
+                    const stormId = key(p);
                     const pts = (src._data.features || [])
-                        .filter(f => f.properties.layerType === 'point' && (f.properties.binnumber || f.properties.BINNUMBER) === stormId)
+                        .filter(f => f.properties.layerType === 'point' && key(f.properties) === stormId)
                         .sort((a, b) => (a.properties.tau || 0) - (b.properties.tau || 0));
                     const idx = pts.findIndex(f => (f.properties.tau || 0) == tau);
                     if (idx > 0) {
@@ -3293,6 +3307,9 @@ function initFrontalPipIcons(map) {
                 }
             } catch (err) { /* silently fall back */ }
         }
+        // The initial position has no earlier point to difference against, but
+        // NHC's own graphics state the heading — use it rather than showing none.
+        if (!movement && p.motion) movement = p.motion;
 
         const validTime = p.fldatelbl || p.FLDATELBL || p.datelbl || p.DATELBL || '';
         const advNum = p.ADVISNUM || p.advisnum || 'N/A';
@@ -3320,6 +3337,7 @@ function initFrontalPipIcons(map) {
                 ${advDate ? `<span style="color:#888;">Issued:</span><span>${advDate}</span>` : ''}
             </div>
             ${isInter ? '<div style="color:#8fd3ff;font-size:9px;margin-top:5px;line-height:1.4;">Intermediate advisory — position &amp; watches updated; the forecast track/cone refreshes on the next full advisory.</div>' : ''}
+            ${p.src === 'nhc' ? '<div style="color:#00cc66;font-size:9px;margin-top:5px;line-height:1.4;">Source: NHC advisory graphics (direct) — the NOAA GIS mirror is behind, so this cone/track came straight from the National Hurricane Center.</div>' : ''}
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -6321,112 +6339,367 @@ function initPanelToggles() {
 // tropical MapServer feeds the cone/track; CurrentStorms.json is authoritative.
 let nhcGisAdv = {};        // bin -> { adv, advdate, ingestMs } as served by the GIS
 let nhcGisStaleBins = {};  // bin -> details, only for storms where GIS is behind
+let nhcStormSource = 'noaa';   // 'noaa' = MapServer mirror, 'nhc' = NHC-direct KMZ
 const normAdv = a => String(a || '').trim().toLowerCase().replace(/^0+/, '');
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NHC-DIRECT CONE/TRACK (KMZ) — failover source
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOAA's tropical MapServer only re-serves NHC's advisory graphics, and its ingest
+// can stall for a day at a time (observed ~22 h on Jul 21 2026). NHC publishes the
+// same cone/track/watch geometry itself as KMZ — CORS-open, no proxy needed, and
+// regenerated on every advisory including intermediates. nhc_active.kml is the
+// index NHC rewrites each cycle, so it also names the current advisory per storm.
+const NHC_KML_INDEX = 'https://www.nhc.noaa.gov/gis/kml/nhc_active.kml';
+
+// A KMZ is a ZIP holding one .kml document. Read the central directory rather
+// than the local headers so entries written with a data descriptor still work.
+async function unzipKml(buf) {
+    const dv = new DataView(buf);
+    const td = new TextDecoder();
+    let eocd = -1;
+    const floor = Math.max(0, buf.byteLength - 65558);
+    for (let i = buf.byteLength - 22; i >= floor; i--) {
+        if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('not a KMZ (no zip directory)');
+    const count = dv.getUint16(eocd + 10, true);
+    let p = dv.getUint32(eocd + 16, true);
+    for (let n = 0; n < count; n++) {
+        const nameLen = dv.getUint16(p + 28, true);
+        const name = td.decode(new Uint8Array(buf, p + 46, nameLen));
+        if (/\.kml$/i.test(name)) {
+            const method = dv.getUint16(p + 10, true);
+            const compSize = dv.getUint32(p + 20, true);
+            const lo = dv.getUint32(p + 42, true);
+            // The local header repeats name/extra lengths and its extra field is
+            // routinely a different size than the directory's — re-read it here.
+            const start = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true);
+            const raw = new Uint8Array(buf, start, compSize);
+            if (method === 0) return td.decode(raw);
+            if (method !== 8) throw new Error(`unsupported zip method ${method}`);
+            const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+            return await new Response(stream).text();
+        }
+        p += 46 + nameLen + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+    }
+    throw new Error('no .kml inside KMZ');
+}
+
+// "-86.2,28.8,0 -86.8,29.0,0" → [[lon,lat], ...]
+const kmlCoords = el => (el && el.textContent || '').trim().split(/\s+/)
+    .map(t => t.split(',').map(Number))
+    .filter(c => c.length >= 2 && isFinite(c[0]) && isFinite(c[1]))
+    .map(c => [c[0], c[1]]);
+
+// <ExtendedData><Data name="x"><value>y</value> → { x: 'y' }
+function kmlExtended(pm) {
+    const d = {};
+    pm.querySelectorAll('ExtendedData > Data').forEach(n => {
+        const v = n.querySelector('value');
+        d[n.getAttribute('name')] = v ? v.textContent.trim() : '';
+    });
+    return d;
+}
+
+// Forecast-point placemarks carry no ExtendedData — everything is in an HTML
+// table inside <description>. Pull the fields the storm popup wants back out.
+function parseKmlPointDesc(html) {
+    const txt = String(html || '').replace(/<[^>]+>/g, '\n').replace(/&nbsp;/g, ' ');
+    const grab = re => { const m = txt.match(re); return m ? m[1].trim() : ''; };
+    const tau = txt.match(/(\d+)\s*hr\s*Forecast/i);
+    return {
+        tau: tau ? +tau[1] : 0,
+        valid: grab(/Valid at:\s*([^\n]+)/i),
+        maxwind: +grab(/Maximum Wind:\s*(\d+)\s*knots/i) || 0,
+        gust: +grab(/Wind Gusts:\s*(\d+)\s*knots/i) || 0,
+        mslp: +grab(/Minimum Pressure:\s*(\d+)\s*mb/i) || 0,
+        motion: grab(/Motion:\s*([^\n]+?)\s*$/im)
+    };
+}
+
+// Track-point icon style → ATCF-style class code the popup already understands.
+// The x-prefixed icons are the post-tropical variants of each class.
+const KML_PT_TYPE = { d: 'TD', s: 'TS', h: 'HU', m: 'HU', l: 'LO' };
+function kmlPointType(styleUrl, stormType) {
+    const m = String(styleUrl || '').match(/#(x?)([dshml])_point/i);
+    if (!m) return stormType || '';
+    return m[1] ? 'EX' : (KML_PT_TYPE[m[2].toLowerCase()] || stormType || '');
+}
+
+// One KMZ product (CONE | TRACK | WW) → features shaped exactly like the ones
+// fetchNHCStorms builds from the MapServer, so layers and popups need no changes.
+function kmlToFeatures(kind, kmlText) {
+    const doc = new DOMParser().parseFromString(kmlText, 'application/xml');
+    if (doc.querySelector('parsererror')) throw new Error('bad KML');
+    const pms = [...doc.querySelectorAll('Placemark')];
+    // Storm metadata lives on whichever placemarks have ExtendedData; on TRACK
+    // that's the line placemarks, so hoist it once and share it with the points.
+    let meta = {};
+    pms.forEach(pm => { const e = kmlExtended(pm); if (e.atcfid && !meta.atcfid) meta = e; });
+    const name = meta.storm || meta.stormName || '';
+    const isPTC = /potential tropical cyclone/i.test(name) ? 1 : 0;
+    const base = {
+        stormname: name,
+        displayname: name.replace(/^Potential Tropical Cyclone\s*/i, 'PTC '),
+        stormtype: meta.stormType || '',
+        advisnum: meta.advisoryNum || '',
+        advdate: meta.advisoryDate || '',
+        atcfid: (meta.atcfid || '').toLowerCase(),
+        isPTC, src: 'nhc'
+    };
+    const out = [];
+    const push = (geometry, props) => out.push({ type: 'Feature', geometry, properties: { ...base, ...props } });
+
+    pms.forEach(pm => {
+        const styleUrl = (pm.querySelector('styleUrl') || {}).textContent || '';
+        const poly = pm.querySelector('Polygon');
+        const line = pm.querySelector('LineString');
+        const point = pm.querySelector('Point');
+        if (kind === 'CONE' && poly) {
+            const outer = kmlCoords(poly.querySelector('outerBoundaryIs coordinates'));
+            const holes = [...pm.querySelectorAll('innerBoundaryIs coordinates')].map(kmlCoords);
+            if (outer.length > 2) push({ type: 'Polygon', coordinates: [outer, ...holes.filter(h => h.length > 2)] }, { layerType: 'cone' });
+        } else if (kind === 'TRACK' && line) {
+            // NHC ships both a 72 h and a 120 h line; keep only the longest so the
+            // shorter one doesn't draw a second time on top of it.
+            const c = kmlCoords(line);
+            if (c.length > 1) push({ type: 'LineString', coordinates: c }, { layerType: 'track', fcstpd: +(kmlExtended(pm).fcstpd || 0) });
+        } else if (kind === 'TRACK' && point) {
+            const c = kmlCoords(point);
+            const d = parseKmlPointDesc((pm.querySelector('description') || {}).textContent);
+            if (c.length) push({ type: 'Point', coordinates: c[0] }, {
+                layerType: 'point', tau: d.tau, maxwind: d.maxwind, gust: d.gust,
+                mslp: d.mslp || 9999, fldatelbl: d.valid, motion: d.motion,
+                stormtype: kmlPointType(styleUrl, meta.stormType)
+            });
+        } else if (kind === 'WW' && line) {
+            const c = kmlCoords(line);
+            const ww = (styleUrl.match(/#(TWA|TWR|HWA|HWR)/i) || [, ''])[1].toUpperCase();
+            if (c.length > 1) push({ type: 'LineString', coordinates: c }, {
+                layerType: 'warning', ww,
+                wwLabel: ((pm.querySelector('name') || {}).textContent || '').trim()
+            });
+        }
+    });
+    if (kind === 'TRACK') {
+        // Drop every forecast line except the longest-range one.
+        const lines = out.filter(f => f.properties.layerType === 'track');
+        if (lines.length > 1) {
+            const keep = lines.reduce((a, b) => (b.properties.fcstpd > a.properties.fcstpd ? b : a));
+            return out.filter(f => f.properties.layerType !== 'track' || f === keep);
+        }
+    }
+    return out;
+}
+
+// Pull every active storm's KMZ straight from NHC and unzip it in the browser.
+async function loadNhcKmlDirect() {
+    const idxRes = await fetch(cacheBust(NHC_KML_INDEX));
+    if (!idxRes.ok) throw new Error(`index HTTP ${idxRes.status}`);
+    const idx = await idxRes.text();
+    const urls = [...idx.matchAll(/<href>\s*([^<]+?)\s*<\/href>/g)].map(m => m[1])
+        .filter(h => /storm_graphics\/api\/[^/]+adv_(CONE|TRACK|WW)\.kmz$/i.test(h));
+    if (!urls.length) throw new Error('no storm graphics listed');
+    return await Promise.all(urls.map(async url => {
+        const res = await fetch(cacheBust(url));
+        if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+        return {
+            kind: url.match(/adv_(CONE|TRACK|WW)\.kmz$/i)[1].toUpperCase(),
+            lm: Date.parse(res.headers.get('last-modified') || '') || 0,
+            kml: await unzipKml(await res.arrayBuffer())
+        };
+    }));
+}
+
+// Same products via our own proxy, for networks that can't reach nhc.noaa.gov
+// directly. The proxy only fetches and unzips; parsing stays here either way.
+async function loadNhcKmlProxied() {
+    const res = await fetch(cacheBust('/api/adeck?gis=1'));
+    if (!res.ok) throw new Error(`proxy HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.products || !json.products.length) throw new Error('proxy returned no products');
+    return json.products.map(p => ({ kind: p.kind, lm: Date.parse(p.modified || '') || 0, kml: p.kml }));
+}
+
+// Current cone/track/watches from NHC itself. Returns the same FeatureCollection
+// shape as the MapServer path plus the oldest advisory-file timestamp, which is
+// the honest freshness stamp for this source.
+async function fetchNhcDirectStorms() {
+    let raw;
+    try {
+        raw = await loadNhcKmlDirect();
+    } catch (e) {
+        addLiveLog(`NHC: direct KMZ fetch failed (${e.message}); trying proxy...`, '#ffb300');
+        raw = await loadNhcKmlProxied();
+    }
+    const parts = raw.map(r => ({ kind: r.kind, lm: r.lm, feats: kmlToFeatures(r.kind, r.kml) }));
+
+    const features = [];
+    let oldest = 0;
+    parts.forEach(p => {
+        features.push(...p.feats);
+        if (p.lm && (!oldest || p.lm < oldest)) oldest = p.lm;
+    });
+    if (!features.length) throw new Error('no features parsed');
+
+    // Only the CONE product carries the advisory issuance time — share it with the
+    // same storm's track/watch features so every popup can show "Issued:".
+    const issued = {};
+    features.forEach(f => { if (f.properties.advdate) issued[f.properties.atcfid] = f.properties.advdate; });
+    features.forEach(f => { if (!f.properties.advdate) f.properties.advdate = issued[f.properties.atcfid] || ''; });
+
+    return { data: { type: 'FeatureCollection', features }, issuedMs: oldest, count: parts.length };
+}
+
+// NOAA's tropical MapServer — the primary source. It answers for every storm in
+// one round trip and carries ingest timestamps, so it stays primary; when its
+// advisory numbers fall behind NHC's, fetchNHCStorms fails over to NHC-direct.
+async function fetchNoaaTropicalGis() {
+    const combined = { type: 'FeatureCollection', features: [] };
+
+    // Cache-bust so each poll gets the latest advisory, not a cached copy
+    const [coneRes, trackRes, pointsRes, warnRes] = await Promise.all([
+        fetch(cacheBust(`${NHC_BASE}/7/query?where=1%3D1&outFields=*&f=geojson`)),
+        fetch(cacheBust(`${NHC_BASE}/6/query?where=1%3D1&outFields=*&f=geojson`)),
+        fetch(cacheBust(`${NHC_BASE}/5/query?where=1%3D1&outFields=*&f=geojson`)),
+        fetch(cacheBust(`${NHC_BASE}/8/query?where=1%3D1&outFields=*&f=geojson`))
+    ]);
+
+    const [coneData, trackData, pointsData, warnData] = await Promise.all([
+        coneRes.json(), trackRes.json(), pointsRes.json(), warnRes.json()
+    ]);
+
+    // Flag Potential Tropical Cyclones so they can be labeled/styled distinctly
+    const isPTCName = n => /potential tropical cyclone/i.test(n || '');
+    const shortName = n => (n || '').replace(/^Potential Tropical Cyclone\s*/i, 'PTC ');
+
+    (coneData.features || []).forEach(f => {
+        f.properties.layerType = 'cone';
+        f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
+        combined.features.push(f);
+    });
+    (trackData.features || []).forEach(f => {
+        f.properties.layerType = 'track';
+        f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
+        combined.features.push(f);
+    });
+    (pointsData.features || []).forEach(f => {
+        f.properties.layerType = 'point';
+        f.properties.maxwind = f.properties.MAXWIND || f.properties.maxwind || 0;
+        f.properties.stormname = f.properties.STORMNAME || f.properties.stormname || 'UNKNOWN';
+        f.properties.isPTC = isPTCName(f.properties.stormname) ? 1 : 0;
+        f.properties.displayname = shortName(f.properties.stormname);
+        combined.features.push(f);
+    });
+    (warnData.features || []).forEach(f => {
+        f.properties.layerType = 'warning';
+        f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
+        combined.features.push(f);
+    });
+
+    // Cross-check the GIS service against NHC's authoritative CurrentStorms.json.
+    // NOAA's tropical MapServer ingest can stall for many hours (observed ~22 h)
+    // and would otherwise keep drawing a day-old cone under a "LIVE" badge.
+    nhcGisAdv = {};
+    (pointsData.features || []).forEach(f => {
+        const a = f.properties;
+        const bin = a.binnumber || a.BINNUMBER;
+        if (!bin || nhcGisAdv[bin]) return;
+        nhcGisAdv[bin] = {
+            adv: a.advisnum || a.ADVISNUM || '', advdate: a.advdate || a.ADVDATE || '',
+            ingestMs: +(a.idp_ingestdate || a.idp_filedate || 0) || 0
+        };
+    });
+    // Freshness stamp = oldest ingest among storms NHC still lists as active.
+    // A dissipated storm can linger in the GIS feed and would otherwise drag
+    // the stamp red forever.
+    const officialBins = new Set(nhcAdvStorms.map(s => s.bin));
+    let oldestIngest = 0;
+    Object.entries(nhcGisAdv).forEach(([bin, g]) => {
+        if (officialBins.size && !officialBins.has(bin)) return;
+        if (g.ingestMs && (!oldestIngest || g.ingestMs < oldestIngest)) oldestIngest = g.ingestMs;
+    });
+    const stale = {};
+    nhcAdvStorms.forEach(s => {
+        const g = nhcGisAdv[s.bin];
+        const off = (s.products && s.products.tcp) ? s.products.tcp.adv : '';
+        if (!g || !off || normAdv(g.adv) === normAdv(off)) return;
+        stale[s.bin] = {
+            gisAdv: g.adv, gisDate: g.advdate, officialAdv: normAdv(off),
+            name: s.name, cls: s.class, issued: s.products.tcp.issued
+        };
+    });
+    const names = [...new Set((pointsData.features || []).map(f => f.properties.STORMNAME || f.properties.stormname).filter(Boolean))];
+    return { data: combined, stale, oldestIngest, names };
+}
+
+function setNhcStormData(data) {
+    Object.values(maps).forEach(m => {
+        if (m.getSource('nhc-storms')) m.getSource('nhc-storms').setData(data);
+    });
+}
+
+function setNhcStormBadge(text, cls, title) {
+    const b = document.getElementById('nhc-storms-badge');
+    if (!b) return;
+    b.textContent = text;
+    b.className = `badge ${cls}`;
+    b.title = title || '';
+}
 
 async function fetchNHCStorms(show) {
     if (!show) { updateSidebarToActivePane(); return; }
 
     addLiveLog('NHC: Fetching active tropical cyclones...', '#ff6600');
+    let noaa = null, noaaErr = '';
     try {
-        const combined = { type: 'FeatureCollection', features: [] };
-
-        // Cache-bust so each poll gets the latest advisory, not a cached copy
-        const [coneRes, trackRes, pointsRes, warnRes] = await Promise.all([
-            fetch(cacheBust(`${NHC_BASE}/7/query?where=1%3D1&outFields=*&f=geojson`)),
-            fetch(cacheBust(`${NHC_BASE}/6/query?where=1%3D1&outFields=*&f=geojson`)),
-            fetch(cacheBust(`${NHC_BASE}/5/query?where=1%3D1&outFields=*&f=geojson`)),
-            fetch(cacheBust(`${NHC_BASE}/8/query?where=1%3D1&outFields=*&f=geojson`))
-        ]);
-
-        const [coneData, trackData, pointsData, warnData] = await Promise.all([
-            coneRes.json(), trackRes.json(), pointsRes.json(), warnRes.json()
-        ]);
-
-        // Flag Potential Tropical Cyclones so they can be labeled/styled distinctly
-        const isPTCName = n => /potential tropical cyclone/i.test(n || '');
-        const shortName = n => (n || '').replace(/^Potential Tropical Cyclone\s*/i, 'PTC ');
-
-        (coneData.features || []).forEach(f => {
-            f.properties.layerType = 'cone';
-            f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
-            combined.features.push(f);
-        });
-        (trackData.features || []).forEach(f => {
-            f.properties.layerType = 'track';
-            f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
-            combined.features.push(f);
-        });
-        (pointsData.features || []).forEach(f => {
-            f.properties.layerType = 'point';
-            f.properties.maxwind = f.properties.MAXWIND || f.properties.maxwind || 0;
-            f.properties.stormname = f.properties.STORMNAME || f.properties.stormname || 'UNKNOWN';
-            f.properties.isPTC = isPTCName(f.properties.stormname) ? 1 : 0;
-            f.properties.displayname = shortName(f.properties.stormname);
-            combined.features.push(f);
-        });
-        (warnData.features || []).forEach(f => {
-            f.properties.layerType = 'warning';
-            f.properties.isPTC = isPTCName(f.properties.STORMNAME || f.properties.stormname) ? 1 : 0;
-            combined.features.push(f);
-        });
-
-        Object.values(maps).forEach(m => {
-            if (m.getSource('nhc-storms')) m.getSource('nhc-storms').setData(combined);
-        });
-
-        // Cross-check the GIS service against NHC's authoritative CurrentStorms.json.
-        // NOAA's tropical MapServer ingest can stall for many hours (observed ~22 h)
-        // and would otherwise keep drawing a day-old cone under a "LIVE" badge.
-        nhcGisAdv = {}; nhcGisStaleBins = {};
-        (pointsData.features || []).forEach(f => {
-            const a = f.properties;
-            const bin = a.binnumber || a.BINNUMBER;
-            if (!bin || nhcGisAdv[bin]) return;
-            nhcGisAdv[bin] = {
-                adv: a.advisnum || a.ADVISNUM || '', advdate: a.advdate || a.ADVDATE || '',
-                ingestMs: +(a.idp_ingestdate || a.idp_filedate || 0) || 0
-            };
-        });
-        // Freshness stamp = oldest ingest among storms NHC still lists as active.
-        // A dissipated storm can linger in the GIS feed and would otherwise drag
-        // the stamp red forever.
-        const officialBins = new Set(nhcAdvStorms.map(s => s.bin));
-        let oldestIngest = 0;
-        Object.entries(nhcGisAdv).forEach(([bin, g]) => {
-            if (officialBins.size && !officialBins.has(bin)) return;
-            if (g.ingestMs && (!oldestIngest || g.ingestMs < oldestIngest)) oldestIngest = g.ingestMs;
-        });
-        nhcAdvStorms.forEach(s => {
-            const g = nhcGisAdv[s.bin];
-            const off = (s.products && s.products.tcp) ? s.products.tcp.adv : '';
-            if (!g || !off || normAdv(g.adv) === normAdv(off)) return;
-            nhcGisStaleBins[s.bin] = {
-                gisAdv: g.adv, gisDate: g.advdate, officialAdv: normAdv(off),
-                name: s.name, cls: s.class, issued: s.products.tcp.issued
-            };
-        });
-        const staleList = Object.values(nhcGisStaleBins);
-        const sBadge = document.getElementById('nhc-storms-badge');
-        if (sBadge) {
-            sBadge.textContent = staleList.length ? 'STALE' : 'LIVE';
-            sBadge.className = staleList.length ? 'badge orange' : 'badge red';
-            sBadge.title = staleList.length
-                ? `NOAA tropical GIS feed is behind NHC's official advisories — ${staleList.map(s => `${s.name}: map #${s.gisAdv}, official #${s.officialAdv}`).join('; ')}`
-                : '';
-        }
-        updateHealth('nhcStorms', oldestIngest || undefined);
-
-        const stormNames = [...new Set((pointsData.features || []).map(f => f.properties.STORMNAME || f.properties.stormname).filter(Boolean))];
-        if (stormNames.length > 0) {
-            addLiveLog(`NHC: Tracking ${stormNames.length} storm(s): ${stormNames.join(', ')}`, '#ff6600');
-        } else {
-            addLiveLog('NHC: No active tropical cyclones', '#888');
-        }
-        if (staleList.length) addLiveLog(
-            `NHC WARNING: cone/track GIS feed is STALE — ${staleList.map(s => `map shows adv #${s.gisAdv} (${s.gisDate}); NHC official is #${s.officialAdv} ${s.name} (${s.cls})`).join('; ')}. Text products under Official Advisories are current.`,
-            '#ffb300');
+        noaa = await fetchNoaaTropicalGis();
     } catch (e) {
-        addLiveLog(`NHC STORMS ERROR: ${e.message}`, '#ff3333');
+        noaaErr = e.message;
+    }
+
+    const staleList = noaa ? Object.values(noaa.stale) : [];
+    // Fail over whenever the mirror is behind NHC or unreachable. NHC publishes
+    // the same geometry itself, so a stalled mirror should never cost us the cone.
+    if (noaa && !staleList.length) {
+        nhcGisStaleBins = noaa.stale;
+        nhcStormSource = 'noaa';
+        setNhcStormData(noaa.data);
+        setNhcStormBadge('LIVE', 'red');
+        updateHealth('nhcStorms', noaa.oldestIngest || undefined);
+        addLiveLog(noaa.names.length
+            ? `NHC: Tracking ${noaa.names.length} storm(s): ${noaa.names.join(', ')}`
+            : 'NHC: No active tropical cyclones', noaa.names.length ? '#ff6600' : '#888');
+        return;
+    }
+
+    const why = noaa
+        ? `NOAA GIS mirror is behind NHC — ${staleList.map(s => `${s.name}: map adv #${s.gisAdv} (${s.gisDate}), official #${s.officialAdv}`).join('; ')}`
+        : `NOAA GIS mirror unreachable (${noaaErr})`;
+    addLiveLog(`NHC: ${why}. Failing over to NHC-direct advisory graphics...`, '#ffb300');
+
+    try {
+        const direct = await fetchNhcDirectStorms();
+        nhcGisStaleBins = {};          // nothing on screen is out of date anymore
+        nhcStormSource = 'nhc';
+        setNhcStormData(direct.data);
+        const advs = [...new Set(direct.data.features.map(f => `${f.properties.stormname} #${f.properties.advisnum}`))];
+        setNhcStormBadge('NHC DIRECT', 'green',
+            `Cone/track pulled straight from NHC's advisory graphics because the NOAA GIS mirror is behind. Showing ${advs.join(', ')}.`);
+        updateHealth('nhcStorms', direct.issuedMs || undefined);
+        addLiveLog(`NHC: Using NHC-direct graphics — ${advs.join(', ')}`, '#00cc66');
+    } catch (e) {
+        // Both sources are gone. Keep whatever the mirror gave us, but say plainly
+        // that it is out of date rather than presenting it as current.
+        if (noaa) {
+            nhcGisStaleBins = noaa.stale;
+            nhcStormSource = 'noaa';
+            setNhcStormData(noaa.data);
+            updateHealth('nhcStorms', noaa.oldestIngest || undefined);
+        }
+        setNhcStormBadge('STALE', 'orange', `${why}. NHC-direct failover also failed: ${e.message}`);
+        addLiveLog(`NHC STORMS ERROR: NHC-direct failover failed (${e.message}). ${noaa ? 'Map is showing the stale mirror.' : 'No cone/track data available.'}`, '#ff3333');
     }
 }
 
@@ -12581,6 +12854,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 21, 2026 (update 2)', items: [
+        'Active Storms &amp; Cones no longer depends on NOAA’s mirror staying healthy. When the cross-check finds NOAA’s tropical GIS service behind NHC (or unreachable), FX-Net now <b>automatically fails over to NHC’s own advisory graphics</b> — the same cone, forecast track, and coastal watches/warnings, pulled straight from the National Hurricane Center and regenerated on every advisory including intermediates. The badge reads <b>NHC DIRECT</b> in green, hovering it names the advisories in use, and the popup adds a “Source: NHC advisory graphics (direct)” line. It reverses automatically once NOAA catches up, and dissipated storms lingering in NOAA’s feed drop off while on NHC-direct. Verified live on Jul 21 with NOAA ~22 h stale: the map went from TD Two #5 to Bertha #8A and Fausto #10.',
+        'Coastal watch/warning segments are now colored by hazard where the source identifies them — yellow TS Watch, blue TS Warning, pink Hurricane Watch, red Hurricane Warning — instead of all-red.',
+        'The storm popup now falls back to NHC’s stated heading (e.g. “NW”) for the current position, where before it showed no Movement line at all because there is no earlier point to difference against.'
+    ]},
     { date: 'Jul 21, 2026', items: [
         'Active Storms &amp; Cones now tells you when NOAA’s feed is behind. The cone/track comes from NOAA’s tropical GIS service, which can stall for many hours (it was ~22 h behind on Jul 21, still showing TD Two at advisory #5 when NHC had Bertha at #8A). FX-Net now cross-checks that feed against NHC’s authoritative storm index every refresh: the menu badge flips from LIVE to <b>STALE</b>, Data Health → NHC Storms is stamped with the feed’s own ingest time (so it goes red instead of looking healthy), and clicking a storm shows an OUT OF DATE banner naming the advisory on screen versus NHC’s current one. Everything else — Official Advisories, model guidance, Storm Trends, SHIPS and recon — reads from NHC/ATCF directly and stays current regardless.'
     ]},
@@ -12881,7 +13159,9 @@ const USER_GUIDE = [
     { id: 'tropical', title: 'Tropical — NHC & Hurricane Hunters', html: `
         <ul>
             <li><b>Active Storms</b> — forecast cones, track points with intensities, and coastal watch/warning segments. Click a point for the decoded advisory; the popup shows the issue time and flags <b>intermediate</b> advisories (e.g. #1A), where NHC updates the position/watches but the graphical track and cone only refresh on the next full (6-hourly) advisory.<br>
-                This layer is drawn from NOAA’s tropical GIS service, which sometimes stalls for hours. FX-Net checks it against NHC’s authoritative storm index on every refresh — if it falls behind, the badge changes from LIVE to <b>STALE</b>, <b>Data Health → NHC Storms</b> turns red (it’s stamped with the feed’s own ingest time, not ours), and the popup shows an <b>OUT OF DATE</b> banner naming the advisory you’re looking at versus NHC’s current one. When that happens the cone on screen is old but the <b>Official Advisories</b> text, model guidance, Storm Trends, SHIPS and recon are all still current — they come from NHC/ATCF directly.</li>
+                This layer normally comes from NOAA’s tropical GIS service, which sometimes stalls for hours. FX-Net checks it against NHC’s authoritative storm index on every refresh, and if it has fallen behind it <b>automatically switches to NHC’s own advisory graphics</b> — same cone, same track, straight from the source. The badge then reads <b>NHC DIRECT</b> (green, hover it for the advisory numbers in use), <b>Data Health → NHC Storms</b> is stamped with the advisory’s publication time, and the popup adds a green “Source: NHC advisory graphics (direct)” line. Failover also covers a NOAA outage, and it reverses on its own once NOAA catches up.<br>
+                Only if <i>both</i> sources fail does the badge go <b>STALE</b> (orange) with an <b>OUT OF DATE</b> banner in the popup naming the advisory on screen versus NHC’s current one. Even then the <b>Official Advisories</b> text, model guidance, Storm Trends, SHIPS and recon stay current — they come from NHC/ATCF directly.<br>
+                Coastal watch/warning segments are colored to NHC convention when the source identifies them: <span style="color:#ffff00;">yellow</span> TS Watch, <span style="color:#0080ff;">blue</span> TS Warning, <span style="color:#ff69b4;">pink</span> Hurricane Watch, <span style="color:#ff0000;">red</span> Hurricane Warning.</li>
             <li><b>Forecast History (run-to-run)</b> — for the active storm, the storm’s actual traveled path (best-track, fix dots colored by intensity) with every past advisory’s official forecast track overlaid, newest bright and older ones faded, each anchored at the position it was issued from. Shows how the forecast has trended cycle to cycle and where the center has actually gone. Forecast tracks accumulate one per full advisory (sparse for a new storm, richer over time); the actual path reaches back to the invest stage.</li>
             <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details.</li>
             <li><b>Tropical Discussions</b> open the full NHC text products.</li>

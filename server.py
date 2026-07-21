@@ -197,6 +197,8 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                     self._send_json({'storms': ad.list_storms()})
                 elif qs.get('nhc', [''])[0]:
                     self._send_json(ad.fetch_nhc())
+                elif qs.get('gis', [''])[0]:
+                    self._send_json(ad.fetch_gis())
                 elif qs.get('btk', [''])[0]:
                     self._send(200, 'text/plain', ad.fetch_btk(qs.get('btk', [''])[0].lower()).encode())
                 elif qs.get('ships', [''])[0]:

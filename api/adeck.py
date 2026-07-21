@@ -3,8 +3,10 @@ from urllib.parse import urlparse, parse_qs
 import urllib.request
 import datetime
 import gzip
+import io
 import json
 import re
+import zipfile
 
 # NHC ATCF "a-deck" model guidance proxy. ftp.nhc.noaa.gov sends no CORS
 # headers, so the browser can't fetch these directly. Two modes:
@@ -175,6 +177,37 @@ def fetch_nhc():
     return {'storms': out}
 
 
+def fetch_gis():
+    """Fetch NHC's own advisory graphics (cone / forecast track / watches) for
+    every active storm and hand back the raw KML.
+
+    NOAA's tropical MapServer only re-serves these and its ingest can stall for
+    a day at a time, so the app fails over to this. nhc.noaa.gov does send
+    'Access-Control-Allow-Origin: *' here and the browser normally fetches the
+    KMZs itself; this route is the backstop for when it can't. Unzipping is all
+    that happens server-side — KML parsing stays in the client so there is only
+    one copy of it."""
+    index = _fetch('https://www.nhc.noaa.gov/gis/kml/nhc_active.kml').decode('utf-8', errors='replace')
+    urls = [u for u in re.findall(r'<href>\s*([^<]+?)\s*</href>', index)
+            if re.search(r'storm_graphics/api/[^/]+adv_(CONE|TRACK|WW)\.kmz$', u, re.I)]
+    products = []
+    for url in urls[:24]:      # a hard cap: 3 products x 8 storms is already extreme
+        kind = re.search(r'adv_(CONE|TRACK|WW)\.kmz$', url, re.I).group(1).upper()
+        req = urllib.request.Request(url, headers={'User-Agent': 'FXNet-VercelProxy/1.0'})
+        with urllib.request.urlopen(req, timeout=20) as response:
+            blob = response.read()
+            modified = response.headers.get('Last-Modified', '')
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            name = next((n for n in z.namelist() if n.lower().endswith('.kml')), None)
+            if not name:
+                continue
+            kml = z.read(name).decode('utf-8', errors='replace')
+        products.append({'kind': kind, 'url': url, 'modified': modified, 'kml': kml})
+    if not products:
+        raise ValueError('no active storm graphics')
+    return {'products': products}
+
+
 def fetch_ofcl(sid):
     """Return every OFCL (NHC official forecast) row across ALL cycles in the
     a-deck — the run-to-run history of the forecast track. OFCL is ~10 rows per
@@ -214,6 +247,9 @@ class handler(BaseHTTPRequestHandler):
                 ctype = 'application/json'
             elif q.get('nhc', [''])[0]:
                 body = json.dumps(fetch_nhc()).encode()
+                ctype = 'application/json'
+            elif q.get('gis', [''])[0]:
+                body = json.dumps(fetch_gis()).encode()
                 ctype = 'application/json'
             elif q.get('btk', [''])[0]:
                 body = fetch_btk(q.get('btk', [''])[0].lower()).encode()
