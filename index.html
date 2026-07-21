@@ -221,7 +221,7 @@
                 <!-- NHC TROPICAL -->
                 <div class="category-group">
                     <div class="category-label"><i data-lucide="cloud-lightning"></i> NHC TROPICAL</div>
-                    <div class="product-item" data-layer="nhc-storms"><span>Active Storms & Cones</span> <span class="badge red">LIVE</span></div>
+                    <div class="product-item" data-layer="nhc-storms"><span>Active Storms & Cones</span> <span class="badge red" id="nhc-storms-badge">LIVE</span></div>
                     <div class="product-item" data-layer="nhc-fcst-history"><span>Forecast History (run-to-run)</span> <span class="badge blue">TREND</span></div>
                     <div class="product-item" data-layer="nhc-outlook"><span>Tropical Outlook Areas</span> <span class="badge orange">NHC</span></div>
                     <div class="sub-category">Tropical Discussions</div>
@@ -1126,7 +1126,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=250"></script>
+    <script src="app.js?v=251"></script>
     <script>
         lucide.createIcons();
         if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';

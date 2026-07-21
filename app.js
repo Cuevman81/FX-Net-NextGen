@@ -204,7 +204,9 @@ const HEALTH_THRESHOLDS = {
     radarL3:    { label: 'NODD Dual-Pol', thresholdMs: 15 * 60 * 1000 },
     gibsSat:    { label: 'GIBS Satellite', thresholdMs: 60 * 60 * 1000 },
     wpcEro:     { label: 'WPC ERO',       thresholdMs: 12 * 60 * 60 * 1000 },
-    nhcStorms:  { label: 'NHC Storms',    thresholdMs: 60 * 60 * 1000 },
+    // Stamped with the GIS feed's own ingest time, not our fetch time — advisories
+    // land every 6 h (3 h when intermediates run), so 7 h means the feed has stalled
+    nhcStorms:  { label: 'NHC Storms',    thresholdMs: 7 * 60 * 60 * 1000 },
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
     spcOutlook: { label: 'SPC Outlooks',   thresholdMs: 60 * 60 * 1000 },
     spcFireWx:  { label: 'SPC Fire Wx',    thresholdMs: 12 * 60 * 60 * 1000 },
@@ -3299,9 +3301,16 @@ function initFrontalPipIcons(map) {
         // on the full advisory. advdate is the actual issuance time.
         const isInter = /[A-Za-z]$/.test(String(advNum));
         const advDate = p.advdate || p.ADVDATE || '';
-        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:300px;">
+        // NOAA's GIS feed can lag NHC's official advisories by many hours — say so
+        // loudly rather than presenting a day-old cone as current.
+        const gisStale = nhcGisStaleBins[p.binnumber || p.BINNUMBER || ''];
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
             <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:2px;">${name}${ptcTag}</div>
             <div style="color:#888;font-size:10px;margin-bottom:6px;">${tauLabel}${validTime ? ' — ' + validTime : ''}</div>
+            ${gisStale ? `<div style="background:#3d2600;border-left:3px solid #ffb300;padding:5px 8px;margin-bottom:7px;font-size:10px;line-height:1.5;color:#ffd479;">
+                <b>&#9888; OUT OF DATE</b> — this track/cone is advisory <b>#${gisStale.gisAdv}</b> (${gisStale.gisDate}).<br>
+                NHC's current advisory is <b>#${gisStale.officialAdv} — ${gisStale.name} (${gisStale.cls})</b>. NOAA's tropical GIS feed is behind; the text products under <b>Official Advisories</b> are current.
+            </div>` : ''}
             <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;">
                 <span style="color:#888;">Classification:</span><span style="color:#ffcc00;">${cat}</span>
                 <span style="color:#888;">Max Wind:</span><span>${wind} kt${gust > 0 ? ' (gusts ' + Math.round(gust) + ' kt)' : ''}</span>
@@ -6308,6 +6317,12 @@ function initPanelToggles() {
     }, 15 * 60 * 1000);
 }
 
+// GIS-vs-official advisory cross-check state (see fetchNHCStorms). NOAA's
+// tropical MapServer feeds the cone/track; CurrentStorms.json is authoritative.
+let nhcGisAdv = {};        // bin -> { adv, advdate, ingestMs } as served by the GIS
+let nhcGisStaleBins = {};  // bin -> details, only for storms where GIS is behind
+const normAdv = a => String(a || '').trim().toLowerCase().replace(/^0+/, '');
+
 async function fetchNHCStorms(show) {
     if (!show) { updateSidebarToActivePane(); return; }
 
@@ -6358,7 +6373,48 @@ async function fetchNHCStorms(show) {
         Object.values(maps).forEach(m => {
             if (m.getSource('nhc-storms')) m.getSource('nhc-storms').setData(combined);
         });
-        updateHealth('nhcStorms');
+
+        // Cross-check the GIS service against NHC's authoritative CurrentStorms.json.
+        // NOAA's tropical MapServer ingest can stall for many hours (observed ~22 h)
+        // and would otherwise keep drawing a day-old cone under a "LIVE" badge.
+        nhcGisAdv = {}; nhcGisStaleBins = {};
+        (pointsData.features || []).forEach(f => {
+            const a = f.properties;
+            const bin = a.binnumber || a.BINNUMBER;
+            if (!bin || nhcGisAdv[bin]) return;
+            nhcGisAdv[bin] = {
+                adv: a.advisnum || a.ADVISNUM || '', advdate: a.advdate || a.ADVDATE || '',
+                ingestMs: +(a.idp_ingestdate || a.idp_filedate || 0) || 0
+            };
+        });
+        // Freshness stamp = oldest ingest among storms NHC still lists as active.
+        // A dissipated storm can linger in the GIS feed and would otherwise drag
+        // the stamp red forever.
+        const officialBins = new Set(nhcAdvStorms.map(s => s.bin));
+        let oldestIngest = 0;
+        Object.entries(nhcGisAdv).forEach(([bin, g]) => {
+            if (officialBins.size && !officialBins.has(bin)) return;
+            if (g.ingestMs && (!oldestIngest || g.ingestMs < oldestIngest)) oldestIngest = g.ingestMs;
+        });
+        nhcAdvStorms.forEach(s => {
+            const g = nhcGisAdv[s.bin];
+            const off = (s.products && s.products.tcp) ? s.products.tcp.adv : '';
+            if (!g || !off || normAdv(g.adv) === normAdv(off)) return;
+            nhcGisStaleBins[s.bin] = {
+                gisAdv: g.adv, gisDate: g.advdate, officialAdv: normAdv(off),
+                name: s.name, cls: s.class, issued: s.products.tcp.issued
+            };
+        });
+        const staleList = Object.values(nhcGisStaleBins);
+        const sBadge = document.getElementById('nhc-storms-badge');
+        if (sBadge) {
+            sBadge.textContent = staleList.length ? 'STALE' : 'LIVE';
+            sBadge.className = staleList.length ? 'badge orange' : 'badge red';
+            sBadge.title = staleList.length
+                ? `NOAA tropical GIS feed is behind NHC's official advisories — ${staleList.map(s => `${s.name}: map #${s.gisAdv}, official #${s.officialAdv}`).join('; ')}`
+                : '';
+        }
+        updateHealth('nhcStorms', oldestIngest || undefined);
 
         const stormNames = [...new Set((pointsData.features || []).map(f => f.properties.STORMNAME || f.properties.stormname).filter(Boolean))];
         if (stormNames.length > 0) {
@@ -6366,6 +6422,9 @@ async function fetchNHCStorms(show) {
         } else {
             addLiveLog('NHC: No active tropical cyclones', '#888');
         }
+        if (staleList.length) addLiveLog(
+            `NHC WARNING: cone/track GIS feed is STALE — ${staleList.map(s => `map shows adv #${s.gisAdv} (${s.gisDate}); NHC official is #${s.officialAdv} ${s.name} (${s.cls})`).join('; ')}. Text products under Official Advisories are current.`,
+            '#ffb300');
     } catch (e) {
         addLiveLog(`NHC STORMS ERROR: ${e.message}`, '#ff3333');
     }
@@ -12522,6 +12581,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 21, 2026', items: [
+        'Active Storms &amp; Cones now tells you when NOAA’s feed is behind. The cone/track comes from NOAA’s tropical GIS service, which can stall for many hours (it was ~22 h behind on Jul 21, still showing TD Two at advisory #5 when NHC had Bertha at #8A). FX-Net now cross-checks that feed against NHC’s authoritative storm index every refresh: the menu badge flips from LIVE to <b>STALE</b>, Data Health → NHC Storms is stamped with the feed’s own ingest time (so it goes red instead of looking healthy), and clicking a storm shows an OUT OF DATE banner naming the advisory on screen versus NHC’s current one. Everything else — Official Advisories, model guidance, Storm Trends, SHIPS and recon — reads from NHC/ATCF directly and stays current regardless.'
+    ]},
     { date: 'Jul 19, 2026 (update 13)', items: [
         'New “Forecast History (run-to-run)” overlay under NHC Tropical. For the active storm it draws the storm’s actual traveled path (best-track, with fix dots colored by intensity) and overlays every past advisory’s official forecast track — newest bright, older ones faded — each anchored at the fixed position it was issued from. So you can see at a glance how the forecast has trended cycle to cycle and where the center has actually gone. Forecast tracks accumulate one per full (6-hourly) advisory, so a just-formed storm starts with one and fills in over time; the actual path is complete back to the invest stage.',
         'The Active Storms popup now shows the advisory issue time and clearly flags intermediate advisories (e.g. #1A) — NHC updates the position and watches on those, but the graphical forecast track/cone only refreshes on the next full advisory, which is why the cone can look “an advisory behind” between full runs.'
@@ -12818,7 +12880,8 @@ const USER_GUIDE = [
 
     { id: 'tropical', title: 'Tropical — NHC & Hurricane Hunters', html: `
         <ul>
-            <li><b>Active Storms</b> — forecast cones, track points with intensities, and coastal watch/warning segments. Click a point for the decoded advisory; the popup shows the issue time and flags <b>intermediate</b> advisories (e.g. #1A), where NHC updates the position/watches but the graphical track and cone only refresh on the next full (6-hourly) advisory.</li>
+            <li><b>Active Storms</b> — forecast cones, track points with intensities, and coastal watch/warning segments. Click a point for the decoded advisory; the popup shows the issue time and flags <b>intermediate</b> advisories (e.g. #1A), where NHC updates the position/watches but the graphical track and cone only refresh on the next full (6-hourly) advisory.<br>
+                This layer is drawn from NOAA’s tropical GIS service, which sometimes stalls for hours. FX-Net checks it against NHC’s authoritative storm index on every refresh — if it falls behind, the badge changes from LIVE to <b>STALE</b>, <b>Data Health → NHC Storms</b> turns red (it’s stamped with the feed’s own ingest time, not ours), and the popup shows an <b>OUT OF DATE</b> banner naming the advisory you’re looking at versus NHC’s current one. When that happens the cone on screen is old but the <b>Official Advisories</b> text, model guidance, Storm Trends, SHIPS and recon are all still current — they come from NHC/ATCF directly.</li>
             <li><b>Forecast History (run-to-run)</b> — for the active storm, the storm’s actual traveled path (best-track, fix dots colored by intensity) with every past advisory’s official forecast track overlaid, newest bright and older ones faded, each anchored at the position it was issued from. Shows how the forecast has trended cycle to cycle and where the center has actually gone. Forecast tracks accumulate one per full advisory (sparse for a new storm, richer over time); the actual path reaches back to the invest stage.</li>
             <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details.</li>
             <li><b>Tropical Discussions</b> open the full NHC text products.</li>
