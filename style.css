@@ -209,8 +209,74 @@ body {
 /* ═══════════════════════════════════════
    PRODUCT BROWSER
    ═══════════════════════════════════════ */
+/* Pinned filter above the scrolling tree — 136 products across 18 groups is
+   more than is practical to hunt through by scrolling. */
+.product-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: #05080c;
+    flex: 0 0 auto;
+}
+.product-filter-row i {
+    width: 12px;
+    height: 12px;
+    color: #4a5a68;
+    flex: 0 0 auto;
+}
+.product-filter-row input {
+    flex: 1;
+    min-width: 0;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--accent-cyan);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 3px 6px;
+    outline: none;
+}
+.product-filter-row input::placeholder { color: #4a5a68; }
+.product-filter-row input:focus { border-color: var(--accent-cyan); }
+.product-filter-row input::-webkit-search-cancel-button { display: none; }
+.product-filter-row button {
+    background: none;
+    border: none;
+    color: #ff6666;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+    flex: 0 0 auto;
+}
+.filter-empty {
+    padding: 14px 15px;
+    font-size: 10px;
+    color: #5a6570;
+    font-style: italic;
+}
+/* While filtering: groups without a match disappear, groups with one are
+   force-expanded regardless of their saved collapsed state, and only the
+   matching rows show. Specificity here deliberately outranks the
+   `.category-group.collapsed > *` rule below. */
+.product-browser.filtering .category-group:not(.filter-hit) { display: none; }
+.product-browser.filtering .category-group.filter-hit > *:not(.category-label) { display: none; }
+.product-browser.filtering .category-group.filter-hit > .product-item { display: flex; }
+.product-browser.filtering .category-group.filter-hit > .product-item.filter-miss { display: none; }
+.product-browser.filtering .cat-tools { display: none; }
+.product-item mark {
+    background: rgba(0, 229, 255, 0.28);
+    color: #fff;
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
 .product-browser {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 4px 0;
 }

@@ -3,6 +3,7 @@ from urllib.parse import urlparse, parse_qs, quote
 import urllib.request
 import json
 import re
+import traceback
 
 # Upper-air sounding proxy. Primary source is the University of Wyoming's
 # high-resolution BUFR listing (~1-2 s radiosonde data, thousands of levels),
@@ -96,9 +97,19 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'public, max-age=600, s-maxage=1800')
             self.end_headers()
             self.wfile.write(body)
-        except Exception as e:
-            self.send_response(502)
+        except ValueError as e:
+            # Deliberate validation / not-yet-published messages: safe to return.
+            self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'success': False, 'error': str(e), 'profile': []}).encode())
+        except Exception:
+            # Upstream/network failures can carry internal URLs and paths —
+            # log server-side, tell the client only that the fetch failed.
+            traceback.print_exc()
+            self.send_response(502)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': 'upstream fetch failed', 'profile': []}).encode())

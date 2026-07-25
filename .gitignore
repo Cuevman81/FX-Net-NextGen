@@ -15,3 +15,6 @@ wms_caps.xml
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Local diagnostic dumps
+fxnet_diagnostic_log*.txt

@@ -6,6 +6,7 @@ import json
 import re
 import zipfile
 import xml.etree.ElementTree as ET
+import traceback
 
 # SPC Fire Weather Outlook is published as a "latest" KMZ per day. Days 1-2 are
 # the full categorical product (Elevated/Critical/Extreme + dry thunderstorm);
@@ -147,9 +148,19 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'public, max-age=120, s-maxage=600')
             self.end_headers()
             self.wfile.write(body)
-        except Exception as e:
-            self.send_response(500)
+        except ValueError as e:
+            # Deliberate validation / not-yet-published messages: safe to return.
+            self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'error': str(e)}).encode())
+        except Exception:
+            # Upstream/network failures can carry internal URLs and paths —
+            # log server-side, tell the client only that the fetch failed.
+            traceback.print_exc()
+            self.send_response(502)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': 'upstream fetch failed'}).encode())

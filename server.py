@@ -50,7 +50,30 @@ SIMPLE_PROXIES = {
 }
 
 
+# Kept byte-identical to the Content-Security-Policy in vercel.json so a policy
+# violation shows up here in local dev rather than first appearing in production.
+CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com data:; "
+    "img-src 'self' data: blob: https:; "
+    "connect-src 'self' https:; "
+    "worker-src 'self' blob:; "
+    "child-src 'self' blob:; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'self'"
+)
+
+
 class CustomHandler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header('Content-Security-Policy', CSP)
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        super().end_headers()
+
     def _send(self, status, ctype, body):
         self.send_response(status)
         self.send_header('Content-Type', ctype)

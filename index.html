@@ -14,16 +14,9 @@
     <script src="vendor/maplibre-gl.js"></script>
     <link href="vendor/maplibre-gl.css" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=116">
-    <!-- Vercel Speed Insights -->
-    <script type="module">
-      import { injectSpeedInsights } from 'https://cdn.jsdelivr.net/npm/@vercel/speed-insights@2.0.0/dist/index.mjs';
-      injectSpeedInsights();
-    </script>
-    <!-- Vercel Web Analytics -->
-    <script>
-      window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
-    </script>
+    <link rel="stylesheet" href="style.css?v=118">
+    <!-- Vercel Speed Insights + Web Analytics shim (external so CSP can forbid inline script) -->
+    <script type="module" src="boot.js?v=1"></script>
     <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
@@ -58,12 +51,21 @@
                 <span class="badge blue">MANUAL</span>
             </div>
 
+            <!-- Filter sits outside .product-browser so it stays pinned while the
+                 tree scrolls under it. -->
+            <div class="product-filter-row">
+                <i data-lucide="search"></i>
+                <input id="product-filter" type="search" autocomplete="off" spellcheck="false"
+                       placeholder="Filter products…" aria-label="Filter products">
+                <button id="product-filter-clear" type="button" title="Clear filter" aria-label="Clear filter" style="display:none;">&times;</button>
+            </div>
             <div class="product-browser">
                 <div class="cat-tools">
                     <button id="expand-all-groups" type="button">Expand all</button>
                     <span>·</span>
                     <button id="collapse-all-groups" type="button">Collapse all</button>
                 </div>
+                <div id="product-filter-empty" class="filter-empty" style="display:none;">No products match.</div>
                 <!-- NWS WARNINGS -->
                 <div class="category-group">
                     <div class="category-label"><i data-lucide="bell"></i> NWS WARNINGS</div>
@@ -353,8 +355,11 @@
                 </div>
             </div>
 
-            <div class="diagnostic-log-container" id="log-container">
-                <div class="log-header" onclick="this.parentElement.classList.toggle('collapsed')">
+            <!-- Starts collapsed so the product tree gets the vertical space; the
+                 bug button in the bottom toolbar (and this header) reopens it,
+                 and the choice persists. -->
+            <div class="diagnostic-log-container collapsed" id="log-container">
+                <div class="log-header" id="log-header">
                     <span>DIAGNOSTIC LOG</span>
                     <i data-lucide="chevron-down"></i>
                 </div>
@@ -588,6 +593,22 @@
                             <option value="150">Fast</option>
                             <option value="400" selected>Med</option>
                             <option value="1000">Slow</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                        <span style="font-size:8px; color:var(--text-dim);">MODE</span>
+                        <select id="loop-mode" title="Forward wraps to the oldest frame; Rock reverses at each end" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                            <option value="forward" selected>Forward</option>
+                            <option value="rock">Rock</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                        <span style="font-size:8px; color:var(--text-dim);">DWELL</span>
+                        <select id="loop-dwell" title="Extra hold on the newest frame before the loop wraps" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                            <option value="0">Off</option>
+                            <option value="700" selected>0.7 s</option>
+                            <option value="1500">1.5 s</option>
+                            <option value="3000">3 s</option>
                         </select>
                     </div>
                 </div>
@@ -1126,10 +1147,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=252"></script>
-    <script>
-        lucide.createIcons();
-        if (window.location.protocol === 'file:') document.getElementById('cors-warning').style.display = 'block';
-    </script>
+    <script src="app.js?v=255"></script>
 </body>
 </html>

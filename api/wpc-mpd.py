@@ -5,6 +5,7 @@ import json
 import struct
 import zipfile
 import datetime
+import traceback
 
 # WPC Mesoscale Precipitation Discussions (AWIPS FFGMPD). No clean "active" GeoJSON
 # feed exists (not in api.weather.gov, not in NOAA mapservices), so pull the recent
@@ -129,9 +130,19 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'public, max-age=60, s-maxage=300')
             self.end_headers()
             self.wfile.write(body)
-        except Exception as e:
-            self.send_response(500)
+        except ValueError as e:
+            # Deliberate validation / not-yet-published messages: safe to return.
+            self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'error': str(e)}).encode())
+        except Exception:
+            # Upstream/network failures can carry internal URLs and paths —
+            # log server-side, tell the client only that the fetch failed.
+            traceback.print_exc()
+            self.send_response(502)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': 'upstream fetch failed'}).encode())

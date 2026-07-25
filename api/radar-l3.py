@@ -25,6 +25,7 @@ import math
 
 import numpy as np
 from PIL import Image
+import traceback
 
 L3_BUCKET = 'https://unidata-nexrad-level3.s3.amazonaws.com'
 _STATION_RE = re.compile(r'^[A-Z0-9]{3,4}$')   # guard against URL injection
@@ -665,9 +666,19 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'public, max-age=30')
             self.end_headers()
             self.wfile.write(body)
-        except Exception as e:
-            self.send_response(500)
+        except ValueError as e:
+            # Deliberate validation / not-yet-published messages: safe to return.
+            self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+        except Exception:
+            # Upstream/network failures can carry internal URLs and paths —
+            # log server-side, tell the client only that the fetch failed.
+            traceback.print_exc()
+            self.send_response(502)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': 'upstream fetch failed'}).encode())

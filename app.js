@@ -6,6 +6,38 @@
 
 'use strict';
 
+// ═══ NETWORK DEADLINE ═══
+// Every feed call gets a deadline. Without one, a hung upstream leaves the
+// promise pending forever: the refresh that fired it never settles, its Data
+// Health row keeps reporting the last good stamp instead of going red, and each
+// later tick stacks another dead request behind it. Installed once here rather
+// than at ~70 call sites so no future fetch can be forgotten. Requests that
+// bring their own signal (MapLibre's tile cancellation) are passed through
+// untouched — MapLibre aborts those itself when a tile leaves the viewport.
+const FETCH_TIMEOUT_MS = 45000;
+(function installFetchDeadline() {
+    if (typeof AbortSignal === 'undefined' || typeof AbortSignal.timeout !== 'function') return;
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+        if (init && init.signal) return nativeFetch(input, init);
+        return nativeFetch(input, Object.assign({}, init, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }));
+    };
+})();
+
+// Collapse overlapping refreshes of the same feed. The fast pollers (15 s
+// warning/watch sweeps) can otherwise re-enter while the previous sweep is
+// still in flight on a slow link, doubling load and interleaving two sets of
+// results into the same layer.
+const _refreshInFlight = new Set();
+function guardedRefresh(key, fn) {
+    if (_refreshInFlight.has(key)) return Promise.resolve();
+    _refreshInFlight.add(key);
+    return Promise.resolve()
+        .then(fn)
+        .catch(e => { addLiveLog(`REFRESH (${key}): ${e.message}`, '#ff3333'); })
+        .finally(() => _refreshInFlight.delete(key));
+}
+
 // ═══ GLOBAL STATE ═══
 const maps = {};
 let activePaneId = 't1-1';
@@ -40,7 +72,18 @@ const USE_SUPER_RES_RADAR = false;
 let animLastRi = -1;
 let animL3Frames = {};      // paneId -> [{image, coordinates, time, label}] (NODD L3 loop frames)
 let animL3Count = 0;        // longest per-pane L3 frame list in the current loop
-let animLastLi = -1;
+let animL3Last = {};        // paneId -> last rendered L3 frame index
+let loopDirection = 1;      // +1 forward, -1 reverse (used by Rock mode)
+// ── Time-match tables (AWIPS-style) ──
+// masterFrame index -> that stream's frame index. Streams run at different
+// cadences (5-min radar vs 10-min satellite vs ~6-min L3 volume scans), so
+// stepping every stream by position marched the coarse ones ahead of the fine
+// ones and then froze them on their newest frame. These tables map each master
+// time to the newest frame at or before it, so every stream shows the data that
+// was actually valid at the frame's time.
+let animSatIndex = [];
+let animRadIndex = [];
+let animL3Index = {};       // paneId -> index table
 let preAnimVisibility = {}; // Stores layer visibility before loop starts
 // Default radar mode = National Mosaic so "Reflectivity" shows CONUS, not a distant single site.
 // (A real site code here switches that pane to single-site products via the SITE selector.)
@@ -3145,7 +3188,7 @@ function initFrontalPipIcons(map) {
         const validTimeLocal = validDate.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, month: 'short', day: 'numeric', timeZoneName: 'short' });
         const validTimeUTC = validDate.toISOString().substring(11, 16) + 'Z';
         const html = `<div style="font-family:'Courier New',monospace;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;line-height:1.6;">
-            <div style="font-weight:bold;color:#00e5ff;font-size:13px;margin-bottom:2px;">${p.station || ''} — ${p.name || 'Unknown'}${p.state ? ', ' + p.state : ''}</div>
+            <div style="font-weight:bold;color:#00e5ff;font-size:13px;margin-bottom:2px;">${esc(p.station || '')} — ${esc(p.name || 'Unknown')}${p.state ? ', ' + esc(p.state) : ''}</div>
             <div style="color:#666;font-size:10px;margin-bottom:6px;">${validTimeLocal} (${validTimeUTC})</div>
             <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;">
                 <span style="color:#888;">Temp:</span><span style="color:#ff4444;">${p.tmpf != null ? Math.round(p.tmpf) + '°F' : 'M'}</span>
@@ -3154,11 +3197,11 @@ function initFrontalPipIcons(map) {
                 <span style="color:#888;">Wind:</span><span>${windDir} ${windSpd}${gustTxt}</span>
                 <span style="color:#888;">Visibility:</span><span>${p.vsby != null ? p.vsby + ' mi' : 'M'}</span>
                 <span style="color:#888;">Altimeter:</span><span>${p.alti != null ? p.alti.toFixed(2) + ' inHg (' + Math.round(p.alti * 33.8639) + ' mb)' : 'M'}</span>
-                <span style="color:#888;">Sky:</span><span>${sky}</span>
-                ${wx ? `<span style="color:#888;">Wx:</span><span style="color:#ffb300;">${wx}</span>` : ''}
+                <span style="color:#888;">Sky:</span><span>${esc(sky)}</span>
+                ${wx ? `<span style="color:#888;">Wx:</span><span style="color:#ffb300;">${esc(wx)}</span>` : ''}
                 ${p.feel != null ? `<span style="color:#888;">Feels Like:</span><span>${Math.round(p.feel)}°F</span>` : ''}
             </div>
-            ${p.raw ? `<div style="border-top:1px solid #333;margin-top:6px;padding-top:4px;color:#888;font-size:10px;word-break:break-all;">${p.raw}</div>` : ''}
+            ${p.raw ? `<div style="border-top:1px solid #333;margin-top:6px;padding-top:4px;color:#888;font-size:10px;word-break:break-all;">${esc(p.raw)}</div>` : ''}
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -3182,7 +3225,7 @@ function initFrontalPipIcons(map) {
         const vtDate = p.valid_time ? new Date(p.valid_time) : null;
         const validStr = vtDate ? `${vtDate.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric', timeZoneName: 'short' })} (${vtDate.toISOString().substring(11, 16)}Z)` : 'Unknown';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;">
-            <div style="font-weight:bold;color:${aqiColor(overall)};font-size:13px;margin-bottom:4px;">${p.site_name || 'Monitor'}</div>
+            <div style="font-weight:bold;color:${aqiColor(overall)};font-size:13px;margin-bottom:4px;">${esc(p.site_name || 'Monitor')}</div>
             <div style="color:#888;margin-bottom:6px;">${validStr}</div>
             <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin-bottom:6px;">
                 <span style="color:#888;">Ozone AQI:</span><span style="color:${ozAqi > 0 ? aqiColor(ozAqi) : '#666'}">${ozTxt}</span>
@@ -3220,12 +3263,12 @@ function initFrontalPipIcons(map) {
         const sensor = p.sensor || 'VIIRS';
         const satellite = p.satellite || 'Unknown';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;">
-            <div style="font-weight:bold;color:#ff6600;font-size:13px;margin-bottom:4px;">🔥 ${sensor} Fire Detection</div>
-            <div style="color:#aaa;margin-bottom:2px;">Satellite: <b>${satellite}</b></div>
+            <div style="font-weight:bold;color:#ff6600;font-size:13px;margin-bottom:4px;">🔥 ${esc(sensor)} Fire Detection</div>
+            <div style="color:#aaa;margin-bottom:2px;">Satellite: <b>${esc(satellite)}</b></div>
             <div style="color:#888;margin-bottom:6px;">${dt ? new Date(dt).toUTCString() : 'Recent'}</div>
-            <div><span style="color:#888;">Confidence:</span> ${confLabel} (${conf}%)</div>
-            <div><span style="color:#888;">Brightness:</span> ${bright}K</div>
-            <div><span style="color:#888;">FRP:</span> ${frp} MW</div>
+            <div><span style="color:#888;">Confidence:</span> ${esc(confLabel)} (${esc(conf)}%)</div>
+            <div><span style="color:#888;">Brightness:</span> ${esc(bright)}K</div>
+            <div><span style="color:#888;">FRP:</span> ${esc(frp)} MW</div>
             <div style="color:#555;margin-top:4px;">${coord ? coord[1].toFixed(4) + '°N, ' + Math.abs(coord[0]).toFixed(4) + '°W' : ''}</div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
@@ -3352,7 +3395,7 @@ function initFrontalPipIcons(map) {
             `<div style="display:flex;justify-content:space-between;gap:14px;"><span style="color:#8b97a3;">${k}</span><span style="color:#fff;">${v}</span></div>` : '';
         const html = `
             <div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:230px;">
-                <div style="color:#7fff9e;font-weight:700;margin-bottom:4px;">✈ ${p.callsign} · ${p.storm}<span style="color:#8b97a3;font-weight:400;"> · ${p.timeStr}Z</span></div>
+                <div style="color:#7fff9e;font-weight:700;margin-bottom:4px;">✈ ${esc(p.callsign)} · ${esc(p.storm)}<span style="color:#8b97a3;font-weight:400;"> · ${esc(p.timeStr)}Z</span></div>
                 ${row('Flight-level wind', p.flWind)}
                 ${row('Peak FL wind (10s)', p.peak != null ? p.peak + ' kt' : null)}
                 ${row('SFMR sfc wind', p.sfmr != null ? p.sfmr + ' kt' : null)}
@@ -3503,8 +3546,10 @@ function initFrontalPipIcons(map) {
             
             features.forEach((f, idx) => {
                 const p = f.properties || {};
-                const desc = (p.description || '').replace(/\n/g, '<br>');
-                const instr = (p.instruction || '').replace(/\n/g, '<br>');
+                // Escape before the newline->\<br\> pass, so the only markup that
+                // survives into the popup is the line break we put there.
+                const desc = esc(p.description || '').replace(/\n/g, '<br>');
+                const instr = esc(p.instruction || '').replace(/\n/g, '<br>');
                 const evtColor = getEventColor(p.event);
                 // Detect IBW threat level from API response parameters
                 const apiParams = p.parameters || {};
@@ -3519,9 +3564,9 @@ function initFrontalPipIcons(map) {
                 else if (popupIsPDS) threatBadge = '<span style="display:inline-block;background:#ff8800;color:#000;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:3px;margin-left:8px;">PDS</span>';
                 if (idx > 0) combinedHtml += `<hr style="border:0;border-top:1px solid #333;margin:12px 0;">`;
                 combinedHtml += `
-                    <div style="font-weight:bold;color:${evtColor};font-size:14px;margin-bottom:4px;">${p.event || 'Weather Alert'}${threatBadge}</div>
-                    <div style="color:#888;margin-bottom:4px;">${p.senderName || ''}</div>
-                    <div style="margin-bottom:6px;font-weight:bold;color:#fff;">${p.headline || ''}</div>
+                    <div style="font-weight:bold;color:${evtColor};font-size:14px;margin-bottom:4px;">${esc(p.event || 'Weather Alert')}${threatBadge}</div>
+                    <div style="color:#888;margin-bottom:4px;">${esc(p.senderName || '')}</div>
+                    <div style="margin-bottom:6px;font-weight:bold;color:#fff;">${esc(p.headline || '')}</div>
                     <div style="color:#ffb300;font-size:10px;margin-bottom:8px;">Expires: ${p.expires ? new Date(p.expires).toUTCString() : 'Unknown'}</div>
                     ${desc ? `<div style="padding-top:6px;margin-bottom:6px;line-height:1.5;white-space:pre-wrap;">${desc}</div>` : ''}
                     ${instr ? `<div style="border-top:1px solid #333;padding-top:6px;color:#00e5ff;line-height:1.5;white-space:pre-wrap;"><b>PRECAUTIONARY/PREPAREDNESS ACTIONS:</b><br>${instr}</div>` : ''}
@@ -3560,7 +3605,7 @@ function initFrontalPipIcons(map) {
         const link = p.link || '';
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
             <div style="font-weight:bold;color:#33c27a;font-size:13px;margin-bottom:4px;">WPC Mesoscale Precip Discussion #${p.num || '?'}</div>
-            <div style="color:#cfcfcf;margin-bottom:6px;">${p.concern || ''}</div>
+            <div style="color:#cfcfcf;margin-bottom:6px;">${esc(p.concern || '')}</div>
             <div style="color:#888;margin-bottom:8px;">Valid ${fmtZ(p.issue)} – ${fmtZ(p.expire)}</div>
             ${link ? `<a href="${link}" target="_blank" style="display:inline-block;background:#333;color:white;padding:4px 8px;border-radius:2px;text-decoration:none;font-size:10px;">VIEW FULL DISCUSSION →</a>` : ''}
         </div>`;
@@ -7236,11 +7281,19 @@ async function renderGaugeHydrograph(gaugeId, cats) {
         slot.innerHTML = svg;
         slot.style.color = '';
     } catch (e) {
-        // Fall back to the AHPS-rendered image if we have one.
+        // Fall back to the AHPS-rendered image if we have one. The hide-on-error
+        // handler is attached rather than inlined so script-src can stay strict.
         const img = slot.getAttribute('data-img');
-        slot.innerHTML = img
-            ? `<img src="${esc(img)}" style="width:100%; max-width:420px; border-radius:3px; border:1px solid rgba(0,229,255,0.15);" onerror="this.style.display='none'" />`
-            : `<span style="color:#6b7a88;">Hydrograph unavailable.</span>`;
+        if (img) {
+            slot.innerHTML = '';
+            const el = document.createElement('img');
+            el.src = img;
+            el.style.cssText = 'width:100%; max-width:420px; border-radius:3px; border:1px solid rgba(0,229,255,0.15);';
+            el.addEventListener('error', () => { el.style.display = 'none'; });
+            slot.appendChild(el);
+        } else {
+            slot.innerHTML = `<span style="color:#6b7a88;">Hydrograph unavailable.</span>`;
+        }
     }
 }
 
@@ -7992,6 +8045,20 @@ function rebuildWfoFilter() {
 // SECTION 11: ANIMATION ENGINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Build a master-frame -> stream-frame lookup: for each master time, the newest
+// stream frame valid at or before it. Both lists must be sorted oldest-first.
+// A master time earlier than the stream's first frame clamps to frame 0 rather
+// than rendering nothing, so a pane never goes blank at the head of the loop.
+function buildTimeIndex(masterTimes, frameTimes) {
+    const table = [];
+    let j = 0;
+    for (const mt of masterTimes) {
+        while (j + 1 < frameTimes.length && frameTimes[j + 1] <= mt) j++;
+        table.push(j);
+    }
+    return table;
+}
+
 async function startAnimation() {
     if (isPlaying) return;
     isPlaying = true;
@@ -8133,7 +8200,7 @@ async function startAnimation() {
     // data-URLs, so each becomes an image source stepped like the other streams.
     animL3Frames = {};
     animL3Count = 0;
-    animLastLi = -1;
+    animL3Last = {};
     if (showL3) {
         const l3Want = Math.max(4, Math.min(10, Math.floor(durationMin / 5) || 4));
         const l3Panes = loopMaps.filter(([pid, m]) => isLayerVisible(m, 'radar-l3-layer') && paneL3[pid]);
@@ -8156,12 +8223,24 @@ async function startAnimation() {
         addLiveLog(`LOOP: L3 frames ready (${animL3Count} scans)`, '#00ff88');
     }
 
+    // ── Master timeline ──
+    // The finest-cadence stream sets the timeline; every other stream is then
+    // time-matched onto it below. (The L3 branch used to stamp every master
+    // frame with `new Date()`, which threw away the scan times the match needs.)
     let masterFrames = satFrames.length >= radFrames.length ? satFrames : radFrames;
     if (animL3Count > masterFrames.length) {
         const longest = Object.values(animL3Frames).find(f => f.length === animL3Count) || [];
-        masterFrames = longest.map(f => ({ time: new Date(), label: f.label }));
+        masterFrames = longest.map(f => ({ time: new Date(f.time), label: f.label }));
     }
     const totalFrames = masterFrames.length;
+
+    const masterTimes = masterFrames.map(f => +f.time);
+    animSatIndex = buildTimeIndex(masterTimes, satFrames.map(f => +f.time));
+    animRadIndex = buildTimeIndex(masterTimes, radFrames.map(f => +f.time));
+    animL3Index = {};
+    Object.entries(animL3Frames).forEach(([pid, frames]) => {
+        animL3Index[pid] = buildTimeIndex(masterTimes, frames.map(f => +new Date(f.time)));
+    });
 
     if (totalFrames === 0) {
         addLiveLog('LOOP: No active products to animate. Enable Radar or Satellite first.', '#ff3333');
@@ -8283,6 +8362,8 @@ async function startAnimation() {
     animRadFrames = radFrames;
     animLastSi = -1;
     animLastRi = -1;
+    animL3Last = {};
+    loopDirection = 1;
     animationFrameIndex = 0;
     animationFrames = masterFrames;
 
@@ -8326,12 +8407,29 @@ async function startAnimation() {
 function advanceLoopTick() {
     if (!isPlaying) return;
     renderCurrentFrame();
-    animationFrameIndex++;
-    if (animationFrameIndex >= animationFrames.length) animationFrameIndex = 0;
 
-    let speedMs = parseInt(document.getElementById('loop-speed').value) || 400;
+    const last = animationFrames.length - 1;
+    // The frame just painted. Dwelling on the newest one gives the eye time to
+    // read the current data before the loop snaps back to the oldest frame —
+    // without it a fast loop reads as a blur with no reference point.
+    const atNewest = animationFrameIndex >= last;
+    const atOldest = animationFrameIndex <= 0;
+
+    if (document.getElementById('loop-mode')?.value === 'rock') {
+        // Rocking: reverse at each end instead of wrapping, so motion stays
+        // continuous and you can watch a feature advance and retreat.
+        if (atNewest) loopDirection = -1;
+        else if (atOldest) loopDirection = 1;
+        animationFrameIndex += loopDirection;
+    } else {
+        animationFrameIndex = atNewest ? 0 : animationFrameIndex + 1;
+    }
+    animationFrameIndex = Math.max(0, Math.min(animationFrameIndex, last));
+
+    const speedMs = parseInt(document.getElementById('loop-speed').value) || 400;
     const holdMs = Math.max(speedMs, 300);
-    animationTimer = setTimeout(advanceLoopTick, holdMs);
+    const dwellMs = parseInt(document.getElementById('loop-dwell')?.value ?? '0') || 0;
+    animationTimer = setTimeout(advanceLoopTick, atNewest ? holdMs + dwellMs : holdMs);
 }
 
 function renderCurrentFrame() {
@@ -8344,7 +8442,7 @@ function renderCurrentFrame() {
     // Toggle satellite frame opacity with 60ms retention buffer to eliminate black-out flicker
     // Non-active frames stay at 0.01 (not 0) to keep MapLibre loading their tiles
     if (animSatFrames.length > 0) {
-        const si = Math.min(animationFrameIndex, animSatFrames.length - 1);
+        const si = animSatIndex[animationFrameIndex] ?? Math.min(animationFrameIndex, animSatFrames.length - 1);
         if (si !== animLastSi) {
             const prevSi = animLastSi;
             Object.values(maps).forEach(m => {
@@ -8365,7 +8463,7 @@ function renderCurrentFrame() {
 
     // Toggle radar frame opacity with 60ms retention buffer to eliminate black-out flicker
     if (animRadFrames.length > 0) {
-        const ri = Math.min(animationFrameIndex, animRadFrames.length - 1);
+        const ri = animRadIndex[animationFrameIndex] ?? Math.min(animationFrameIndex, animRadFrames.length - 1);
         if (ri !== animLastRi) {
             const prevRi = animLastRi;
             Object.values(maps).forEach(m => {
@@ -8385,35 +8483,37 @@ function renderCurrentFrame() {
     }
 
     // Toggle NODD L3 frame opacity — per-pane frame lists (each pane loops its
-    // own product/scans), clamped to that pane's own frame count.
+    // own product/scans). Volume scans don't line up across sites, so each pane
+    // is time-matched independently and tracks its own last-rendered index.
     if (animL3Count > 0) {
-        const li = Math.min(animationFrameIndex, animL3Count - 1);
-        if (li !== animLastLi) {
-            const prevLi = animLastLi;
-            Object.entries(maps).forEach(([pid, m]) => {
-                const cnt = (animL3Frames[pid] || []).length;
-                if (!m || !cnt) return;
-                const idx = Math.min(li, cnt - 1);
-                const prevIdx = prevLi >= 0 ? Math.min(prevLi, cnt - 1) : -1;
-                if (idx === prevIdx) return;
-                if (m.getLayer(`anim-l3-lyr-${idx}`)) {
-                    m.setPaintProperty(`anim-l3-lyr-${idx}`, 'raster-opacity', 0.85);
-                }
-                if (prevIdx >= 0) {
-                    setTimeout(() => {
-                        if (m && m.getLayer(`anim-l3-lyr-${prevIdx}`)) {
-                            m.setPaintProperty(`anim-l3-lyr-${prevIdx}`, 'raster-opacity', 0.01);
-                        }
-                    }, 60);
-                }
-            });
-            animLastLi = li;
-        }
+        Object.entries(maps).forEach(([pid, m]) => {
+            const cnt = (animL3Frames[pid] || []).length;
+            if (!m || !cnt) return;
+            const table = animL3Index[pid];
+            const idx = table
+                ? (table[animationFrameIndex] ?? cnt - 1)
+                : Math.min(animationFrameIndex, cnt - 1);
+            const prevIdx = animL3Last[pid] ?? -1;
+            if (idx === prevIdx) return;
+            if (m.getLayer(`anim-l3-lyr-${idx}`)) {
+                m.setPaintProperty(`anim-l3-lyr-${idx}`, 'raster-opacity', 0.85);
+            }
+            if (prevIdx >= 0) {
+                setTimeout(() => {
+                    if (m && m.getLayer(`anim-l3-lyr-${prevIdx}`)) {
+                        m.setPaintProperty(`anim-l3-lyr-${prevIdx}`, 'raster-opacity', 0.01);
+                    }
+                }, 60);
+            }
+            animL3Last[pid] = idx;
+        });
     }
 
     // Update per-pane labels with each pane's own channel/product info
-    const satFrame = animSatFrames.length > 0 ? animSatFrames[Math.min(animationFrameIndex, animSatFrames.length - 1)] : null;
-    const radFrame = animRadFrames.length > 0 ? animRadFrames[Math.min(animationFrameIndex, animRadFrames.length - 1)] : null;
+    const satFrame = animSatFrames.length > 0
+        ? animSatFrames[animSatIndex[animationFrameIndex] ?? animSatFrames.length - 1] : null;
+    const radFrame = animRadFrames.length > 0
+        ? animRadFrames[animRadIndex[animationFrameIndex] ?? animRadFrames.length - 1] : null;
     Object.keys(maps).forEach(paneId => {
         const el = document.getElementById(`radar-ts-${paneId}`);
         if (!el) return;
@@ -8438,7 +8538,11 @@ function renderCurrentFrame() {
         }
         const paneL3FramesArr = animL3Frames[paneId] || [];
         if (paneL3FramesArr.length) {
-            parts.push(paneL3FramesArr[Math.min(animationFrameIndex, paneL3FramesArr.length - 1)].label);
+            const l3Table = animL3Index[paneId];
+            const l3i = l3Table
+                ? (l3Table[animationFrameIndex] ?? paneL3FramesArr.length - 1)
+                : Math.min(animationFrameIndex, paneL3FramesArr.length - 1);
+            parts.push(paneL3FramesArr[l3i].label);
         }
         el.textContent = parts.length > 0 ? `LOOP | ${parts.join(' + ')}` : 'LOOP';
     });
@@ -8533,7 +8637,11 @@ function stopAnimation() {
     animationFrameIndex = 0;
     animL3Frames = {};
     animL3Count = 0;
-    animLastLi = -1;
+    animL3Last = {};
+    loopDirection = 1;
+    animSatIndex = [];
+    animRadIndex = [];
+    animL3Index = {};
 
     // Reset timeline progress bar
     const progressBar = document.querySelector('.timeline-progress');
@@ -9200,6 +9308,89 @@ function initCollapsibleGroups() {
     const collapseBtn = document.getElementById('collapse-all-groups');
     if (expandBtn) expandBtn.addEventListener('click', () => setAll(false));
     if (collapseBtn) collapseBtn.addEventListener('click', () => setAll(true));
+}
+
+// Live filter over the product tree. 136 products across 18 mostly-collapsed
+// groups is more than is practical to find by scrolling, and unlike the group
+// headers this needs no prior knowledge of which category a product lives in.
+// Matching is a plain case-insensitive substring test against the product's
+// label plus its category name, so "vel" finds Velocity and "trop" finds
+// everything under NHC TROPICAL.
+function initProductFilter() {
+    const input = document.getElementById('product-filter');
+    const browser = document.querySelector('.product-browser');
+    const clearBtn = document.getElementById('product-filter-clear');
+    const emptyMsg = document.getElementById('product-filter-empty');
+    if (!input || !browser) return;
+
+    const groups = Array.from(browser.querySelectorAll('.category-group')).map(g => {
+        const label = (g.querySelector('.category-label')?.textContent || '').trim();
+        return {
+            el: g,
+            cat: label.toLowerCase(),
+            items: Array.from(g.querySelectorAll(':scope > .product-item')).map(el => ({
+                el,
+                // The label span; the trailing badge (LIVE/NODD/…) is a sibling
+                // and is deliberately not part of the match text.
+                span: el.querySelector('span'),
+                text: (el.querySelector('span')?.textContent || '').trim(),
+            })),
+        };
+    });
+
+    // Cache the original label markup so highlighting can be undone cleanly.
+    groups.forEach(g => g.items.forEach(it => { if (it.span) it.span.dataset.orig = it.span.textContent; }));
+
+    const clearHighlight = it => {
+        if (it.span && it.span.dataset.orig != null) it.span.textContent = it.span.dataset.orig;
+    };
+
+    const apply = q => {
+        const query = q.trim().toLowerCase();
+        if (clearBtn) clearBtn.style.display = query ? 'block' : 'none';
+
+        if (!query) {
+            browser.classList.remove('filtering');
+            groups.forEach(g => {
+                g.el.classList.remove('filter-hit');
+                g.items.forEach(it => { it.el.classList.remove('filter-miss'); clearHighlight(it); });
+            });
+            if (emptyMsg) emptyMsg.style.display = 'none';
+            return;
+        }
+
+        browser.classList.add('filtering');
+        let total = 0;
+        groups.forEach(g => {
+            const catMatch = g.cat.includes(query);
+            let hits = 0;
+            g.items.forEach(it => {
+                const hit = catMatch || it.text.toLowerCase().includes(query);
+                it.el.classList.toggle('filter-miss', !hit);
+                clearHighlight(it);
+                if (hit) {
+                    hits++;
+                    // Highlight the matched run in the label itself.
+                    const i = it.text.toLowerCase().indexOf(query);
+                    if (i >= 0 && it.span) {
+                        it.span.innerHTML =
+                            esc(it.text.slice(0, i)) +
+                            '<mark>' + esc(it.text.slice(i, i + query.length)) + '</mark>' +
+                            esc(it.text.slice(i + query.length));
+                    }
+                }
+            });
+            g.el.classList.toggle('filter-hit', hits > 0);
+            total += hits;
+        });
+        if (emptyMsg) emptyMsg.style.display = total ? 'none' : 'block';
+    };
+
+    input.addEventListener('input', () => apply(input.value));
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { input.value = ''; apply(''); input.blur(); }
+    });
+    if (clearBtn) clearBtn.addEventListener('click', () => { input.value = ''; apply(''); input.focus(); });
 }
 
 // Fold the whole left menu off-screen to give the map full width.
@@ -12806,6 +12997,84 @@ function initPlayButton() {
     if (stopBtn) stopBtn.addEventListener('click', stopAnimation);
     if (prevBtn) prevBtn.addEventListener('click', stepPrevFrame);
     if (nextBtn) nextBtn.addEventListener('click', stepNextFrame);
+
+    initLoopKeys();
+}
+
+// AWIPS D2D is driven from the keyboard during an event — you step frames
+// without ever reaching for the mouse. Arrow keys are only claimed while a loop
+// is actually running, so with no loop up they still pan the map the way
+// MapLibre expects.
+function initLoopKeys() {
+    const typing = el => {
+        if (!el) return false;
+        const tag = el.tagName;
+        return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+    };
+
+    document.addEventListener('keydown', e => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (typing(e.target)) return;
+        // Don't steal keys from an open modal. Tested by layout rather than by
+        // matching the style attribute: the markup writes `display:none;` with
+        // no space, so an attribute-substring test silently matches nothing and
+        // would treat every hidden modal as open.
+        const modalOpen = Array.from(document.querySelectorAll('.modal-overlay'))
+            .some(el => el.offsetParent !== null);
+        if (modalOpen) return;
+
+        const looping = isPlaying || isPaused;
+
+        switch (e.key) {
+            case ' ':
+            case 'Spacebar':
+                e.preventDefault();
+                if (isPlaying) pauseAnimation();
+                else if (isPaused) resumeAnimation();
+                else startAnimation();
+                break;
+            case 'ArrowLeft':
+                if (!looping) return;
+                e.preventDefault();
+                stepPrevFrame();
+                break;
+            case 'ArrowRight':
+                if (!looping) return;
+                e.preventDefault();
+                stepNextFrame();
+                break;
+            case 'Home':
+                if (!looping) return;
+                e.preventDefault();
+                if (isPlaying) pauseAnimation();
+                animationFrameIndex = 0;
+                renderCurrentFrame();
+                break;
+            case 'End':
+                if (!looping) return;
+                e.preventDefault();
+                if (isPlaying) pauseAnimation();
+                animationFrameIndex = Math.max(0, animationFrames.length - 1);
+                renderCurrentFrame();
+                break;
+            case 'Escape':
+                if (!looping) return;
+                stopAnimation();
+                break;
+            default:
+                // 1-8 focus the matching pane in the active tab, like D2D's
+                // numbered panel selection. Routed through the pane's own click
+                // handler so selection stays in one place, and skipped for panes
+                // the current layout isn't showing.
+                if (/^[1-8]$/.test(e.key)) {
+                    const paneEl = document.querySelector(`.pane[data-pane="${activeTabId}-${e.key}"]`);
+                    if (paneEl && paneEl.offsetParent !== null) {
+                        e.preventDefault();
+                        paneEl.click();
+                    }
+                }
+        }
+    });
 }
 
 
@@ -12830,7 +13099,22 @@ function initDebugToggle() {
         const logContainer = document.getElementById('log-container');
         if (!logContainer) return;
         logContainer.classList.toggle('collapsed');
+        try {
+            localStorage.setItem('fxnet_log_open',
+                logContainer.classList.contains('collapsed') ? '0' : '1');
+        } catch (e) {}
     });
+}
+
+// The log panel holds 150px of the sidebar when open, which is most of what the
+// product tree has to work with. It ships collapsed; this restores the user's
+// choice if they've opened it before.
+function restoreLogPanelState() {
+    const logContainer = document.getElementById('log-container');
+    if (!logContainer) return;
+    let open = null;
+    try { open = localStorage.getItem('fxnet_log_open'); } catch (e) {}
+    if (open === '1') logContainer.classList.remove('collapsed');
 }
 
 
@@ -12854,6 +13138,14 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 25, 2026', items: [
+        '<b>Loops now time-match their products.</b> Streams publish at different cadences, and the loop used to step every one of them by position — so a 10-minute satellite over 5-minute radar ran at double speed and then froze on its newest image while the radar kept playing. For the back half of a 3-hour loop you were looking at current cloud tops over 90-minute-old reflectivity. Each stream is now matched to the master timeline by <b>valid time</b>, showing the frame that was genuinely current at that moment. Measured on a live 3-hour radar + GIBS loop, worst-case mismatch dropped from 151 minutes to 41 — and the 41 is real satellite publication lag, correctly held rather than faked.',
+        'Loop controls gained <b>MODE</b> (Forward or Rock, which reverses at each end instead of wrapping) and <b>DWELL</b> (extra hold on the newest frame so the current data registers before the loop restarts).',
+        '<b>Keyboard loop control</b>, the way D2D works during an event: <b>Space</b> play/pause, <b>←/→</b> step frames, <b>Home/End</b> jump to oldest/newest, <b>Esc</b> stop, <b>1–8</b> select a panel. Arrow keys are only claimed while a loop is running, so they still pan the map otherwise.',
+        '<b>Product filter.</b> A search box above the sidebar tree filters all 136 products by name or category, auto-opening matching groups and highlighting the match — no more hunting through 18 collapsed categories.',
+        'The diagnostic log now starts <b>collapsed</b> and remembers your choice. It was holding 150px of sidebar permanently; the product tree now gets roughly three times the room it had.',
+        'Hardening: every network call now has a 45-second deadline (a hung upstream used to leave a request pending forever and stack more behind it), the fast warning/watch pollers no longer overlap themselves, feed-supplied text is escaped consistently everywhere it reaches a popup, and the app ships a strict <b>Content-Security-Policy</b>. Server-side, the proxies no longer echo internal error detail to the browser, and a dead unauthenticated logging endpoint was removed.'
+    ]},
     { date: 'Jul 21, 2026 (update 2)', items: [
         'Active Storms &amp; Cones no longer depends on NOAA’s mirror staying healthy. When the cross-check finds NOAA’s tropical GIS service behind NHC (or unreachable), FX-Net now <b>automatically fails over to NHC’s own advisory graphics</b> — the same cone, forecast track, and coastal watches/warnings, pulled straight from the National Hurricane Center and regenerated on every advisory including intermediates. The badge reads <b>NHC DIRECT</b> in green, hovering it names the advisories in use, and the popup adds a “Source: NHC advisory graphics (direct)” line. It reverses automatically once NOAA catches up, and dissipated storms lingering in NOAA’s feed drop off while on NHC-direct. Verified live on Jul 21 with NOAA ~22 h stale: the map went from TD Two #5 to Bertha #8A and Fausto #10.',
         'Coastal watch/warning segments are now colored by hazard where the source identifies them — yellow TS Watch, blue TS Warning, pink Hurricane Watch, red Hurricane Warning — instead of all-red.',
@@ -13077,6 +13369,8 @@ function initWhatsNew() {
 const USER_GUIDE = [
     { id: 'start', title: 'Getting Started', html: `
         <p>FX-Net NextGen is a browser-based forecaster workstation: an interactive map (or several) with live NWS/NOAA data layered on top. Everything is driven from the <b>product sidebar</b> on the left — click a product to turn it on, click it again to turn it off.</p>
+        <h3>Finding a product</h3>
+        <p>The <b>filter box</b> at the top of the sidebar searches all products by name or category — type “vel” for velocity products, “trop” for everything tropical. Matching groups open automatically regardless of whether they were collapsed, and the matched text is highlighted. Clear the box (or press <b>Esc</b> in it) to return to the full tree.</p>
         <h3>Panels (panes)</h3>
         <ul>
             <li>The layout buttons in the bottom toolbar switch between <b>1, 2, 4, and 8 panel</b> displays.</li>
@@ -13087,7 +13381,7 @@ const USER_GUIDE = [
         <h3>Radar site selection</h3>
         <p>The <b>SITE selector</b> (top right) switches the active panel between the <b>National Mosaic</b> and any single NEXRAD site. Site-specific products (velocity, dual-pol, tilts) need a site selected.</p>
         <h3>The diagnostic log</h3>
-        <p>The <b>DIAGNOSTIC LOG</b> (bottom of the sidebar) narrates what the workstation is doing — data loads, loop status, errors. When something seems stuck, look there first.</p>` },
+        <p>The <b>DIAGNOSTIC LOG</b> (bottom of the sidebar) narrates what the workstation is doing — data loads, loop status, errors. When something seems stuck, look there first. It starts collapsed so the product tree gets the room; the <b>bug icon</b> in the bottom toolbar or the log's own header opens it, and it stays however you leave it.</p>` },
 
     { id: 'tabs', title: 'Workspace Tabs & Autosave', html: `
         <p>The tab bar across the top works like browser tabs — each tab is an independent workspace with its own panel layout and products.</p>
@@ -13124,10 +13418,24 @@ const USER_GUIDE = [
         <p>The <b>play button</b> in the bottom toolbar animates whatever the current tab’s panels are showing — radar, satellite, and dual-pol products all loop together, each panel with its own imagery.</p>
         <ul>
             <li><b>DURATION</b> — how far back the loop reaches. <b>STEP</b> — minutes between frames. <b>SPEED</b> — playback rate.</li>
+            <li><b>MODE</b> — <i>Forward</i> wraps from the newest frame back to the oldest; <i>Rock</i> reverses direction at each end so motion stays continuous.</li>
+            <li><b>DWELL</b> — extra hold on the newest frame before the loop wraps, so the current data registers instead of flashing past.</li>
             <li>The loop <b>waits until every panel has its frames loaded</b>, shows the first frame while loading, then starts all panels in sync (the log announces “rolling”).</li>
             <li><b>Dual-pol/SRM panels</b> preload their last ~10 volume scans from the NEXRAD archive (a few seconds of “preloading” in the log) and step through real scan times.</li>
             <li>Pause, step frame-by-frame with the arrows, or stop to return to live data.</li>
             <li>Loops are <b>scoped to their tab</b> — switching tabs stops the loop and restores live layers.</li>
+        </ul>
+        <h3>Products stay time-matched</h3>
+        <p>Streams publish at different cadences — radar every 5 minutes, GIBS satellite every 10, dual-pol on its own volume-scan schedule. The loop builds a master timeline from the finest-cadence stream and then shows, for every other product, <b>the frame that was actually valid at that time</b>. A 10-minute satellite image simply holds for two radar steps rather than racing ahead.</p>
+        <p>When a stream's newest frame is older than the master time — satellite imagery often publishes 30–40 minutes behind — it holds on that newest frame rather than inventing one, and the per-panel label always reports the real time of what you are looking at. If the labels disagree, that difference is genuine publication lag, not drift.</p>
+        <h3>Keyboard</h3>
+        <p>Loop control is keyboard-first, the way D2D works during an event:</p>
+        <ul>
+            <li><b>Space</b> — play / pause (starts a loop if none is running).</li>
+            <li><b>← / →</b> — step one frame back / forward (pauses first). Claimed only while a loop is up; with no loop running the arrows pan the map as usual.</li>
+            <li><b>Home / End</b> — jump to the oldest / newest frame.</li>
+            <li><b>Esc</b> — stop the loop and return to live data.</li>
+            <li><b>1–8</b> — make that panel active, if the current layout shows it.</li>
         </ul>` },
 
     { id: 'severe', title: 'Severe Weather — SPC', html: `
@@ -14537,7 +14845,7 @@ function init() {
     // Start warning watchdog (check every 15 seconds for rapid convective updates)
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');
     checkNewWarnings();
-    setInterval(checkNewWarnings, 15 * 1000);
+    setInterval(() => guardedRefresh('warnings', checkNewWarnings), 15 * 1000);
 
     // NEXRAD Level III (NODD) — poll for new scans on any pane showing an L3 overlay
     setInterval(() => {
@@ -14596,7 +14904,7 @@ function init() {
 
     // Start watch vector monitoring simultaneously with warnings (15s polling for zero lag)
     checkNewWatches();
-    setInterval(checkNewWatches, 15 * 1000);
+    setInterval(() => guardedRefresh('watches', checkNewWatches), 15 * 1000);
 
     // Load Great Lakes vector boundaries
     fetchGreatLakes();
@@ -14641,5 +14949,23 @@ function init() {
     addLiveLog('FX-Net NextGen READY', '#00ff88');
 }
 
+// Page-level wiring that used to live in index.html's trailing inline <script>.
+// Moved here so script-src can drop 'unsafe-inline' — see boot.js.
+function initPageChrome() {
+    try { lucide.createIcons(); } catch (_) {}
+    if (window.location.protocol === 'file:') {
+        const warn = document.getElementById('cors-warning');
+        if (warn) warn.style.display = 'block';
+    }
+    initProductFilter();
+    restoreLogPanelState();
+    const logHeader = document.getElementById('log-header');
+    if (logHeader) {
+        logHeader.addEventListener('click', () => {
+            logHeader.parentElement.classList.toggle('collapsed');
+        });
+    }
+}
+
 // Boot on DOM ready
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => { init(); initPageChrome(); });

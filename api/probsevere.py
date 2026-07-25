@@ -2,6 +2,7 @@ from http.server import BaseHTTPRequestHandler
 import urllib.request
 import json
 import re
+import traceback
 
 # NOAA/NCEP mirror of the CIMSS ProbSevere model. New GeoJSON is published to this
 # directory every ~2 minutes; there is no "latest" alias, so we scrape the listing
@@ -65,9 +66,19 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'public, max-age=60, s-maxage=90')
             self.end_headers()
             self.wfile.write(body)
-        except Exception as e:
-            self.send_response(502)
+        except ValueError as e:
+            # Deliberate validation / not-yet-published messages: safe to return.
+            self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'error': str(e)}).encode())
+        except Exception:
+            # Upstream/network failures can carry internal URLs and paths —
+            # log server-side, tell the client only that the fetch failed.
+            traceback.print_exc()
+            self.send_response(502)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': 'upstream fetch failed'}).encode())
