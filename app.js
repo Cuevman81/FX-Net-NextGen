@@ -95,8 +95,14 @@ let paneL3 = {};
 let paneGibs = {};
 // Valid time (ISO Z string) of the GIBS frame currently painted in each pane
 let paneGibsTime = {};
+// Which bird the pane's GIBS layer was built from, so a sector change that
+// switches birds rebuilds the source instead of retiling the wrong satellite.
+let paneGibsBird = {};
 let activeGoesChannel = null; // Convenience: always mirrors paneGoesChannels[activePaneId]
 let paneGoesChannels = { '1': null, '2': null, '3': null, '4': null, '5': null, '6': null, '7': null, '8': null };
+// GOES bird + sector per pane (key into GOES_SECTORS). Drives both the IEM
+// per-channel tiles and which bird the GIBS products load. Absent = east-conus.
+let paneGoesSector = {};
 let activeRadarNational = false;
 let activeSiteRadar = { bref: false, bvel: false, bdhc: false };
 let cursorMarkers = {}; // Synchronized tactical cursor shadows
@@ -321,26 +327,152 @@ const RADAR_ANIM_LAYERS = [
     { name: 'nexrad-n0q-m55m', offsetMin: 55 }
 ];
 
-// ═══ IEM GOES SATELLITE ANIMATION OFFSETS ═══
-// IEM pre-renders GOES-East tiles at fixed time offsets (5-min cadence up to 1hr, then 30/60min)
-// Pattern: goes_east_ch{NN}-900913-m{MM}m  (current = live tile, no offset suffix)
-const SAT_ANIM_OFFSETS = [
-    { offset: 'current', offsetMin: 0 },
-    { offset: 'm05m',    offsetMin: 5 },
-    { offset: 'm10m',    offsetMin: 10 },
-    { offset: 'm15m',    offsetMin: 15 },
-    { offset: 'm20m',    offsetMin: 20 },
-    { offset: 'm25m',    offsetMin: 25 },
-    { offset: 'm30m',    offsetMin: 30 },
-    { offset: 'm35m',    offsetMin: 35 },
-    { offset: 'm40m',    offsetMin: 40 },
-    { offset: 'm45m',    offsetMin: 45 },
-    { offset: 'm50m',    offsetMin: 50 },
-    { offset: 'm55m',    offsetMin: 55 },
-    { offset: 'm60m',    offsetMin: 60 },
-    { offset: 'm90m',    offsetMin: 90 },
-    { offset: 'm120m',   offsetMin: 120 }
-];
+// ═══ GOES SATELLITE — BIRDS & SECTORS ═══
+// GOES-East (75°W) and GOES-West (137°W). `sats` is tried in order so a platform
+// swap (GOES-19 -> a successor) degrades to "no timestamp" instead of breaking.
+const GOES_BIRDS = {
+    east: { label: 'GOES-East', short: 'GOES-E', lon0: -75,  sats: ['GOES-19', 'GOES-16'] },
+    west: { label: 'GOES-West', short: 'GOES-W', lon0: -137, sats: ['GOES-18', 'GOES-17'] }
+};
+
+// IEM per-channel tile caches, layer pattern: goes_{bird}_{tile}_ch{NN}.
+// Every entry below was probed live; the combinations IEM does NOT publish
+// (GOES-East Alaska/Hawaii, GOES-West Puerto Rico, American Samoa) are absent
+// rather than listed and broken.
+//   dir       archive folder holding the valid-time JSON + world file. Hawaii
+//             serves tiles but has no folder — it is cut from the GOES-West full
+//             disk scan (identical valid times), so it reads that folder instead.
+//   cadenceMs ABI scan interval: mesoscale 1 min, CONUS/PACUS 5 min, full disk
+//             10 min. Alaska and Hawaii are full-disk cuts, so they follow it.
+//   floater   sector roams with the event, so its extent must be read at runtime.
+// NOTE: IEM's "full disk" cache is a northern-hemisphere crop (equator to ~68°N),
+// not the whole disk — hence the label. NASA GIBS covers both hemispheres.
+const GOES_SECTORS = {
+    'east-conus':      { bird: 'east', tile: 'conus',       dir: 'conus',       label: 'CONUS',                   cadenceMs:  5 * 60 * 1000 },
+    'east-fulldisk':   { bird: 'east', tile: 'fulldisk',    dir: 'fulldisk',    label: 'Full Disk (N Hem)',       cadenceMs: 10 * 60 * 1000 },
+    'east-puertorico': { bird: 'east', tile: 'puertorico',  dir: 'puertorico',  label: 'Puerto Rico / Caribbean', cadenceMs:  5 * 60 * 1000 },
+    'east-meso1':      { bird: 'east', tile: 'mesoscale-1', dir: 'mesoscale-1', label: 'Mesoscale 1 (floater)',   cadenceMs:       60 * 1000, floater: true },
+    'east-meso2':      { bird: 'east', tile: 'mesoscale-2', dir: 'mesoscale-2', label: 'Mesoscale 2 (floater)',   cadenceMs:       60 * 1000, floater: true },
+    'west-conus':      { bird: 'west', tile: 'conus',       dir: 'conus',       label: 'PACUS (West CONUS)',      cadenceMs:  5 * 60 * 1000 },
+    'west-fulldisk':   { bird: 'west', tile: 'fulldisk',    dir: 'fulldisk',    label: 'Full Disk (N Hem)',       cadenceMs: 10 * 60 * 1000 },
+    'west-alaska':     { bird: 'west', tile: 'alaska',      dir: 'alaska',      label: 'Alaska',                  cadenceMs: 10 * 60 * 1000 },
+    // Hawaii has no archive folder, so no world file to derive an extent from —
+    // this bbox was measured off the tile pyramid. Fixed sector, so it keeps.
+    'west-hawaii':     { bird: 'west', tile: 'hawaii',      dir: null,          label: 'Hawaii',                  cadenceMs: 10 * 60 * 1000, bbox: [[-175, 13], [-123, 45]] },
+    'west-meso1':      { bird: 'west', tile: 'mesoscale-1', dir: 'mesoscale-1', label: 'Mesoscale 1 (floater)',   cadenceMs:       60 * 1000, floater: true },
+    'west-meso2':      { bird: 'west', tile: 'mesoscale-2', dir: 'mesoscale-2', label: 'Mesoscale 2 (floater)',   cadenceMs:       60 * 1000, floater: true }
+};
+
+const DEFAULT_GOES_SECTOR = 'east-conus';
+function goesSectorDef(key) { return GOES_SECTORS[key] || GOES_SECTORS[DEFAULT_GOES_SECTOR]; }
+function goesSectorFor(paneId) { return GOES_SECTORS[paneGoesSector[paneId]] ? paneGoesSector[paneId] : DEFAULT_GOES_SECTOR; }
+function goesBirdFor(paneId) { return goesSectorDef(goesSectorFor(paneId)).bird; }
+function goesSectorLabel(key) {
+    const s = goesSectorDef(key);
+    return `${GOES_BIRDS[s.bird].short} ${s.label.replace(/ \(floater\)$/, '')}`;
+}
+
+// ─── Sector extent, for "zoom to sector" ───
+// IEM publishes a world file and the image itself beside every sector, both
+// CORS-open and Range-capable, so the true footprint costs two tiny reads: the
+// .wld affine (pixel size + upper-left corner, in GOES fixed-grid metres) and the
+// 33-byte PNG header (image dimensions). That beats hardcoding extents, which
+// would be wrong for the mesoscale sectors — they roam with the event.
+const GEOS_SAT_H = 35786023.0;    // satellite height above the ellipsoid (m)
+const GEOS_H     = 42164160.0;    // ... measured from the earth's centre
+const GEOS_R_EQ  = 6378137.0;
+const GEOS_R_POL = 6356752.31414;
+const GEOS_RATIO = (GEOS_R_EQ * GEOS_R_EQ) / (GEOS_R_POL * GEOS_R_POL);
+
+// Inverse geostationary projection (sweep=x, as the GOES-R series flies):
+// fixed-grid metres -> [lon, lat]. Returns null where the ray misses the earth,
+// which is what lets full-disk sampling find the limb instead of reporting the
+// image corners (those are space).
+function geosInverse(xm, ym, lon0) {
+    const x = xm / GEOS_SAT_H, y = ym / GEOS_SAT_H;
+    const sx = Math.sin(x), cx = Math.cos(x), sy = Math.sin(y), cy = Math.cos(y);
+    const a = sx * sx + cx * cx * (cy * cy + GEOS_RATIO * sy * sy);
+    const b = -2 * GEOS_H * cx * cy;
+    const c = GEOS_H * GEOS_H - GEOS_R_EQ * GEOS_R_EQ;
+    const disc = b * b - 4 * a * c;
+    if (disc < 0) return null;
+    const rs = (-b - Math.sqrt(disc)) / (2 * a);
+    const sX = rs * cx * cy, sY = -rs * sx, sZ = rs * cx * sy;
+    return [
+        lon0 - Math.atan(sY / (GEOS_H - sX)) * 180 / Math.PI,
+        Math.atan(GEOS_RATIO * sZ / Math.hypot(GEOS_H - sX, sY)) * 180 / Math.PI
+    ];
+}
+
+const goesSectorBounds = {};                    // sectorKey -> { bounds, at }
+const GOES_BOUNDS_TTL_MS = 5 * 60 * 1000;       // short: mesoscale sectors move
+
+async function fetchGoesSectorBounds(sectorKey) {
+    const cached = goesSectorBounds[sectorKey];
+    if (cached && Date.now() - cached.at < GOES_BOUNDS_TTL_MS) return cached.bounds;
+    const s = goesSectorDef(sectorKey);
+    // A sector with no world file carries a measured extent instead; without this
+    // it would fall through to the full disk folder and "zoom" to the whole disk.
+    if (s.bbox) return s.bbox;
+    const dir = s.dir;
+    if (!dir) return cached ? cached.bounds : null;
+    const lon0 = GOES_BIRDS[s.bird].lon0;
+    // Channel 13 is published for every sector and defines the footprint; the
+    // other bands cover the same ground at a different pixel size.
+    for (const sat of GOES_BIRDS[s.bird].sats) {
+        const base = `https://mesonet.agron.iastate.edu/data/gis/images/GOES/${dir}/channel13/${sat}_C13`;
+        try {
+            const [wldRes, pngRes] = await Promise.all([
+                fetch(`${base}.wld`, { cache: 'no-store' }),
+                fetch(`${base}.png`, { cache: 'no-store', headers: { Range: 'bytes=0-32' } })
+            ]);
+            if (!wldRes.ok || !pngRes.ok) continue;
+            const wld = (await wldRes.text()).trim().split(/\s+/).map(Number);
+            const head = new DataView(await pngRes.arrayBuffer());
+            if (wld.length < 6 || wld.some(v => !isFinite(v)) || head.byteLength < 24) continue;
+            const w = head.getUint32(16), h = head.getUint32(20);
+            const px = wld[0], py = wld[3], ulx = wld[4], uly = wld[5];
+            if (!w || !h || !px || !py) continue;
+            // A world file references the CENTRE of the upper-left pixel.
+            const x0 = ulx - px / 2, y0 = uly - py / 2;
+            const x1 = x0 + px * w,  y1 = y0 + py * h;
+            let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity, hits = 0;
+            const N = 24;
+            for (let i = 0; i <= N; i++) {
+                for (let j = 0; j <= N; j++) {
+                    const p = geosInverse(x0 + (x1 - x0) * i / N, y0 + (y1 - y0) * j / N, lon0);
+                    if (!p) continue;
+                    hits++;
+                    if (p[0] < west) west = p[0];
+                    if (p[0] > east) east = p[0];
+                    if (p[1] < south) south = p[1];
+                    if (p[1] > north) north = p[1];
+                }
+            }
+            if (!hits) continue;
+            const bounds = [[west, south], [east, north]];
+            goesSectorBounds[sectorKey] = { bounds, at: Date.now() };
+            return bounds;
+        } catch (e) { /* try the next platform */ }
+    }
+    return cached ? cached.bounds : null;
+}
+
+async function zoomToGoesSector(paneId, sectorKey) {
+    const map = maps[paneId];
+    if (!map) return;
+    const bounds = await fetchGoesSectorBounds(sectorKey);
+    if (!bounds) {
+        addLiveLog(`SECTOR: could not read ${goesSectorLabel(sectorKey)} extent`, '#ffb300');
+        return;
+    }
+    try {
+        map.fitBounds(bounds, { padding: 24, duration: 700, maxZoom: 9 });
+        addLiveLog(`SECTOR: zoomed to ${goesSectorLabel(sectorKey)}`, '#00e5ff');
+    } catch (e) {
+        addLiveLog(`SECTOR: zoom failed — ${e.message}`, '#ff3333');
+    }
+}
 
 const RADAR_LOCATIONS = {
     // Southern Region
@@ -423,19 +555,12 @@ const SOUNDING_LOCATIONS = {
 // SECTION 1: URL BUILDERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function goesChannelUrl(ch) {
-    // IEM tile cache — individual per-channel GOES-East imagery
+function goesChannelUrl(ch, sectorKey) {
+    // IEM tile cache — individual per-channel imagery for one bird + sector
     // (nowCOAST only has category-based layers so all visible channels look identical there)
+    const s = goesSectorDef(sectorKey);
     const pad = String(ch).padStart(2, '0');
-    return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/goes_east_conus_ch${pad}/{z}/{x}/{y}.png`;
-}
-
-function iemSatAnimUrl(channel, offsetEntry) {
-    const pad = String(channel).padStart(2, '0');
-    if (offsetEntry.offset === 'current') {
-        return goesChannelUrl(channel); // current frame = live tile
-    }
-    return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/goes_east_ch${pad}-900913-${offsetEntry.offset}/{z}/{x}/{y}.png`;
+    return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/goes_${s.bird}_${s.tile}_ch${pad}/{z}/{x}/{y}.png`;
 }
 
 function getNowCoastSatLayer(ch) {
@@ -492,34 +617,52 @@ async function fetchGoesSatTimes(force) {
     } catch (e) { /* keep any stale values */ }
     return goesSatTimes;
 }
-function goesChannelTimeSuffix(ch) {
-    // nowCOAST has no shortwave (Ch7) category; all ABI bands share the same scan
-    // cadence, so fall back to longwave (or any available) frame time.
-    let t = goesSatTimes[getNowCoastSatLayer(ch)] || goesSatTimes['goes_longwave_imagery'] || Object.values(goesSatTimes)[0];
+function goesChannelTimeSuffix(ch, sectorKey) {
+    // Prefer the exact valid time IEM publishes beside the image for this sector.
+    // nowCOAST is only a fallback: it is a GOES-East CONUS mosaic, so it is a
+    // rough proxy for East sectors and not a valid one for GOES-West at all.
+    let t = iemGoesValid[iemValidKey(ch, sectorKey)];
+    if (!t && goesSectorDef(sectorKey).bird === 'east') {
+        // nowCOAST has no shortwave (Ch7) category; all ABI bands share the same
+        // scan cadence, so fall back to longwave (or any available) frame time.
+        t = goesSatTimes[getNowCoastSatLayer(ch)] || goesSatTimes['goes_longwave_imagery'] || Object.values(goesSatTimes)[0];
+    }
     return (t && t.length >= 16) ? ` · ${t.substring(11, 16)}Z` : '';
 }
 
 // Exact valid time of the image behind IEM's live per-channel tiles (tiny CORS-*
-// JSON published next to each image). GOES-East is currently GOES-19; try the
-// prior platform too so a satellite swap degrades to "no timestamp", not a break.
-let iemGoesValid = {};   // ch -> ISO valid string
-async function fetchIemGoesValid(ch) {
+// JSON published next to each image). Keyed by sector because the same channel
+// has a different valid time per sector (meso scans every minute, full disk every
+// ten). Each bird's platforms are tried in order so a satellite swap degrades to
+// "no timestamp", not a break.
+let iemGoesValid = {};   // `${sectorKey}|${ch}` -> ISO valid string
+function iemValidKey(ch, sectorKey) { return `${GOES_SECTORS[sectorKey] ? sectorKey : DEFAULT_GOES_SECTOR}|${ch}`; }
+async function fetchIemGoesValid(ch, sectorKey) {
+    const key = iemValidKey(ch, sectorKey);
+    const s = goesSectorDef(sectorKey);
     const pad = String(ch).padStart(2, '0');
-    for (const sat of ['GOES-19', 'GOES-16']) {
+    // Hawaii serves tiles but has no archive folder — it is a GOES-West full disk
+    // cut and carries that scan's valid time exactly.
+    const dir = s.dir || 'fulldisk';
+    for (const sat of GOES_BIRDS[s.bird].sats) {
         try {
-            const r = await fetch(`https://mesonet.agron.iastate.edu/data/gis/images/GOES/conus/channel${pad}/${sat}_C${pad}.json`, { cache: 'no-store' });
+            const r = await fetch(`https://mesonet.agron.iastate.edu/data/gis/images/GOES/${dir}/channel${pad}/${sat}_C${pad}.json`, { cache: 'no-store' });
             if (!r.ok) continue;
             const j = await r.json();
-            if (j?.meta?.valid) { iemGoesValid[ch] = j.meta.valid; return j.meta.valid; }
+            if (j?.meta?.valid) { iemGoesValid[key] = j.meta.valid; return j.meta.valid; }
         } catch (e) { /* try next platform */ }
     }
-    return iemGoesValid[ch] || null;
+    return iemGoesValid[key] || null;
 }
 
-// ─── NASA GIBS GOES-East (web-mercator WMTS tiles, real time-stamped frames) ───
+// ─── NASA GIBS GOES-East / GOES-West (web-mercator WMTS, real time-stamped frames) ───
 // Browser-direct (CORS *), no proxy/render. Gives clean looping (real 10-min
 // frames) AND smooth panning (tiles), incl. the GeoColor/composite products that
 // the per-channel IEM tiles + category-based nowCOAST loop never animated cleanly.
+// Both birds publish the same six products on the same tile matrix sets, so only
+// the layer name changes — tms/max/iemCh are shared.
+// Unlike IEM's northern-hemisphere tile crop, these are true full-disk layers,
+// which is what makes GOES-West usable for the eastern Pacific.
 // iemCh: products with a 1:1 ABI channel get their LIVE frame from IEM's
 // per-channel tile cache (~5-10 min behind the scan) instead of the newest
 // published GIBS frame (~45-60 min publication lag). Loops still run on GIBS
@@ -527,31 +670,40 @@ async function fetchIemGoesValid(ch) {
 // (GeoColor/AirMass/Dust/FireTemp) have no single-channel equivalent, so their
 // live frame stays GIBS.
 const GIBS_PRODUCTS = {
-    GeoColor: { layer: 'GOES-East_ABI_GeoColor',            tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'GeoColor' },
-    CleanIR:  { layer: 'GOES-East_ABI_Band13_Clean_Infrared', tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Clean IR (Band 13)', iemCh: 13 },
-    RedVis:   { layer: 'GOES-East_ABI_Band2_Red_Visible_1km', tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Red Visible', iemCh: 2 },
-    AirMass:  { layer: 'GOES-East_ABI_Air_Mass',            tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Air Mass RGB' },
-    Dust:     { layer: 'GOES-East_ABI_Dust',                tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Dust RGB' },
-    FireTemp: { layer: 'GOES-East_ABI_FireTemp',            tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Fire Temp RGB' }
+    GeoColor: { layer: { east: 'GOES-East_ABI_GeoColor',              west: 'GOES-West_ABI_GeoColor' },              tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'GeoColor' },
+    CleanIR:  { layer: { east: 'GOES-East_ABI_Band13_Clean_Infrared', west: 'GOES-West_ABI_Band13_Clean_Infrared' }, tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Clean IR (Band 13)', iemCh: 13 },
+    RedVis:   { layer: { east: 'GOES-East_ABI_Band2_Red_Visible_1km', west: 'GOES-West_ABI_Band2_Red_Visible_1km' }, tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Red Visible', iemCh: 2 },
+    AirMass:  { layer: { east: 'GOES-East_ABI_Air_Mass',              west: 'GOES-West_ABI_Air_Mass' },              tms: 'GoogleMapsCompatible_Level6', max: 6, label: 'Air Mass RGB' },
+    Dust:     { layer: { east: 'GOES-East_ABI_Dust',                  west: 'GOES-West_ABI_Dust' },                  tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Dust RGB' },
+    FireTemp: { layer: { east: 'GOES-East_ABI_FireTemp',              west: 'GOES-West_ABI_FireTemp' },              tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Fire Temp RGB' }
 };
 
-function gibsTileUrl(prodKey, isoTime) {
+function gibsLayerId(prodKey, bird) {
     const p = GIBS_PRODUCTS[prodKey];
-    // WMTS REST: .../{layer}/default/{time}/{TileMatrixSet}/{z}/{y}/{x}.png
-    return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${p.layer}/default/${isoTime || 'default'}/${p.tms}/{z}/{y}/{x}.png`;
+    return (p && p.layer[bird]) || p.layer.east;
 }
 
-// Cache of recent real frame times per product (filled from /api/gibs-times)
-const gibsTimesCache = {};
-async function fetchGibsTimes(prodKey) {
+function gibsTileUrl(prodKey, isoTime, bird) {
     const p = GIBS_PRODUCTS[prodKey];
+    // WMTS REST: .../{layer}/default/{time}/{TileMatrixSet}/{z}/{y}/{x}.png
+    return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${gibsLayerId(prodKey, bird)}/default/${isoTime || 'default'}/${p.tms}/{z}/{y}/{x}.png`;
+}
+
+// Cache of recent real frame times, keyed product+bird — the two birds publish
+// on independent schedules, so sharing one cache would loop West on East's times.
+const gibsTimesCache = {};
+function gibsTimesKey(prodKey, bird) { return `${prodKey}|${bird || 'east'}`; }
+function gibsTimesFor(prodKey, bird) { return gibsTimesCache[gibsTimesKey(prodKey, bird)] || []; }
+async function fetchGibsTimes(prodKey, bird) {
+    const p = GIBS_PRODUCTS[prodKey];
+    const key = gibsTimesKey(prodKey, bird);
     try {
-        const res = await fetch(`/api/gibs-times?layer=${p.layer}&tms=${p.tms}&n=40`);
+        const res = await fetch(`/api/gibs-times?layer=${gibsLayerId(prodKey, bird)}&tms=${p.tms}&n=40`);
         const data = await res.json();
-        if (data.times && data.times.length) gibsTimesCache[prodKey] = data.times;
-        return gibsTimesCache[prodKey] || [];
+        if (data.times && data.times.length) gibsTimesCache[key] = data.times;
+        return gibsTimesCache[key] || [];
     } catch (e) {
-        return gibsTimesCache[prodKey] || [];
+        return gibsTimesCache[key] || [];
     }
 }
 
@@ -1387,10 +1539,12 @@ function setupMapLayers(map, paneId) {
         });
     });
 
-    // ─── Layer 3: Satellite (GOES-East) ───
+    // ─── Layer 3: Satellite (GOES bird + sector chosen per pane) ───
+    // Placeholder tiles only — the source is repointed the moment a channel is
+    // picked, so the pane's own sector always wins over this default.
     map.addSource('satellite', {
         type: 'raster',
-        tiles: [goesChannelUrl(13)],
+        tiles: [goesChannelUrl(13, DEFAULT_GOES_SECTOR)],
         tileSize: 256
     });
     map.addLayer({ id: 'satellite-layer', type: 'raster', source: 'satellite', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.8 } });
@@ -8113,9 +8267,18 @@ async function startAnimation() {
     // Find any active channel as reference for timing; per-pane URLs built later
     const refSatChannel = activeGoesChannel || Object.values(paneGoesChannels).find(ch => ch !== null);
     // GIBS satellite loop: use the product's REAL available frame times (no gaps/glitches)
-    const gibsProdForLoop = paneGibs[activePaneId] || Object.values(paneGibs).find(Boolean);
+    const gibsPaneForLoop = paneGibs[activePaneId] ? activePaneId
+                                                   : Object.keys(paneGibs).find(pid => paneGibs[pid]);
+    const gibsProdForLoop = gibsPaneForLoop ? paneGibs[gibsPaneForLoop] : null;
+    const gibsBirdForLoop = gibsPaneForLoop ? (paneGibsBird[gibsPaneForLoop] || goesBirdFor(gibsPaneForLoop)) : 'east';
+    // nowCOAST's satellite layers are a GOES-East CONUS mosaic — there is no
+    // GOES-West equivalent, so a plain channel loop over a West sector would
+    // animate the wrong hemisphere. Send those to GIBS instead of faking it.
+    // Read the bird off the pane actually showing a channel, not the active one.
+    const satPaneForLoop = loopMaps.find(([pid, m]) => isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] !== null);
+    const satLoopBird = satPaneForLoop ? goesBirdFor(satPaneForLoop[0]) : 'east';
     if (showGibs && gibsProdForLoop) {
-        const allTimes = gibsTimesCache[gibsProdForLoop] || [];
+        const allTimes = gibsTimesFor(gibsProdForLoop, gibsBirdForLoop);
         const gStep = Math.max(stepMin, 10); // GIBS GOES cadence is 10 min
         let want = Math.min(Math.floor(durationMin / gStep) || 1, 24);
         // take every (gStep/10)-th real frame from the newest `want*stride` window
@@ -8126,6 +8289,8 @@ async function startAnimation() {
             isoTime: iso, gibs: true, time: new Date(iso),
             label: `SAT ${iso.substring(11, 16)}Z`
         }));
+    } else if (showSat && refSatChannel !== null && satLoopBird === 'west') {
+        addLiveLog('LOOP: GOES-West channels have no time-stepped source — pick a GIBS product to loop the Pacific', '#ffb300');
     } else if (showSat && refSatChannel !== null) {
         let satStep = Math.max(stepMin, 5); // minimum 5-min steps (nowCOAST cadence)
         // Offset "now" by 7 min to avoid requesting future timestamps that lack data
@@ -8283,12 +8448,13 @@ async function startAnimation() {
         // Create satellite animation layers per pane — GIBS (real frames) or nowCOAST
         if ((hadSatVisible || hadGibsVisible) && satFrames.length > 0) {
             const gp = hadGibsVisible ? GIBS_PRODUCTS[gibsProd] : null;
+            const paneBird = paneGibsBird[paneId] || goesBirdFor(paneId);
             for (let i = 0; i < satFrames.length; i++) {
                 const srcId = `anim-sat-src-${i}`;
                 const lyrId = `anim-sat-lyr-${i}`;
                 if (!map.getSource(srcId)) {
                     const satUrl = hadGibsVisible
-                        ? gibsTileUrl(gibsProd, satFrames[i].isoTime)
+                        ? gibsTileUrl(gibsProd, satFrames[i].isoTime, paneBird)
                         : nowCoastSatUrl(paneCh, satFrames[i].isoTime);
                     const srcOpts = { type: 'raster', tiles: [satUrl], tileSize: 256 };
                     if (gp) srcOpts.maxzoom = gp.max;
@@ -8704,12 +8870,15 @@ function getPaneLegend(paneId) {
     if (SITE_RADAR_VIS_LAYERS.some(l => isLayerVisible(map, l)) && site && !site.includes('NEXRAD')) {
         radarStatusRows(paneRadarSites[paneId]).forEach(r => rows.push(r));
     }
-    add(isLayerVisible(map, 'satellite-layer') && ch !== null, `GOES-E CH${ch} SATELLITE${goesChannelTimeSuffix(ch)}`, '#cfd8e3');
+    const sectorKey = goesSectorFor(paneId);
+    add(isLayerVisible(map, 'satellite-layer') && ch !== null,
+        `${goesSectorLabel(sectorKey).toUpperCase()} CH${ch}${goesChannelTimeSuffix(ch, sectorKey)}`, '#cfd8e3');
     if (isLayerVisible(map, 'gibs-sat-layer') && paneGibs[paneId]) {
         const gt = paneGibsTime[paneId];
         const gtSuffix = (gt && gt.length >= 16) ? ` · ${gt.substring(11, 16)}Z` : '';
         const gName = (GIBS_PRODUCTS[paneGibs[paneId]]?.label || paneGibs[paneId]).toUpperCase();
-        rows.push({ label: `GOES-E ${gName}${gtSuffix}`, color: '#9fd0ff' });
+        const gBird = GOES_BIRDS[paneGibsBird[paneId] || goesBirdFor(paneId)].short;
+        rows.push({ label: `${gBird} ${gName}${gtSuffix}`, color: '#9fd0ff' });
     }
     add(isLayerVisible(map, 'lightning-layer'), 'NLDN LIGHTNING', '#ffd23c', 'lightning');
     add(isLayerVisible(map, 'mrms-echotops-layer'), 'MRMS ECHO TOPS', '#9b59ff', 'mrmsEchotops');
@@ -9275,7 +9444,7 @@ function meteoHours() {
 // Make each left-sidebar category group collapsible (click the label).
 // New users get a lean first view (only the core imagery sections open); any
 // section the user has toggled is remembered and overrides that default.
-const DEFAULT_EXPANDED_GROUPS = new Set(['NWS WARNINGS', 'RADAR (NEXRAD)', 'Satellite (GOES-East)']);
+const DEFAULT_EXPANDED_GROUPS = new Set(['NWS WARNINGS', 'RADAR (NEXRAD)', 'Satellite (GOES)']);
 function initCollapsibleGroups() {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem('fxnet_collapsed_groups') || '{}'); } catch (e) { }
@@ -9847,6 +10016,12 @@ function updateSidebarToActivePane() {
         else item.classList.remove('active');
     });
 
+    const sectorSelect = document.getElementById('goes-sector-select');
+    if (sectorSelect) {
+        const secKey = goesSectorFor(activePaneId);
+        if (sectorSelect.value !== secKey) sectorSelect.value = secKey;
+    }
+
     const site = paneRadarSites[activePaneId] || 'DGX';
     const siteSelect = document.getElementById('radar-site-select');
     if (siteSelect && siteSelect.value !== site) {
@@ -10193,14 +10368,16 @@ function initProductSidebar() {
                 } else {
                     paneGoesChannels[activePaneId] = ch; // Per-pane tracking
                     activeGoesChannel = ch; // Sync convenience global
-                    // Only update THIS pane's satellite source
-                    if (map.getSource('satellite')) map.getSource('satellite').setTiles([goesChannelUrl(ch)]);
+                    // Only update THIS pane's satellite source, in its own sector
+                    const secKey = goesSectorFor(activePaneId);
+                    if (map.getSource('satellite')) map.getSource('satellite').setTiles([goesChannelUrl(ch, secKey)]);
                     map.setLayoutProperty('satellite-layer', 'visibility', 'visible');
                     updateHealth('sat');
-                    // Pull the latest GOES frame time so the legend can show it.
-                    fetchGoesSatTimes().then(() => {
+                    // Pull this sector's exact image valid time for the legend.
+                    fetchIemGoesValid(ch, secKey).then(() => {
                         if (paneGoesChannels[activePaneId] === ch) refreshTimestampLabel();
                     });
+                    if (goesSectorDef(secKey).bird === 'east') fetchGoesSatTimes();
                 }
                 updateSidebarToActivePane();
                 refreshTimestampLabel();
@@ -10776,6 +10953,48 @@ function initProductSidebar() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 15b: GOES BIRD + SECTOR SELECTOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Re-point whatever satellite imagery the pane is already showing at the newly
+// chosen bird/sector. Channels swap the IEM tile source in place; GIBS products
+// go back through loadGibsLive because a bird change means a different layer.
+function applyGoesSector(paneId, sectorKey) {
+    const map = maps[paneId];
+    if (!map) return;
+    paneGoesSector[paneId] = sectorKey;
+    const ch = paneGoesChannels[paneId];
+    if (ch !== null && ch !== undefined && map.getSource('satellite')) {
+        map.getSource('satellite').setTiles([goesChannelUrl(ch, sectorKey)]);
+        fetchIemGoesValid(ch, sectorKey).then(() => {
+            if (paneId === activePaneId) refreshTimestampLabel();
+        });
+    }
+    if (paneGibs[paneId]) loadGibsLive(paneId, paneGibs[paneId]);
+    if (paneId === activePaneId) refreshTimestampLabel();
+}
+
+function initGoesSectorSelector() {
+    const sel = document.getElementById('goes-sector-select');
+    const zoomBtn = document.getElementById('goes-sector-zoom');
+    if (sel) {
+        sel.addEventListener('change', () => {
+            const key = GOES_SECTORS[sel.value] ? sel.value : DEFAULT_GOES_SECTOR;
+            applyGoesSector(activePaneId, key);
+            addLiveLog(`SECTOR: ${goesSectorLabel(key)}`, '#00e5ff');
+            // Mesoscale sectors are small and roam — following them automatically
+            // saves hunting for a 1000 km box somewhere on the map.
+            if (goesSectorDef(key).floater) zoomToGoesSector(activePaneId, key);
+            updateSidebarToActivePane();
+            saveTabs();
+        });
+    }
+    if (zoomBtn) {
+        zoomBtn.addEventListener('click', () => zoomToGoesSector(activePaneId, goesSectorFor(activePaneId)));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 16: RADAR SITE SELECTOR
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -11294,7 +11513,15 @@ async function loadGibsLive(paneId, prodKey) {
     if (!map || !GIBS_PRODUCTS[prodKey]) return;
     const p = GIBS_PRODUCTS[prodKey];
     const prev = paneGibs[paneId];
+    const bird = goesBirdFor(paneId);
+    const prevBird = paneGibsBird[paneId];
     paneGibs[paneId] = prodKey;
+    paneGibsBird[paneId] = bird;
+    // Hybrid (iemCh) products take their LIVE frame from the bird's full disk
+    // rather than a regional sector: it is the only IEM cache whose footprint
+    // matches the full-disk GIBS layer it stands in for, so the live view is not
+    // clipped to CONUS the moment you pan offshore.
+    const liveSector = `${bird}-fulldisk`;
     // Paint instantly with the newest known frame (cached) or the 'default'
     // keyword, then heal below. NOTE: for slow-cadence visible bands (Red
     // Visible) the 'default' keyword AND the newest raw domain timestamps are
@@ -11302,13 +11529,13 @@ async function loadGibsLive(paneId, prodKey) {
     // refresh below lands on a frame that actually has tiles.
     // Products with iemCh skip GIBS for the live view entirely — IEM's
     // per-channel cache is ~5-10 min behind the scan vs GIBS' ~45-60 min lag.
-    const times = gibsTimesCache[prodKey] || [];
-    paneGibsTime[paneId] = p.iemCh ? (iemGoesValid[p.iemCh] || null)
+    const times = gibsTimesFor(prodKey, bird);
+    paneGibsTime[paneId] = p.iemCh ? (iemGoesValid[iemValidKey(p.iemCh, liveSector)] || null)
                                    : (times.length ? times[times.length - 1] : null);
-    const url = p.iemCh ? cacheBust(goesChannelUrl(p.iemCh))
-                        : gibsTileUrl(prodKey, times.length ? times[times.length - 1] : 'default');
-    // Recreate the source when switching products (maxzoom differs); else just retile
-    if (map.getSource('gibs-sat') && prev === prodKey) {
+    const url = p.iemCh ? cacheBust(goesChannelUrl(p.iemCh, liveSector))
+                        : gibsTileUrl(prodKey, times.length ? times[times.length - 1] : 'default', bird);
+    // Recreate the source when switching products (maxzoom differs) or birds; else just retile
+    if (map.getSource('gibs-sat') && prev === prodKey && prevBird === bird) {
         map.getSource('gibs-sat').setTiles([url]);
     } else {
         if (map.getLayer('gibs-sat-layer')) map.removeLayer('gibs-sat-layer');
@@ -11321,23 +11548,24 @@ async function loadGibsLive(paneId, prodKey) {
     map.setLayoutProperty('gibs-sat-layer', 'visibility', 'visible');
     updateHealth('gibsSat');
     if (paneId === activePaneId) refreshTimestampLabel();
-    addLiveLog(`GIBS: ${p.label} (GOES-East) loaded`, '#00e5ff');
+    addLiveLog(`GIBS: ${p.label} (${GOES_BIRDS[bird].label}) loaded`, '#00e5ff');
     // Always (re)warm the published-frame time list so looping is ready + current.
     // Hybrid (iemCh) products keep their fresher IEM live tiles — only pull the
     // exact IEM valid time for the legend; non-hybrid products heal the live view
     // onto the newest published GIBS frame.
+    const stillMine = () => paneGibs[paneId] === prodKey && paneGibsBird[paneId] === bird;
     if (p.iemCh) {
-        fetchGibsTimes(prodKey);
-        fetchIemGoesValid(p.iemCh).then(v => {
-            if (v && paneGibs[paneId] === prodKey) {
+        fetchGibsTimes(prodKey, bird);
+        fetchIemGoesValid(p.iemCh, liveSector).then(v => {
+            if (v && stillMine()) {
                 paneGibsTime[paneId] = v;
                 if (paneId === activePaneId) refreshTimestampLabel();
             }
         });
     } else {
-        fetchGibsTimes(prodKey).then(t => {
-            if (t.length && paneGibs[paneId] === prodKey && map.getSource('gibs-sat')) {
-                map.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, t[t.length - 1])]);
+        fetchGibsTimes(prodKey, bird).then(t => {
+            if (t.length && stillMine() && map.getSource('gibs-sat')) {
+                map.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, t[t.length - 1], bird)]);
                 paneGibsTime[paneId] = t[t.length - 1];
                 if (paneId === activePaneId) refreshTimestampLabel();
             }
@@ -11350,6 +11578,7 @@ function clearGibs(paneId) {
     if (map && map.getLayer('gibs-sat-layer')) map.setLayoutProperty('gibs-sat-layer', 'visibility', 'none');
     delete paneGibs[paneId];
     delete paneGibsTime[paneId];
+    delete paneGibsBird[paneId];
     if (paneId === activePaneId) refreshTimestampLabel();
 }
 
@@ -11788,6 +12017,7 @@ function clearPane(map, paneId) {
     delete paneCpcPrecip[paneId];
     delete paneL3[paneId];
     delete paneGibs[paneId];
+    delete paneGibsBird[paneId];
     updateRadarLegend(paneId);
     updateEroLegend(paneId);
     updateProbLegend(paneId);
@@ -11948,7 +12178,9 @@ function closeTab(tabId) {
         delete paneRadarSites[pid];
         delete paneRadarProducts[pid];
         delete paneGoesChannels[pid];
+        delete paneGoesSector[pid];
         delete paneGibs[pid];
+        delete paneGibsBird[pid];
         delete paneL3[pid];
         delete pendingRestore[pid];
         paneSyncDisabled.delete(pid);
@@ -12000,6 +12232,9 @@ function applyPaneRestore(paneId) {
     if (Array.isArray(conf.view) && conf.view.length === 3) {
         try { map.jumpTo({ center: [conf.view[0], conf.view[1]], zoom: conf.view[2] }); } catch (_) {}
     }
+    // Restore the sector before any imagery — it decides both the IEM tile
+    // sector and which bird the GIBS product loads.
+    if (GOES_SECTORS[conf.goesSector]) paneGoesSector[paneId] = conf.goesSector;
     try {
         if (conf.gibs) {
             loadGibsLive(paneId, conf.gibs);
@@ -12020,7 +12255,7 @@ function applyPaneRestore(paneId) {
             }
         } else if (conf.satVisible && conf.goesChannel != null) {
             // IEM single-channel GOES: repoint the satellite source + show it
-            if (map.getSource('satellite')) map.getSource('satellite').setTiles([goesChannelUrl(conf.goesChannel)]);
+            if (map.getSource('satellite')) map.getSource('satellite').setTiles([goesChannelUrl(conf.goesChannel, goesSectorFor(paneId))]);
             if (map.getLayer('satellite-layer')) map.setLayoutProperty('satellite-layer', 'visibility', 'visible');
             if (paneId === activePaneId) activeGoesChannel = conf.goesChannel;
         }
@@ -12121,6 +12356,7 @@ function saveTabs() {
                     if (paneRadarSites[pid]) conf.radarSite = paneRadarSites[pid];
                     if (paneRadarProducts[pid]) conf.radarProduct = paneRadarProducts[pid];
                     if (paneGoesChannels[pid] != null) conf.goesChannel = paneGoesChannels[pid];
+                    if (paneGoesSector[pid]) conf.goesSector = paneGoesSector[pid];
                     if (paneGibs[pid]) conf.gibs = paneGibs[pid];
                     if (paneL3[pid]) conf.l3 = paneL3[pid];
                     // Record whether the imagery layers are actually showing, so
@@ -12325,54 +12561,71 @@ function startAutoRefresh() {
         if (terminatorActive) updateTerminator();
     }, 5 * 60 * 1000);
 
-    // 3. Satellite (5 minutes — GOES-East ABI CONUS scans every 5 min)
+    // 3. Satellite — ticks every minute, but each pane only refreshes on its own
+    // sector's ABI scan cadence: mesoscale 1 min, CONUS/PACUS 5, full disk 10.
+    // A shared 5-minute timer would either starve the 1-minute floaters or hammer
+    // full disk twice per scan.
+    const lastSatRefresh = {};   // paneId -> ms of the last tile repoint
     setInterval(() => {
         if (isPlaying) return;
 
-        // Satellite refresh — each pane may have its own GOES channel
+        // Satellite refresh — each pane may have its own GOES channel + sector
         let anyRefreshed = false;
+        let anyEast = false;
         Object.entries(maps).forEach(([paneId, m]) => {
             const ch = paneGoesChannels[paneId];
-            if (ch !== null && m.getSource('satellite') && isLayerVisible(m, 'satellite-layer')) {
-                m.getSource('satellite').setTiles([cacheBust(goesChannelUrl(ch))]);
-                anyRefreshed = true;
-            }
+            if (ch === null || !m.getSource('satellite') || !isLayerVisible(m, 'satellite-layer')) return;
+            const secKey = goesSectorFor(paneId);
+            const sec = goesSectorDef(secKey);
+            const due = Date.now() - (lastSatRefresh[paneId] || 0) >= sec.cadenceMs;
+            if (!due) return;
+            lastSatRefresh[paneId] = Date.now();
+            m.getSource('satellite').setTiles([cacheBust(goesChannelUrl(ch, secKey))]);
+            fetchIemGoesValid(ch, secKey).then(() => {
+                if (paneId === activePaneId) refreshTimestampLabel();
+            });
+            if (sec.bird === 'east') anyEast = true;
+            anyRefreshed = true;
         });
         if (anyRefreshed) {
             updateHealth('sat');
             addLiveLog('AUTO: Satellite tiles refreshed', '#444');
-            fetchGoesSatTimes(true).then(() => refreshTimestampLabel());
+            if (anyEast) fetchGoesSatTimes(true).then(() => refreshTimestampLabel());
         }
 
-        // GIBS GOES-East refresh — advance to the newest published frame so the
-        // imagery and its valid-time label stay current. Hybrid (iemCh) products
-        // instead re-pull IEM's live per-channel tiles + exact valid time.
+        // GIBS refresh — advance to the newest published frame so the imagery and
+        // its valid-time label stay current. Hybrid (iemCh) products instead
+        // re-pull IEM's live per-channel tiles + exact valid time.
+        if (Date.now() - (lastSatRefresh._gibs || 0) < 5 * 60 * 1000) return;
+        lastSatRefresh._gibs = Date.now();
         Object.entries(maps).forEach(([paneId, m]) => {
             const prodKey = paneGibs[paneId];
             if (!prodKey || !m.getSource('gibs-sat') || !isLayerVisible(m, 'gibs-sat-layer')) return;
             const p = GIBS_PRODUCTS[prodKey];
+            const bird = paneGibsBird[paneId] || goesBirdFor(paneId);
+            const stillMine = () => paneGibs[paneId] === prodKey && (paneGibsBird[paneId] || 'east') === bird;
             if (p.iemCh) {
-                m.getSource('gibs-sat').setTiles([cacheBust(goesChannelUrl(p.iemCh))]);
+                m.getSource('gibs-sat').setTiles([cacheBust(goesChannelUrl(p.iemCh, `${bird}-fulldisk`))]);
                 updateHealth('gibsSat');
-                fetchIemGoesValid(p.iemCh).then(v => {
-                    if (v && paneGibs[paneId] === prodKey) {
+                fetchIemGoesValid(p.iemCh, `${bird}-fulldisk`).then(v => {
+                    if (v && stillMine()) {
                         paneGibsTime[paneId] = v;
                         if (paneId === activePaneId) refreshTimestampLabel();
                     }
                 });
                 return;
             }
-            fetchGibsTimes(prodKey).then(t => {
-                if (!t.length || paneGibs[paneId] !== prodKey || !m.getSource('gibs-sat')) return;
+            fetchGibsTimes(prodKey, bird).then(t => {
+                if (!t.length || !stillMine() || !m.getSource('gibs-sat')) return;
                 const newest = t[t.length - 1];
                 if (newest === paneGibsTime[paneId]) return;   // already current
-                m.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, newest)]);
+                m.getSource('gibs-sat').setTiles([gibsTileUrl(prodKey, newest, bird)]);
                 paneGibsTime[paneId] = newest;
                 updateHealth('gibsSat');
                 if (paneId === activePaneId) refreshTimestampLabel();
             });
         });
-    }, 5 * 60 * 1000);
+    }, 60 * 1000);
 
     // Lightning refresh (NLDN nowCOAST updates ~every 5 min; refresh every 5 min when visible)
     setInterval(() => {
@@ -13138,6 +13391,13 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 27, 2026', items: [
+        '<b>GOES-West is here, and satellite is now organized by sector.</b> A single <b>SECTOR</b> selector at the top of the Satellite group picks the bird and the scan area together: GOES-East gives CONUS, Full Disk, Puerto Rico / Caribbean and both mesoscale floaters; GOES-West adds <b>PACUS, Full Disk, Hawaii, Alaska</b> and its own two floaters. Eleven sectors in total, all sixteen ABI channels on each. It is per-panel, so the eastern Pacific can sit beside the Atlantic in a 2- or 4-pane layout — which is what the Pacific hurricane season actually needs.',
+        '<b>One-minute mesoscale imagery.</b> The floater sectors are the fastest imagery GOES produces, and NWS/NHC park them on whatever is active — a hurricane, a severe outbreak, a wildfire. Because they roam, FX-Net reads each sector’s true footprint from the imagery’s own georeferencing and zooms straight to it when you select one. <b>ZOOM</b> does the same on demand for any sector.',
+        'Refresh now follows the sector rather than one shared timer: mesoscale re-pulls every minute, CONUS/PACUS every 5, full disk every 10 — matching the rate the instrument actually scans instead of starving the fast sectors or hammering the slow ones. The panel legend names the bird and sector and carries that sector’s exact image valid time.',
+        'The <b>GIBS</b> loopable products (GeoColor, Clean IR, Red Visible, Air Mass, Dust, Fire Temp) now follow the selected bird, so Pacific loops animate GOES-West frames on GOES-West’s own publication schedule. Their live view also draws from full disk instead of CONUS, so hybrid products no longer go blank the moment you pan offshore.',
+        'Individual channels have no time-stepped GOES-West source, so rather than quietly looping GOES-East imagery over the Pacific, the loop now says so and points you at a GIBS product.'
+    ]},
     { date: 'Jul 25, 2026', items: [
         '<b>Loops now time-match their products.</b> Streams publish at different cadences, and the loop used to step every one of them by position — so a 10-minute satellite over 5-minute radar ran at double speed and then froze on its newest image while the radar kept playing. For the back half of a 3-hour loop you were looking at current cloud tops over 90-minute-old reflectivity. Each stream is now matched to the master timeline by <b>valid time</b>, showing the frame that was genuinely current at that moment. Measured on a live 3-hour radar + GIBS loop, worst-case mismatch dropped from 151 minutes to 41 — and the 41 is real satellite publication lag, correctly held rather than faked.',
         'Loop controls gained <b>MODE</b> (Forward or Rock, which reverses at each end instead of wrapping) and <b>DWELL</b> (extra hold on the newest frame so the current data registers before the loop restarts).',
@@ -13409,10 +13669,20 @@ const USER_GUIDE = [
         <p><b>Echo Tops</b> and <b>QPE</b> (1 / 24 / 48 / 72-hr radar+gauge precip estimates) are national MRMS mosaics. QPE period is <b>per panel</b>. Hovering the map with a site radar or MRMS product up shows a decoded <b>value readout</b> (dBZ, kt, inches) in the bottom toolbar.</p>` },
 
     { id: 'satellite', title: 'Satellite — GOES & GIBS', html: `
-        <h3>GOES-East channels</h3>
-        <p>The <b>Satellite (GOES-East)</b> group offers Visible / Near-IR, Water Vapor, and Infrared channels. Each panel can carry its own channel — pick the panel, then the channel.</p>
+        <h3>Picking a bird and sector</h3>
+        <p>The <b>SECTOR</b> selector at the top of the Satellite group chooses both the satellite and the scan area. It is <b>per panel</b>, so you can watch GOES-East CONUS in one panel and the eastern Pacific in another.</p>
+        <ul>
+            <li><b>GOES-East (75°W)</b> — CONUS, Full Disk, Puerto Rico / Caribbean, Mesoscale 1 &amp; 2</li>
+            <li><b>GOES-West (137°W)</b> — PACUS (West CONUS), Full Disk, Hawaii, Alaska, Mesoscale 1 &amp; 2</li>
+        </ul>
+        <p>Sector sets the refresh rate too, because it is the rate the ABI actually scans: <b>mesoscale every minute</b>, CONUS/PACUS every 5, full disk every 10. The panel legend shows the bird, the sector and the image's exact valid time.</p>
+        <h3>Zoom</h3>
+        <p><b>ZOOM</b> fits the panel to the selected sector's real coverage, read live from the imagery's own georeferencing. This matters most for the two <b>mesoscale floaters</b>, which NWS and NHC reposition over whatever is active — a hurricane, a severe outbreak, a fire — so their location changes through the day. Choosing a floater zooms to it automatically.</p>
+        <h3>Tropical use</h3>
+        <p>For the eastern Pacific basin use <b>GOES-West Full Disk</b> or <b>PACUS</b>; for the Atlantic use <b>GOES-East Full Disk</b> or <b>Puerto Rico / Caribbean</b>. When a storm is being watched closely, check whether a mesoscale floater is parked on it — one-minute imagery resolves eye formation and convective bursts that a 10-minute loop misses entirely.</p>
         <h3>Loopable GIBS imagery</h3>
-        <p>The <b>Loopable &middot; NASA GIBS</b> products use NASA’s global imagery tiles with real archived frame times, which makes them the smoothest choice for <b>animation loops</b> — no gaps or flicker, and you can pan/zoom mid-loop.</p>` },
+        <p>The <b>Loopable &middot; NASA GIBS</b> products use NASA’s global imagery tiles with real archived frame times, which makes them the smoothest choice for <b>animation loops</b> — no gaps or flicker, and you can pan/zoom mid-loop. They follow the bird you picked in SECTOR, and unlike the channel tiles they cover the full disk including the southern hemisphere.</p>
+        <p>Looping the Pacific needs a GIBS product: the individual channels have no time-stepped GOES-West source, so the loop will tell you to switch rather than animate the wrong satellite.</p>` },
 
     { id: 'loops', title: 'Animation Loops', html: `
         <p>The <b>play button</b> in the bottom toolbar animates whatever the current tab’s panels are showing — radar, satellite, and dual-pol products all loop together, each panel with its own imagery.</p>
@@ -14815,6 +15085,7 @@ function init() {
     // Initialize UI controls
     initProductSidebar();
     initRadarSiteSelector();
+    initGoesSectorSelector();
     initPlayButton();
     initContextMenu();
     initWhatsNew();

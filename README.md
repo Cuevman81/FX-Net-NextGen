@@ -38,7 +38,10 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 - **Dual-Pol, Velocity & Storm Tracks (NODD Level III)**: A **dependency-free, stdlib-only decoder** (`api/radar-l3.py`, validated byte-for-byte against MetPy) renders Correlation Coefficient (CC), Differential Reflectivity (ZDR), Specific Differential Phase (KDP), and **Storm Relative Velocity** — the last derived on the fly from the super-resolution base velocity (0.25 km / 0.5° / 256-level) for ~8× the detail of the legacy product-56 image. Products step through the lowest four elevation tilts, georeferenced as transparent PNG overlays with AWIPS-style color tables. Includes **Storm Tracks (STI)** with forecast positions, **Meso/TVS markers (MDA)** colored by strength rank, and **VAD Wind Profiles** (winds aloft + hodograph).
 
 ### 🛰️ Satellite & Lightning
-- **GOES-East (NASA GIBS)**: All ABI visible/water-vapor/infrared channels plus GeoColor composites, with smooth time-looping driven by real published frame times.
+- **GOES-East & GOES-West, organized by sector**: A per-panel **SECTOR** selector picks the satellite and scan area together — GOES-East (CONUS, Full Disk, Puerto Rico / Caribbean, Mesoscale 1 & 2) and GOES-West (PACUS, Full Disk, Hawaii, Alaska, Mesoscale 1 & 2). Eleven sectors, all 16 ABI channels on each, so the eastern Pacific can sit beside the Atlantic in a multi-pane layout.
+- **One-minute mesoscale floaters**: The fastest imagery GOES produces, repositioned by NWS/NHC over active hurricanes, severe outbreaks and fires. Because they roam, FX-Net derives each sector's true footprint at runtime from the imagery's world file and PNG header via an inverse geostationary projection, and zooms straight to it.
+- **Sector-matched refresh**: Mesoscale re-pulls every minute, CONUS/PACUS every 5, full disk every 10 — the rate the ABI actually scans. Each panel's legend carries the bird, the sector and that sector's exact image valid time.
+- **Loopable NASA GIBS products** (GeoColor, Clean IR, Red Visible, Air Mass, Dust, Fire Temp) for both birds, with smooth time-looping driven by real published frame times and full-disk coverage including the southern hemisphere.
 - **Lightning**: Near-real-time strike density (NLDN via nowCOAST).
 
 ### 🔥 Severe, Fire & Hydro Guidance

@@ -342,6 +342,54 @@ body {
 .cat-tools button:hover { color: var(--accent-cyan); }
 .cat-tools span { color: #2b3a47; }
 
+/* ── GOES bird + sector selector (inside the Satellite group) ── */
+.sector-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 15px 6px 35px;
+}
+.sector-row label {
+    font: 800 8px/1 inherit;
+    color: var(--accent-cyan);
+    opacity: 0.45;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex: none;
+}
+.sector-row select {
+    flex: 1;
+    min-width: 0;
+    background: #000;
+    color: var(--accent-cyan);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 2px 4px;
+    font-size: 9px;
+    font-weight: bold;
+    font-family: 'Roboto Mono', monospace;
+    outline: none;
+    cursor: pointer;
+}
+.sector-row select option,
+.sector-row select optgroup {
+    background: #111;
+    color: #ccc;
+}
+.sector-row button {
+    flex: none;
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-dim);
+    font: 800 8px/1 inherit;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 5px;
+    cursor: pointer;
+}
+.sector-row button:hover { color: var(--accent-cyan); border-color: var(--accent-cyan); }
+/* The filter hides whole groups; keep its chrome out of the results too. */
+.product-browser.filtering .sector-row { display: none; }
+
 .sub-category {
     padding: 5px 15px 3px 35px;
     font-size: 8px;

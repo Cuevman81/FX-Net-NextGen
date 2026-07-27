@@ -14,7 +14,7 @@
     <script src="vendor/maplibre-gl.js"></script>
     <link href="vendor/maplibre-gl.css" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=118">
+    <link rel="stylesheet" href="style.css?v=119">
     <!-- Vercel Speed Insights + Web Analytics shim (external so CSP can forbid inline script) -->
     <script type="module" src="boot.js?v=1"></script>
     <script defer src="/_vercel/insights/script.js"></script>
@@ -124,9 +124,30 @@
                     <div class="product-item" data-layer="mrms-qpe" data-qpe="72h"><span>72-Hour QPE</span></div>
                 </div>
 
-                <!-- SATELLITE (GOES-EAST) -->
+                <!-- SATELLITE (GOES-EAST / GOES-WEST) -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="satellite"></i> Satellite (GOES-East)</div>
+                    <div class="category-label"><i data-lucide="satellite"></i> Satellite (GOES)</div>
+                    <div class="sector-row">
+                        <label for="goes-sector-select">SECTOR</label>
+                        <select id="goes-sector-select">
+                            <optgroup label="GOES-East (75°W)">
+                                <option value="east-conus">CONUS</option>
+                                <option value="east-fulldisk">Full Disk (N Hem)</option>
+                                <option value="east-puertorico">Puerto Rico / Caribbean</option>
+                                <option value="east-meso1">Mesoscale 1 — 1 min</option>
+                                <option value="east-meso2">Mesoscale 2 — 1 min</option>
+                            </optgroup>
+                            <optgroup label="GOES-West (137°W)">
+                                <option value="west-conus">PACUS (West CONUS)</option>
+                                <option value="west-fulldisk">Full Disk (N Hem)</option>
+                                <option value="west-hawaii">Hawaii</option>
+                                <option value="west-alaska">Alaska</option>
+                                <option value="west-meso1">Mesoscale 1 — 1 min</option>
+                                <option value="west-meso2">Mesoscale 2 — 1 min</option>
+                            </optgroup>
+                        </select>
+                        <button id="goes-sector-zoom" type="button" title="Zoom this panel to the sector's coverage">Zoom</button>
+                    </div>
                     <div class="sub-category">Visible / Near-IR</div>
                     <div class="product-item" data-layer="goes-ch" data-channel="1"><span>Ch 1 — Blue VIS (0.47 µm)</span></div>
                     <div class="product-item" data-layer="goes-ch" data-channel="2"><span>Ch 2 — Red VIS (0.64 µm)</span></div>
@@ -1147,6 +1168,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=255"></script>
+    <script src="app.js?v=256"></script>
 </body>
 </html>
