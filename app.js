@@ -7394,8 +7394,12 @@ async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
             </div>
             <div id="hydro-chart-slot" data-img="${esc(images.default || '')}" style="width:100%; min-height:150px; color:#6b7a88; font-size:10px;">Loading stage/flow series…</div>`;
 
-        // Link to water.weather.gov
-        html += `<div style="margin-top:4px;"><a href="https://water.weather.gov/ahps2/hydrograph.php?gage=${encodeURIComponent(gaugeId.toLowerCase())}&wfo=${encodeURIComponent(wfo.toLowerCase())}" target="_blank" style="color:#00e5ff; font-size:8px; text-decoration:none;">Open on water.weather.gov &rarr;</a></div>`;
+        // Link to the gauge's official page. This must point at NWPS
+        // (water.noaa.gov): the old AHPS site — water.weather.gov/ahps2/ — was
+        // retired with the NWPS cutover and no longer resolves at all, so the
+        // link failed to connect rather than 404ing. NWPS keys pages by LID.
+        const lid = (g.lid || gaugeId || '').toUpperCase();
+        html += `<div style="margin-top:4px;"><a href="https://water.noaa.gov/gauges/${encodeURIComponent(lid)}" target="_blank" rel="noopener noreferrer" style="color:#00e5ff; font-size:8px; text-decoration:none;">Open on water.noaa.gov (NWPS) &rarr;</a></div>`;
 
         const panel = document.getElementById('river-gauge-panel');
         const body = document.getElementById('river-gauge-body');
@@ -13396,7 +13400,8 @@ const CHANGELOG = [
         '<b>One-minute mesoscale imagery.</b> The floater sectors are the fastest imagery GOES produces, and NWS/NHC park them on whatever is active — a hurricane, a severe outbreak, a wildfire. Because they roam, FX-Net reads each sector’s true footprint from the imagery’s own georeferencing and zooms straight to it when you select one. <b>ZOOM</b> does the same on demand for any sector.',
         'Refresh now follows the sector rather than one shared timer: mesoscale re-pulls every minute, CONUS/PACUS every 5, full disk every 10 — matching the rate the instrument actually scans instead of starving the fast sectors or hammering the slow ones. The panel legend names the bird and sector and carries that sector’s exact image valid time.',
         'The <b>GIBS</b> loopable products (GeoColor, Clean IR, Red Visible, Air Mass, Dust, Fire Temp) now follow the selected bird, so Pacific loops animate GOES-West frames on GOES-West’s own publication schedule. Their live view also draws from full disk instead of CONUS, so hybrid products no longer go blank the moment you pan offshore.',
-        'Individual channels have no time-stepped GOES-West source, so rather than quietly looping GOES-East imagery over the Pacific, the loop now says so and points you at a GIBS product.'
+        'Individual channels have no time-stepped GOES-West source, so rather than quietly looping GOES-East imagery over the Pacific, the loop now says so and points you at a GIBS product.',
+        '<b>Fixed the dead link in the river gauge panel.</b> “Open on water.weather.gov” pointed at the old AHPS site, which NOAA retired in the NWPS cutover — the host no longer resolves at all, so the link failed to connect rather than returning a 404. It now opens the gauge’s NWPS page at <b>water.noaa.gov</b>, verified against 12 live gauges. The in-panel hydrograph was never affected; it already came from the NWPS API.'
     ]},
     { date: 'Jul 25, 2026', items: [
         '<b>Loops now time-match their products.</b> Streams publish at different cadences, and the loop used to step every one of them by position — so a 10-minute satellite over 5-minute radar ran at double speed and then froze on its newest image while the radar kept playing. For the back half of a 3-hour loop you were looking at current cloud tops over 90-minute-old reflectivity. Each stream is now matched to the master timeline by <b>valid time</b>, showing the frame that was genuinely current at that moment. Measured on a live 3-hour radar + GIBS loop, worst-case mismatch dropped from 151 minutes to 41 — and the 41 is real satellite publication lag, correctly held rather than faked.',
