@@ -342,6 +342,49 @@ body {
 .cat-tools button:hover { color: var(--accent-cyan); }
 .cat-tools span { color: #2b3a47; }
 
+/* ── MOS bulletin table ──
+   Laid out like the real MDL bulletin: parameters down the left, forecast
+   projections across. Wide by nature, so it scrolls inside its own container
+   rather than stretching the panel. */
+.mos-table {
+    border-collapse: collapse;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    white-space: nowrap;
+}
+.mos-table th,
+.mos-table td {
+    padding: 2px 5px;
+    text-align: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.mos-table thead th {
+    color: var(--accent-cyan);
+    font-weight: 700;
+    border-bottom: 1px solid rgba(0, 229, 255, 0.25);
+    position: sticky;
+    top: 0;
+    background: #0b0f13;
+}
+/* Row label column stays put while the projections scroll under it. */
+.mos-table tbody th {
+    color: #cdd6df;
+    font-weight: 700;
+    text-align: left;
+    position: sticky;
+    left: 0;
+    background: #0b0f13;
+    padding-right: 10px;
+}
+.mos-table thead th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #0b0f13;
+}
+.mos-table tbody td { color: #e6edf3; }
+.mos-table tbody tr:hover td { background: rgba(0, 229, 255, 0.06); }
+
 /* ── GOES bird + sector selector (inside the Satellite group) ── */
 .sector-row {
     display: flex;

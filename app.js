@@ -6483,6 +6483,8 @@ const PANEL_MENU_ITEMS = [
     { item: 'nhcadv-pws',        panel: 'nhcadv-panel' },
     { item: 'btn-text-products', panel: 'text-panel' },
     { item: 'btn-meteogram',     panel: 'meteogram-panel' },
+    { item: 'btn-model-compare', panel: 'model-panel' },
+    { item: 'btn-mos',           panel: 'mos-panel' },
     { item: 'nhc-two-atl',       panel: 'text-panel' },
     { item: 'nhc-two-epac',      panel: 'text-panel' }
 ];
@@ -10957,6 +10959,460 @@ function initProductSidebar() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 15c: MODEL GUIDANCE — MULTI-MODEL COMPARISON & MOS
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Deliberately POINT-based, never gridded. A gridded contour overlay was built
+// and measured before this was written: Open-Meteo weights its quota per
+// location, so a 325-point CONUS grid costs ~325 of the 10,000 daily calls and
+// returns HTTP 429 after two renders — roughly 30 map draws per day, unusable.
+// One point across five models is ~1 call and 27 KB. There is also no CORS-open
+// free gridded WMS for these models (NOAA IDP-GIS publishes no model folder, and
+// Unidata's THREDDS serves GFS but sends no Access-Control-Allow-Origin), and
+// decoding GRIB client-side is the AWIPS ingest burden this app exists to avoid.
+// Point guidance answers the question that actually matters anyway: do the
+// models agree, and where does the spread blow up?
+//
+// Everything here loads ONLY when its panel is opened. No pollers, no map
+// layers, no background traffic.
+
+// Open-Meteo model IDs. `ai` marks a machine-learning model rather than a
+// physics solver — ECMWF's AIFS is operational, and its disagreement with IFS is
+// a genuinely useful signal. NOTE: there is no "AI MOS"; MDL station guidance is
+// still classical regression and its successor is NBM, so the AI tag belongs to
+// the model, not to the MOS panel.
+const MODEL_SOURCES = [
+    { id: 'gfs_seamless',         label: 'GFS',        org: 'NOAA NCEP', color: '#00e5ff' },
+    { id: 'ecmwf_ifs025',         label: 'ECMWF IFS',  org: 'ECMWF',     color: '#ff5ad1' },
+    { id: 'gem_seamless',         label: 'CMC GEM',    org: 'ECCC',      color: '#ffd166' },
+    { id: 'icon_seamless',        label: 'ICON',       org: 'DWD',       color: '#7cff6b' },
+    { id: 'ecmwf_aifs025_single', label: 'ECMWF AIFS', org: 'ECMWF',     color: '#c08bff', ai: true }
+];
+
+const MODEL_VARS = {
+    temperature_2m: { label: 'Temperature', unit: '°F', dec: 0 },
+    dewpoint_2m:    { label: 'Dewpoint',    unit: '°F', dec: 0 },
+    wind_speed_10m: { label: 'Wind',        unit: 'kt', dec: 0 },
+    precipitation:  { label: 'Precip',      unit: 'in', dec: 2 },
+    pressure_msl:   { label: 'MSLP',        unit: 'mb', dec: 1 }
+};
+
+let modelData = null;   // { times[], series{modelId:{var:[]}}, label, fetched }
+
+async function loadModelCompareAt(latNum, lonNum, presetLabel) {
+    const body = document.getElementById('model-body');
+    const locEl = document.getElementById('model-loc');
+    const panel = document.getElementById('model-panel');
+    if (!body) return;
+    const lat = (+latNum).toFixed(4), lon = (+lonNum).toFixed(4);
+    const label = presetLabel || `${lat}, ${lon}`;
+    if (locEl) locEl.textContent = `Loading ${label}…`;
+    body.innerHTML = `<div style="color:#6b7a88;font-size:12px;padding:20px;">Pulling ${MODEL_SOURCES.length} models for ${esc(label)}…</div>`;
+    try {
+        const days = parseInt(document.getElementById('model-days')?.value) || 7;
+        const url = 'https://api.open-meteo.com/v1/forecast'
+            + `?latitude=${lat}&longitude=${lon}`
+            + `&hourly=${Object.keys(MODEL_VARS).join(',')}`
+            + `&models=${MODEL_SOURCES.map(m => m.id).join(',')}`
+            + `&forecast_days=${days}`
+            + '&temperature_unit=fahrenheit&wind_speed_unit=kn&precipitation_unit=inch';
+        const res = await fetch(url);
+        if (res.status === 429) throw new Error('Open-Meteo rate limit reached — wait a minute and try again.');
+        if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
+        const j = await res.json();
+        const h = j.hourly || {};
+        const times = (h.time || []).map(t => new Date(t + 'Z').getTime());
+        if (!times.length) throw new Error('No forecast returned for this point.');
+        // Open-Meteo suffixes every series with its model id when several models
+        // are requested; a single-model request would come back unsuffixed.
+        const series = {};
+        MODEL_SOURCES.forEach(m => {
+            series[m.id] = {};
+            Object.keys(MODEL_VARS).forEach(v => {
+                series[m.id][v] = h[`${v}_${m.id}`] || h[v] || [];
+            });
+        });
+        modelData = { times, series, label, fetched: Date.now() };
+        if (panel) panel.dataset.loaded = '1';
+        if (locEl) locEl.textContent = `${label} · ${days}-day · run pulled ${new Date().toISOString().substring(11, 16)}Z`;
+        renderModelCompare();
+    } catch (e) {
+        modelData = null;
+        if (locEl) locEl.textContent = '—';
+        body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;line-height:1.5;">${esc(e.message)}</div>`;
+    }
+}
+
+function loadModelCompare() {
+    const map = maps[activePaneId] || Object.values(maps)[0];
+    if (!map) return;
+    const c = map.getCenter();
+    _modelPoint = null;          // back to following the pane, not a searched place
+    return loadModelCompareAt(c.lat, c.lng);
+}
+
+function renderModelCompare() {
+    const body = document.getElementById('model-body');
+    if (!body || !modelData) return;
+    const varKey = document.getElementById('model-var')?.value || 'temperature_2m';
+    const meta = MODEL_VARS[varKey];
+    const active = MODEL_SOURCES.filter(m => modelData.series[m.id]?.[varKey]?.some(v => v != null));
+    body.innerHTML = `<canvas id="model-canvas"></canvas>
+        <div id="model-legend" style="display:flex;flex-wrap:wrap;gap:10px;padding:8px 2px 2px;font-size:10px;"></div>
+        <div id="model-spread" style="font-size:10px;color:#8b97a3;padding:2px;line-height:1.5;"></div>
+        <div style="font-size:9px;color:#5b6773;padding:6px 2px 2px;">
+            Model data by <b style="color:#8b97a3;">Open-Meteo.com</b> (CC BY 4.0) — GFS/NCEP, IFS &amp; AIFS/ECMWF, GEM/ECCC, ICON/DWD.
+        </div>`;
+    const legend = document.getElementById('model-legend');
+    active.forEach(m => {
+        const sw = document.createElement('span');
+        sw.style.cssText = 'display:inline-flex;align-items:center;gap:5px;';
+        sw.innerHTML = `<span style="width:16px;height:3px;background:${m.color};display:inline-block;"></span>`
+            + `<span style="color:#cdd6df;">${esc(m.label)}</span>`
+            + (m.ai ? `<span class="badge" style="background:#5b3d8f;color:#fff;font-size:8px;">AI</span>` : '')
+            + `<span style="color:#5b6773;">${esc(m.org)}</span>`;
+        legend.appendChild(sw);
+    });
+    drawModelChart(document.getElementById('model-canvas'), varKey, active);
+    renderModelSpread(varKey, active, meta);
+}
+
+// Mean and worst inter-model spread — the number a forecaster actually wants,
+// because agreement is the confidence signal, not any single deterministic run.
+function renderModelSpread(varKey, active, meta) {
+    const el = document.getElementById('model-spread');
+    if (!el || active.length < 2) { if (el) el.textContent = ''; return; }
+    let sum = 0, n = 0, worst = 0, worstMs = null;
+    modelData.times.forEach((ms, i) => {
+        const vals = active.map(m => modelData.series[m.id][varKey][i]).filter(v => v != null);
+        if (vals.length < 2) return;
+        const spread = Math.max(...vals) - Math.min(...vals);
+        sum += spread; n++;
+        if (spread > worst) { worst = spread; worstMs = ms; }
+    });
+    if (!n) { el.textContent = ''; return; }
+    const t = worstMs ? new Date(worstMs) : null;
+    const when = t ? `${String(t.getUTCDate()).padStart(2, '0')}/${String(t.getUTCHours()).padStart(2, '0')}Z` : '—';
+    el.innerHTML = `<b style="color:#cdd6df;">Spread</b> — mean ${(sum / n).toFixed(meta.dec)}${meta.unit}, `
+        + `max ${worst.toFixed(meta.dec)}${meta.unit} at ${when} `
+        + `<span style="color:#5b6773;">(${active.length} models; wider spread = lower confidence)</span>`;
+}
+
+function drawModelChart(canvas, varKey, active) {
+    if (!canvas) return;
+    const wrap = canvas.parentElement;
+    const cssW = Math.max(560, (wrap?.clientWidth || 700) - 8), cssH = 330;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+    canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    const meta = MODEL_VARS[varKey];
+    const times = modelData.times;
+    if (!active.length || times.length < 2) {
+        ctx.fillStyle = '#8b97a3'; ctx.font = '12px "Roboto Mono",monospace'; ctx.textAlign = 'center';
+        ctx.fillText('No data for this field.', cssW / 2, cssH / 2);
+        return;
+    }
+    const mL = 46, mR = 14, mT = 16, mB = 30;
+    const pw = cssW - mL - mR, ph = cssH - mT - mB;
+    const t0 = times[0], t1 = times[times.length - 1];
+    const X = ms => mL + ((ms - t0) / (t1 - t0)) * pw;
+    const all = [];
+    active.forEach(m => modelData.series[m.id][varKey].forEach(v => { if (v != null) all.push(v); }));
+    let vMin = Math.min(...all), vMax = Math.max(...all);
+    if (vMax - vMin < 1e-6) { vMax += 1; vMin -= 1; }
+    const pad = (vMax - vMin) * 0.12;
+    vMin -= pad; vMax += pad;
+    if (varKey === 'precipitation' && vMin < 0) vMin = 0;
+    const Y = v => mT + ph - ((v - vMin) / (vMax - vMin)) * ph;
+    ctx.font = '9px "Roboto Mono",monospace';
+    // y grid + labels
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let i = 0; i <= 5; i++) {
+        const v = vMin + (vMax - vMin) * (i / 5);
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(mL, Y(v)); ctx.lineTo(mL + pw, Y(v)); ctx.stroke();
+        ctx.fillStyle = '#8b97a3'; ctx.fillText(v.toFixed(meta.dec), mL - 6, Y(v));
+    }
+    // x grid: 00Z day boundaries
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (let d = new Date(t0); d.getTime() <= t1; d = new Date(d.getTime() + 864e5)) {
+        const dayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+        if (dayMs < t0) continue;
+        ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+        ctx.beginPath(); ctx.moveTo(X(dayMs), mT); ctx.lineTo(X(dayMs), mT + ph); ctx.stroke();
+        ctx.fillStyle = '#8b97a3';
+        ctx.fillText(`${String(new Date(dayMs).getUTCDate()).padStart(2, '0')}/00Z`, X(dayMs), mT + ph + 5);
+    }
+    // spread envelope behind the lines — the visual form of model disagreement
+    if (active.length > 1) {
+        const top = [], bot = [];
+        times.forEach((ms, i) => {
+            const vals = active.map(m => modelData.series[m.id][varKey][i]).filter(v => v != null);
+            if (vals.length < 2) return;
+            top.push([X(ms), Y(Math.max(...vals))]);
+            bot.push([X(ms), Y(Math.min(...vals))]);
+        });
+        if (top.length > 1) {
+            ctx.fillStyle = 'rgba(0,229,255,0.09)';
+            ctx.beginPath();
+            top.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+            for (let i = bot.length - 1; i >= 0; i--) ctx.lineTo(bot[i][0], bot[i][1]);
+            ctx.closePath(); ctx.fill();
+        }
+    }
+    // one line per model
+    active.forEach(m => {
+        const vals = modelData.series[m.id][varKey];
+        ctx.strokeStyle = m.color;
+        ctx.lineWidth = m.ai ? 2.2 : 1.8;
+        if (m.ai) ctx.setLineDash([6, 3]);   // AI model reads distinctly from the physics runs
+        ctx.beginPath();
+        let started = false;
+        times.forEach((ms, i) => {
+            const v = vals[i];
+            if (v == null) { started = false; return; }
+            started ? ctx.lineTo(X(ms), Y(v)) : ctx.moveTo(X(ms), Y(v));
+            started = true;
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+    });
+    // y-axis title
+    ctx.save(); ctx.translate(11, mT + ph / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = '#00e5ff';
+    ctx.fillText(`${meta.label.toUpperCase()} (${meta.unit})`, 0, 0); ctx.restore();
+}
+
+function initModelCompare() {
+    const panel = document.getElementById('model-panel');
+    if (!panel) return;
+    const openBtn = document.getElementById('btn-model-compare');
+    if (openBtn) openBtn.addEventListener('click', () => {
+        const opening = panel.style.display === 'none' || !panel.style.display;
+        panel.style.display = opening ? 'flex' : 'none';
+        if (opening && !panel.dataset.loaded) loadModelCompare();
+    });
+    document.getElementById('close-model-panel')?.addEventListener('click', () => { panel.style.display = 'none'; });
+    document.getElementById('model-refresh')?.addEventListener('click', () => loadModelCompare());
+    // Field switch re-renders the cached payload — every variable came down in
+    // the same request, so there is nothing to refetch.
+    document.getElementById('model-var')?.addEventListener('change', () => { if (modelData) renderModelCompare(); });
+    document.getElementById('model-days')?.addEventListener('change', () => { if (modelData) loadModelCompareAt(...modelLastPoint()); });
+    const goBtn = document.getElementById('model-go');
+    const placeInput = document.getElementById('model-place');
+    const runSearch = async () => {
+        const locEl = document.getElementById('model-loc');
+        try {
+            if (locEl) locEl.textContent = 'Searching…';
+            const g = await geocodePlace(placeInput.value);
+            _modelPoint = [g.lat, g.lon, g.label];
+            await loadModelCompareAt(g.lat, g.lon, g.label);
+        } catch (e) {
+            if (locEl) locEl.textContent = '—';
+            const body = document.getElementById('model-body');
+            if (body) body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;">${esc(e.message)}</div>`;
+        }
+    };
+    goBtn?.addEventListener('click', runSearch);
+    placeInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+    makePanelDraggable(panel, 'model-drag');
+}
+
+let _modelPoint = null;
+function modelLastPoint() {
+    if (_modelPoint) return _modelPoint;
+    const map = maps[activePaneId] || Object.values(maps)[0];
+    const c = map ? map.getCenter() : { lat: 32.3, lng: -90.2 };
+    return [c.lat, c.lng, undefined];
+}
+
+// ─── MOS guidance (IEM parses the MDL bulletins into JSON) ───
+// GFS MOS is NOT being retired. NAM MOS (MET) goes away with NAM itself on
+// 2026-10-06 12 UTC alongside SREF/HREF/HiresW, replaced by RRFS/REFS; MDL
+// points NAM MOS users at GFS MOS or NBM, and LAMP temporarily switches to a
+// GFS MOS input. The panel says so rather than silently serving a dying product.
+const MOS_MODELS = [
+    { id: 'GFS', label: 'GFS MOS',  sub: 'MAV · short range, 3-hourly to 72 h',
+      rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p06', 'p12', 'q06', 'q12', 't06_1', 't06_2', 't12_1', 'cig', 'vis', 'obv'] },
+    { id: 'MEX', label: 'GFS Ext',  sub: 'MEX · extended, 12-hourly to 192 h',
+      rows: ['n_x', 'tmp', 'dpt', 'cld', 'wsp', 'p12', 'q12', 't12_1', 't12_2'] },
+    { id: 'LAV', label: 'LAMP',     sub: 'Localized Aviation MOS · updates hourly',
+      rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p01', 'cig', 'vis', 'obv', 'ccg', 'cvs', 'ppo', 'pco'] },
+    { id: 'NBS', label: 'NBM Short', sub: 'National Blend · short range',
+      rows: ['tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p06', 'q06', 't06_1', 'cig', 'vis', 'pra', 'psn', 'pzr', 'ppl', 's06'] },
+    { id: 'NBE', label: 'NBM Ext',  sub: 'National Blend · extended',
+      rows: ['n_x', 'tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p12', 'q12', 't12_1', 's12'] },
+    { id: 'NAM', label: 'NAM MOS',  sub: 'MET · retires 2026-10-06 12 UTC with NAM', retiring: true,
+      rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p06', 'p12', 'q06', 'q12', 't06_1', 't12_1', 'cig', 'vis', 'obv'] }
+];
+
+// Bulletin row labels, in MDL's own shorthand so the table reads like the real thing.
+const MOS_ROW_LABELS = {
+    n_x: 'N/X', tmp: 'TMP', dpt: 'DPT', cld: 'CLD', sky: 'SKY', wdr: 'WDR', wsp: 'WSP', gst: 'GST',
+    p01: 'P01', p06: 'P06', p12: 'P12', q06: 'Q06', q12: 'Q12',
+    t06_1: 'T06', t06_2: 'T06/S', t12_1: 'T12', t12_2: 'T12/S',
+    cig: 'CIG', vis: 'VIS', obv: 'OBV', ccg: 'CCG', cvs: 'CVS', ppo: 'PPO', pco: 'PCO',
+    pra: 'PRA', psn: 'PSN', pzr: 'PZR', ppl: 'PPL', s06: 'S06', s12: 'S12'
+};
+
+let mosCache = {};   // `${station}|${model}` -> { rows, fetched }
+
+function mosStationId(raw) {
+    const s = (raw || '').trim().toUpperCase();
+    // MDL keys MOS by 4-character ICAO. IEM's CONUS ASOS ids are 3 characters
+    // (JAN); Alaska/Hawaii/Pacific are already 4 (PANC, PHKO).
+    return s.length === 3 ? 'K' + s : s;
+}
+
+// Nearest ASOS to the pane centre, taken from the METAR set the app already
+// holds — no extra network call, and it degrades to a typed id if METARs are off.
+function nearestMosStation() {
+    const map = maps[activePaneId] || Object.values(maps)[0];
+    if (!map || !metarGeoJSON.features.length) return null;
+    const c = map.getCenter();
+    let best = null, bestD = Infinity;
+    metarGeoJSON.features.forEach(f => {
+        const g = f.geometry?.coordinates;
+        const id = f.properties?.station;
+        if (!g || !id) return;
+        const d = (g[0] - c.lng) ** 2 + (g[1] - c.lat) ** 2;
+        if (d < bestD) { bestD = d; best = id; }
+    });
+    return best ? mosStationId(best) : null;
+}
+
+async function loadMos(stationRaw, modelId) {
+    const body = document.getElementById('mos-body');
+    const locEl = document.getElementById('mos-loc');
+    if (!body) return;
+    const station = mosStationId(stationRaw);
+    const def = MOS_MODELS.find(m => m.id === modelId) || MOS_MODELS[0];
+    if (!/^[A-Z0-9]{4}$/.test(station)) {
+        body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;">Enter a 3- or 4-character station id (e.g. <b>JAN</b> or <b>KJAN</b>).</div>`;
+        return;
+    }
+    if (locEl) locEl.textContent = `Loading ${station} ${def.label}…`;
+    body.innerHTML = `<div style="color:#6b7a88;font-size:12px;padding:20px;">Fetching ${esc(def.label)} for ${esc(station)}…</div>`;
+    try {
+        const res = await fetch(`https://mesonet.agron.iastate.edu/api/1/mos.json?station=${encodeURIComponent(station)}&model=${encodeURIComponent(def.id)}`);
+        if (res.status === 404) throw new Error(`No MOS site ${station}. MOS is issued for airports — try a nearby ICAO id.`);
+        if (!res.ok) throw new Error(`IEM HTTP ${res.status}`);
+        const j = await res.json();
+        const rows = j.data || [];
+        if (!rows.length) throw new Error(`${def.label} has no current bulletin for ${station}. It may not be an issuance site for this model.`);
+        mosCache[`${station}|${def.id}`] = { rows, fetched: Date.now() };
+        renderMosTable(station, def, rows);
+        if (locEl) locEl.textContent = `${station} · ${def.label} · run ${rows[0].runtime || '—'}Z`;
+    } catch (e) {
+        if (locEl) locEl.textContent = '—';
+        body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;line-height:1.5;">${esc(e.message)}</div>`;
+    }
+}
+
+function renderMosTable(station, def, rows) {
+    const body = document.getElementById('mos-body');
+    if (!body) return;
+    // Only keep rows this bulletin actually carries, so an empty parameter never
+    // takes a line — the real bulletins vary by model and by cycle.
+    const useRows = def.rows.filter(k => rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== ''));
+    const hdr = rows.map(r => {
+        const d = new Date((r.ftime_utc || r.ftime || '').replace(' ', 'T') + (r.ftime_utc ? '' : 'Z'));
+        return isNaN(d) ? '--' : String(d.getUTCHours()).padStart(2, '0');
+    });
+    const days = rows.map(r => {
+        const d = new Date((r.ftime_utc || r.ftime || '').replace(' ', 'T') + (r.ftime_utc ? '' : 'Z'));
+        return isNaN(d) ? '' : String(d.getUTCDate()).padStart(2, '0');
+    });
+    let lastDay = null;
+    const dayCells = days.map(dv => {
+        const show = dv !== lastDay; lastDay = dv;
+        return show ? dv : '';
+    });
+    const cell = v => (v === null || v === undefined || v === '') ? '' : String(v).trim();
+    let html = `<div style="font-size:10px;color:#8b97a3;padding:0 2px 8px;line-height:1.5;">
+            <b style="color:#cdd6df;">${esc(station)}</b> — ${esc(def.label)} <span style="color:#5b6773;">${esc(def.sub)}</span>
+            ${def.retiring ? '<span class="badge orange" style="margin-left:6px;">RETIRING</span>' : ''}
+            <br>Cycle <b style="color:#cdd6df;">${esc(rows[0].runtime || '—')}Z</b> · ${rows.length} forecast projections
+            ${def.retiring ? '<br><span style="color:#ffb300;">NAM MOS ends 2026-10-06 12 UTC with NAM, SREF, HREF and HiresW. MDL directs users to GFS MOS or NBM.</span>' : ''}
+        </div>
+        <div style="overflow-x:auto;">
+        <table class="mos-table"><thead>
+            <tr><th>DAY</th>${dayCells.map(d => `<th>${esc(d)}</th>`).join('')}</tr>
+            <tr><th>HR (Z)</th>${hdr.map(h => `<th>${esc(h)}</th>`).join('')}</tr>
+        </thead><tbody>`;
+    useRows.forEach(k => {
+        html += `<tr><th title="${esc(k)}">${esc(MOS_ROW_LABELS[k] || k.toUpperCase())}</th>`
+            + rows.map(r => `<td>${esc(cell(r[k]))}</td>`).join('') + '</tr>';
+    });
+    html += `</tbody></table></div>
+        <div style="font-size:9px;color:#5b6773;padding:8px 2px 2px;line-height:1.6;">
+            MDL bulletins via Iowa Environmental Mesonet. TMP/DPT °F · WSP/GST kt · WDR degrees ·
+            P06/P12 PoP % · Q06/Q12 QPF category · T06/T12 thunder (and severe) % ·
+            CIG/VIS/CLD categorical · OBV obstruction to vision.
+        </div>`;
+    body.innerHTML = html;
+}
+
+function initMosPanel() {
+    const panel = document.getElementById('mos-panel');
+    if (!panel) return;
+    const stationInput = document.getElementById('mos-station');
+    const modelSel = document.getElementById('mos-model');
+    const run = () => loadMos(stationInput?.value, modelSel?.value);
+    const openBtn = document.getElementById('btn-mos');
+    if (openBtn) openBtn.addEventListener('click', () => {
+        const opening = panel.style.display === 'none' || !panel.style.display;
+        panel.style.display = opening ? 'flex' : 'none';
+        if (opening && !panel.dataset.loaded) {
+            const near = nearestMosStation();
+            if (near && stationInput) stationInput.value = near;
+            panel.dataset.loaded = '1';
+            run();
+        }
+    });
+    document.getElementById('close-mos-panel')?.addEventListener('click', () => { panel.style.display = 'none'; });
+    document.getElementById('mos-go')?.addEventListener('click', run);
+    modelSel?.addEventListener('change', run);
+    stationInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+    document.getElementById('mos-nearest')?.addEventListener('click', () => {
+        const near = nearestMosStation();
+        if (!near) {
+            const body = document.getElementById('mos-body');
+            if (body) body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;">Turn on METAR observations first — the nearest-station lookup reads that set.</div>`;
+            return;
+        }
+        if (stationInput) stationInput.value = near;
+        run();
+    });
+    makePanelDraggable(panel, 'mos-drag');
+}
+
+// Shared drag behaviour for the floating panels (same pattern the text and
+// meteogram panels use inline).
+function makePanelDraggable(panel, handleId) {
+    const handle = document.getElementById(handleId);
+    if (!handle) return;
+    let dragging = false, startX, startY, origLeft, origTop;
+    handle.addEventListener('mousedown', e => {
+        if (e.target.closest('.btn-icon')) return;
+        dragging = true; startX = e.clientX; startY = e.clientY;
+        const rect = panel.getBoundingClientRect();
+        origLeft = rect.left; origTop = rect.top; e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        panel.style.left = (origLeft + e.clientX - startX) + 'px';
+        panel.style.top = (origTop + e.clientY - startY) + 'px';
+        panel.style.right = 'auto'; panel.style.bottom = 'auto';
+    });
+    document.addEventListener('mouseup', () => { dragging = false; });
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 15b: GOES BIRD + SECTOR SELECTOR
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -13395,6 +13851,13 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 28, 2026', items: [
+        '<b>New MODEL GUIDANCE section.</b> Two panels: <b>Model Comparison</b> plots GFS, ECMWF IFS, CMC GEM, ICON and <b>ECMWF AIFS</b> at a point — panel centre or any ZIP/city — for temperature, dewpoint, wind, precip or MSLP out to 7 days. The shaded band is the inter-model spread and the readout gives mean and worst-case disagreement with the hour it peaks, because agreement is the confidence signal, not any one deterministic run. AIFS is ECMWF\'s operational AI model and draws dashed so it reads apart from the physics runs.',
+        '<b>MOS Guidance</b> panel with MDL\'s station bulletins laid out the way they\'re issued — parameters down the left, projections across. GFS MOS (MAV), GFS Extended (MEX), <b>LAMP</b> (updated hourly, normally the freshest guidance on the page), NBM Short and Extended, plus NAM MOS flagged <b>RETIRING</b>. <b>Nearest</b> finds the closest ASOS to the panel centre from the METAR set already loaded.',
+        '<b>On NAM:</b> NAM MOS ends <b>2026-10-06 12 UTC</b> with NAM, SREF, HREF and HiresW, replaced by RRFS/REFS — pushed back from the original Aug 31 date. <b>GFS MOS is not being retired</b>; MDL points NAM MOS users at GFS MOS or NBM. The panel says so rather than quietly serving a dying product.',
+        'Model data is deliberately <b>point-based, never gridded</b>. Gridded contours were built and measured first: without a free CORS-open model WMS, the only workable route rate-limited at roughly 30 map draws per day. A point across five models costs about a thousandth of that. Both panels fetch only when opened — no polling, no map layers, no background traffic.',
+        'There is no such thing as AI MOS, in case you were wondering — MDL station guidance is still classical regression and its successor is NBM, statistical blending rather than machine learning. The AI here is the model (AIFS), not the MOS.'
+    ]},
     { date: 'Jul 27, 2026', items: [
         '<b>GOES-West is here, and satellite is now organized by sector.</b> A single <b>SECTOR</b> selector at the top of the Satellite group picks the bird and the scan area together: GOES-East gives CONUS, Full Disk, Puerto Rico / Caribbean and both mesoscale floaters; GOES-West adds <b>PACUS, Full Disk, Hawaii, Alaska</b> and its own two floaters. Eleven sectors in total, all sixteen ABI channels on each. It is per-panel, so the eastern Pacific can sit beside the Atlantic in a 2- or 4-pane layout — which is what the Pacific hurricane season actually needs.',
         '<b>One-minute mesoscale imagery.</b> The floater sectors are the fastest imagery GOES produces, and NWS/NHC park them on whatever is active — a hurricane, a severe outbreak, a wildfire. Because they roam, FX-Net reads each sector’s true footprint from the imagery’s own georeferencing and zooms straight to it when you select one. <b>ZOOM</b> does the same on demand for any sector.',
@@ -13738,6 +14201,27 @@ const USER_GUIDE = [
             <li><b>US Drought Monitor</b> polygons and the <b>CPC Drought Outlook</b>.</li>
             <li><b>CPC Climate Outlooks</b> — temperature and precipitation probability outlooks for 6–10 day, 8–14 day, monthly, and seasonal periods. The period is <b>per panel</b>.</li>
         </ul>` },
+
+    { id: 'models', title: 'Model Guidance & MOS', html: `
+        <h3>Why this section is point-based</h3>
+        <p>AWIPS ingests full model grids into EDEX and contours them locally — that is a data pipeline, not a web page. FX-Net deliberately does <b>not</b> do that. There is no free, CORS-open gridded source for GFS/ECMWF/CMC, and the one workable route (building a coarse grid and contouring it in the browser) was measured at roughly <b>30 map draws per day</b> before rate limits bite. Point guidance costs about a thousandth of that and answers the question that actually decides a forecast: <b>do the models agree?</b></p>
+        <p>Both panels fetch <b>only when you open them</b>. Nothing here polls in the background or touches the map.</p>
+        <h3>Model Comparison</h3>
+        <p>Plots <b>GFS</b> (NCEP), <b>ECMWF IFS</b>, <b>CMC GEM</b> (Environment Canada), <b>ICON</b> (DWD) and <b>ECMWF AIFS</b> at a single point — the panel centre, or any ZIP / city you type. Switch between temperature, dewpoint, wind, precip and MSLP; every field arrives in the same request, so changing it redraws instantly with no refetch.</p>
+        <ul>
+            <li><b>AIFS is ECMWF's operational AI model</b> and is drawn dashed so it reads apart from the physics runs. Where it diverges from IFS is worth a look.</li>
+            <li>The shaded band is the <b>spread envelope</b> — the min-to-max across all models at each hour. The readout underneath gives mean and worst-case spread with the time it peaks. <b>Wide spread means low confidence</b>, and it usually blows up somewhere past day 4.</li>
+        </ul>
+        <h3>MOS Guidance</h3>
+        <p>MDL's station bulletins, laid out the way they are issued — parameters down the left, forecast projections across. <b>Nearest</b> picks the closest ASOS to the panel centre (needs METAR obs switched on); otherwise type any ICAO.</p>
+        <ul>
+            <li><b>GFS MOS (MAV)</b> — short range, 3-hourly to 72 h. The workhorse, and <b>not</b> going away.</li>
+            <li><b>GFS Extended (MEX)</b> — 12-hourly to 192 h, with day max/min in the N/X row.</li>
+            <li><b>LAMP</b> — Localized Aviation MOS, <b>updated hourly</b>, so it is normally the freshest guidance on the page. Carries conditional ceiling/visibility and the aviation probabilities.</li>
+            <li><b>NBM Short / Extended</b> — National Blend of Models, including gusts, sky %, snow and precip-type probabilities.</li>
+            <li><b>NAM MOS (MET)</b> — flagged <b>RETIRING</b>. It ends <b>2026-10-06 12 UTC</b> along with NAM, SREF, HREF and HiresW, replaced by RRFS/REFS. MDL directs users to GFS MOS or NBM.</li>
+        </ul>
+        <p>On the question of AI MOS: there isn't one. MDL station guidance is still classical regression, and its modern successor is NBM — statistical blending, not machine learning. The AI in this section is the <b>model</b> (AIFS), not the MOS.</p>` },
 
     { id: 'tropical', title: 'Tropical — NHC & Hurricane Hunters', html: `
         <ul>
@@ -15106,6 +15590,8 @@ function init() {
     initSoundingModal();
     initTextModal();
     initMeteogram();
+    initModelCompare();
+    initMosPanel();
     initCollapsibleGroups();
     initSidebarCollapse();
     initSolarClickHandler();

@@ -14,7 +14,7 @@
     <script src="vendor/maplibre-gl.js"></script>
     <link href="vendor/maplibre-gl.css" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=119">
+    <link rel="stylesheet" href="style.css?v=120">
     <!-- Vercel Speed Insights + Web Analytics shim (external so CSP can forbid inline script) -->
     <script type="module" src="boot.js?v=1"></script>
     <script defer src="/_vercel/insights/script.js"></script>
@@ -366,6 +366,13 @@
                     <div class="sub-category">Settings backup</div>
                     <div class="product-item" id="settings-export"><span>Export Settings to File…</span></div>
                     <div class="product-item" id="settings-import"><span>Import Settings from File…</span></div>
+                </div>
+
+                <!-- MODEL GUIDANCE -->
+                <div class="category-group">
+                    <div class="category-label"><i data-lucide="trending-up"></i> MODEL GUIDANCE</div>
+                    <div class="product-item" id="btn-model-compare"><span>Model Comparison</span> <span class="badge green">GFS/EC/CMC</span></div>
+                    <div class="product-item" id="btn-mos"><span>MOS Guidance</span> <span class="badge blue">MDL</span></div>
                 </div>
 
                 <!-- NWS TEXT PRODUCTS -->
@@ -1026,6 +1033,60 @@
     </div>
 
     <!-- FORECAST METEOGRAM (NWS hourly gridpoint forecast) -->
+    <!-- MODEL COMPARISON (multi-model point guidance) -->
+    <div id="model-panel" class="floating-panel" style="display:none; width:760px; height:580px;">
+        <div class="floating-panel-header" id="model-drag">
+            <span><i data-lucide="trending-up"></i> MODEL COMPARISON</span>
+            <button id="close-model-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+        </div>
+        <div class="modal-toolbar" style="gap:8px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;">
+            <input id="model-place" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:140px;" />
+            <button id="model-go" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Go</button>
+            <button id="model-refresh" class="btn-primary" style="height:28px; padding:0 12px; font-weight:700; background:#1a2733;">Map Center</button>
+            <select id="model-var" title="Field" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+                <option value="temperature_2m" selected>Temperature</option>
+                <option value="dewpoint_2m">Dewpoint</option>
+                <option value="wind_speed_10m">Wind</option>
+                <option value="precipitation">Precip</option>
+                <option value="pressure_msl">MSLP</option>
+            </select>
+            <select id="model-days" title="Forecast range" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+                <option value="3">3 days</option>
+                <option value="5">5 days</option>
+                <option value="7" selected>7 days</option>
+            </select>
+            <span id="model-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
+        </div>
+        <div class="floating-panel-body" id="model-body" style="padding:10px;">
+            <div style="color:#6b7a88; font-size:12px; padding:20px; line-height:1.5;">Hit <b style="color:#cdd6df;">Map Center</b> to compare GFS, ECMWF IFS, CMC GEM, ICON and ECMWF AIFS at the centre of the active panel.</div>
+        </div>
+    </div>
+
+    <!-- MOS GUIDANCE (MDL bulletins) -->
+    <div id="mos-panel" class="floating-panel" style="display:none; width:900px; height:560px;">
+        <div class="floating-panel-header" id="mos-drag">
+            <span><i data-lucide="table"></i> MOS GUIDANCE</span>
+            <button id="close-mos-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+        </div>
+        <div class="modal-toolbar" style="gap:8px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;">
+            <input id="mos-station" type="text" value="KJAN" maxlength="4" placeholder="ICAO" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:70px; text-transform:uppercase;" />
+            <button id="mos-go" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Go</button>
+            <button id="mos-nearest" class="btn-primary" style="height:28px; padding:0 12px; font-weight:700; background:#1a2733;">Nearest</button>
+            <select id="mos-model" title="Guidance model" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+                <option value="GFS" selected>GFS MOS (MAV)</option>
+                <option value="MEX">GFS Extended (MEX)</option>
+                <option value="LAV">LAMP (hourly)</option>
+                <option value="NBS">NBM Short</option>
+                <option value="NBE">NBM Extended</option>
+                <option value="NAM">NAM MOS (retiring)</option>
+            </select>
+            <span id="mos-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
+        </div>
+        <div class="floating-panel-body" id="mos-body" style="padding:10px;">
+            <div style="color:#6b7a88; font-size:12px; padding:20px; line-height:1.5;">Station guidance from MDL's MOS bulletins.</div>
+        </div>
+    </div>
+
     <div id="meteogram-panel" class="floating-panel" style="display:none; width:740px; height:560px;">
         <div class="floating-panel-header" id="meteogram-drag">
             <span><i data-lucide="line-chart"></i> FORECAST METEOGRAM</span>
@@ -1168,6 +1229,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=257"></script>
+    <script src="app.js?v=258"></script>
 </body>
 </html>
