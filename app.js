@@ -13896,6 +13896,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 28, 2026 (update 4)', items: [
+        '<b>Forecast soundings anywhere — not just balloon sites.</b> A radiosonde only goes up from ~57 places, but a model has a profile at <i>every</i> grid point, so there was never a reason to limit HRRR/GFS soundings to the RAOB list. Pick HRRR or GFS in the Skew-T and the site dropdown becomes a location box: type an airport id (<b>KMEM</b>, <b>KGPT</b>), a ZIP, a city, or raw <b>lat,lon</b> — or leave it blank to use the active pane\'s centre. RAOB still uses the fixed dropdown, because that is a real physical constraint. Lookups go cheapest-first: the RAOB table, then the ASOS set already in memory, then IEM station metadata, then geocoding — so the common case costs no network call at all.',
+        'Sanity check at Slidell, where both are available: the 12Z balloon read SBCAPE 1447 / CIN −109 / PWAT 1.94 in, and HRRR at 14Z read SBCAPE 1918 / CIN −23 / PWAT 1.79 in — moisture within 8%, with CIN eroding and CAPE building exactly as two hours of July heating should. Gulfport, 85 km east and no balloon within reach, came out at SBCAPE 2922 / PWAT 2.01 in.'
+    ]},
     { date: 'Jul 28, 2026 (update 3)', items: [
         '<b>LAMP convection and lightning rows added to MOS Guidance.</b> Short answer to "is there an HRRR MOS": no standalone one exists, and there never has been — HRRR\'s statistical station guidance ships <b>inside LAMP</b>, which MDL melds HRRR into for ceiling, visibility and the conditional CIG/VIS elements. LAMP was already in the panel; it just was not labelled as the HRRR product. It is now, and four rows IEM was already sending are now on screen: <b>LP1/CP1</b> (1-hour lightning and convection probability) and <b>LC1/CC1</b> (their potential, N/L/M/H). Convection means at least one lightning flash and/or radar ≥ 40 dBZ in the hour ending at that time. These run to 25 hours where the aviation elements go further, so the trailing blanks are the bulletin, not a gap.'
     ]},
@@ -15511,15 +15515,90 @@ function _modelSoundingProfile(rec, i) {
     return lv.filter(l => l.dwpc != null && isFinite(l.dwpc)).sort((a, b) => b.pres - a.pres);
 }
 
-async function loadSkewtModel(model, station) {
+// ─── Where to build a forecast sounding ─────────────────────────────────────
+// A model sounding needs a grid point, not a balloon, so it is NOT limited to
+// the ~90 radiosonde sites — Memphis, Gulfport and anywhere else are all fair
+// game. Resolve whatever was typed, cheapest source first: the RAOB table, then
+// the METAR set already in memory (every state's ASOS network, so no network
+// call for the common case), then IEM's station metadata for anything else,
+// then ZIP/city geocoding. Empty falls back to the active pane's centre.
+async function _iemStationPoint(id) {
+    try {
+        const r = await fetch(`https://mesonet.agron.iastate.edu/api/1/station/${encodeURIComponent(id)}.json`);
+        if (!r.ok) return null;
+        const j = await r.json();
+        const row = (j.data || [])[0];
+        if (!row || row.latitude == null || row.longitude == null) return null;
+        return { lat: +row.latitude, lon: +row.longitude, label: row.name ? `${id} — ${row.name}` : id };
+    } catch (_) { return null; }
+}
+
+async function resolveSoundingPoint(qRaw) {
+    const q = (qRaw || '').trim();
+    if (!q) {
+        let c = null;
+        try { const m = maps[activePaneId]; if (m) c = m.getCenter(); } catch (_) {}
+        if (!c) throw new Error('type an airport id, ZIP, city or lat,lon');
+        return { lat: c.lat, lon: c.lng, label: `pane centre ${c.lat.toFixed(2)}, ${c.lng.toFixed(2)}` };
+    }
+    const ll = q.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    if (ll) return { lat: +ll[1], lon: +ll[2], label: `${(+ll[1]).toFixed(2)}, ${(+ll[2]).toFixed(2)}` };
+    const id = q.toUpperCase();
+    if (/^[A-Z0-9]{3,4}$/.test(id)) {
+        const site = RAOB_SITES[id];
+        if (site) return { lat: site[0], lon: site[1], label: id };
+        // IEM's CONUS ASOS ids are 3-char, so KMEM is stored as MEM.
+        const bare = (id.length === 4 && id[0] === 'K') ? id.slice(1) : id;
+        const f = metarGeoJSON.features.find(x => {
+            const s = ((x.properties && x.properties.station) || '').toUpperCase();
+            return s === id || s === bare;
+        });
+        const g = f && f.geometry && f.geometry.coordinates;
+        if (g) return { lat: g[1], lon: g[0], label: f.properties.name ? `${id} — ${f.properties.name}` : id };
+        // A bare 3-char id means the airport to a US forecaster, so try the ICAO
+        // form first — IEM also has non-airport networks that reuse those ids
+        // (plain "MEM" resolves ~19 km from Memphis International otherwise).
+        for (const cand of (id.length === 3 ? ['K' + id, id] : [id])) {
+            const meta = await _iemStationPoint(cand);
+            if (meta) return meta;
+        }
+    }
+    const gp = await geocodePlace(q);
+    return { lat: gp.lat, lon: gp.lon, label: gp.label };
+}
+
+// Nearest ASOS to the pane centre — a better default than the nearest balloon
+// site now that the forecast sounding is not tied to one.
+function nearestSoundingSite() {
+    try {
+        const m = maps[activePaneId];
+        const c = m && m.getCenter();
+        if (c && metarGeoJSON.features.length) {
+            let best = null, bd = Infinity;
+            metarGeoJSON.features.forEach(f => {
+                const g = f.geometry && f.geometry.coordinates;
+                const id = f.properties && f.properties.station;
+                if (!g || !id) return;
+                const dx = (g[0] - c.lng) * Math.cos(c.lat * Math.PI / 180), dy = g[1] - c.lat;
+                const d = dx * dx + dy * dy;
+                if (d < bd) { bd = d; best = id; }
+            });
+            if (best) return best.length === 3 ? 'K' + best : best;
+        }
+    } catch (_) {}
+    return nearestRaob();
+}
+
+async function loadSkewtModel(model, where) {
     const seq = ++_skewtSeq;
     const meta = document.getElementById('skewt-meta'), body = document.getElementById('skewt-body');
-    const site = RAOB_SITES[station];
     const def = SOUNDING_MODELS[model];
-    if (!site) { if (meta) meta.textContent = `Unknown site ${station}`; return; }
-    if (meta) meta.textContent = `Fetching ${def.label} for ${station}…`;
+    if (meta) meta.textContent = `Locating ${where || 'pane centre'}…`;
     try {
-        const rec = await _fetchModelSounding(model, site[0], site[1]);
+        const pt = await resolveSoundingPoint(where);
+        if (seq !== _skewtSeq) return;
+        if (meta) meta.textContent = `Fetching ${def.label} for ${pt.label}…`;
+        const rec = await _fetchModelSounding(model, pt.lat, pt.lon);
         if (seq !== _skewtSeq) return;
         // _fillSkewtForecastHours parks the selection on the hour nearest NOW when
         // the list is (re)built; only an explicit user pick survives.
@@ -15531,13 +15610,13 @@ async function loadSkewtModel(model, station) {
         if (lv.length < 4) throw new Error('profile too sparse at this hour');
         const D = _skewtCompute(lv);
         const validZ = rec.times[i].replace('T', ' ') + 'Z';
-        if (meta) meta.innerHTML = `${station} · <b style="color:#ffb300;">${esc(def.label)}</b> · valid ${esc(validZ)} · ${lv.length} lvl · `
+        if (meta) meta.innerHTML = `${esc(pt.label)} · <b style="color:#ffb300;">${esc(def.label)}</b> · valid ${esc(validZ)} · ${lv.length} lvl · `
             + `SBCAPE ${Math.round(D.cape)} · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${(D.pw / 25.4).toFixed(2)} in`;
         if (body) body.innerHTML = renderSkewT(lv, D);
     } catch (e) {
         if (seq !== _skewtSeq) return;
         if (meta) meta.textContent = `Skew-T: ${e.message}`;
-        if (body) body.innerHTML = `<div style="color:#ff6666;font-size:11px;padding:16px;">Could not build a ${esc(def.label)} sounding for ${esc(station)} (${esc(e.message)}).</div>`;
+        if (body) body.innerHTML = `<div style="color:#ff6666;font-size:11px;padding:16px;">Could not build a ${esc(def.label)} sounding for ${esc(where || 'pane centre')} (${esc(e.message)}).</div>`;
     }
 }
 
@@ -15572,12 +15651,30 @@ function _fillSkewtForecastHours(rec, def) {
     else sel.value = String(_nearestForecastIndex(rec));
 }
 
-// Dispatcher — RAOB and model sources share the station selector and the canvas.
+// RAOB is limited to sites that actually launch balloons, so it keeps the fixed
+// dropdown. A model sounding is not, so it gets a free-text location box — swap
+// whichever control applies to the chosen source.
+function _syncSkewtSourceUI() {
+    const src = document.getElementById('skewt-source')?.value || 'raob';
+    const stSel = document.getElementById('skewt-station');
+    const place = document.getElementById('skewt-place');
+    const isRaob = src === 'raob';
+    if (stSel) stSel.style.display = isRaob ? '' : 'none';
+    if (place) {
+        place.style.display = isRaob ? 'none' : '';
+        if (!isRaob && !place.value.trim()) place.value = nearestSoundingSite();
+    }
+}
+
+// Dispatcher — both sources share the time selector and the canvas.
 function refreshSkewt() {
     const src = document.getElementById('skewt-source')?.value || 'raob';
-    const station = document.getElementById('skewt-station')?.value || nearestRaob();
-    if (src === 'raob') { _fillSkewtTimes(document.getElementById('skewt-time'), true); return loadSkewt(station); }
-    return loadSkewtModel(src, station);
+    if (src === 'raob') {
+        const station = document.getElementById('skewt-station')?.value || nearestRaob();
+        _fillSkewtTimes(document.getElementById('skewt-time'), true);
+        return loadSkewt(station);
+    }
+    return loadSkewtModel(src, document.getElementById('skewt-place')?.value || '');
 }
 
 let skewtStation = null;
@@ -15603,6 +15700,7 @@ async function openSkewtPanel() {
     _fillSkewtStations(stSel); _fillSkewtTimes(tSel);
     skewtStation = nearestRaob();
     if (stSel) stSel.value = skewtStation;
+    _syncSkewtSourceUI();
     await refreshSkewt();
 }
 function initSkewtPanel() {
@@ -15616,8 +15714,14 @@ function initSkewtPanel() {
     document.getElementById('skewt-source')?.addEventListener('change', () => {
         const t = document.getElementById('skewt-time');
         if (t) { t.innerHTML = ''; delete t.dataset.mode; }
+        _syncSkewtSourceUI();
         refreshSkewt();
     });
+    const placeEl = document.getElementById('skewt-place');
+    if (placeEl) {
+        placeEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); refreshSkewt(); } });
+        placeEl.addEventListener('change', () => refreshSkewt());
+    }
     const panel = document.getElementById('skewt-panel'), handle = document.getElementById('skewt-drag');
     if (panel && handle) {
         let dx = 0, dy = 0, drag = false; handle.style.cursor = 'move';
