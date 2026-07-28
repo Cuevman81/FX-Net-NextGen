@@ -11234,18 +11234,24 @@ function modelLastPoint() {
 // 2026-10-06 12 UTC alongside SREF/HREF/HiresW, replaced by RRFS/REFS; MDL
 // points NAM MOS users at GFS MOS or NBM, and LAMP temporarily switches to a
 // GFS MOS input. The panel says so rather than silently serving a dying product.
+// `cycleHrs` is the BULLETIN issuance interval, verified by walking IEM's archive
+// cycle by cycle — not the interval the underlying model runs at. That gap is the
+// usual source of "why is my guidance stale?": the NBM system itself updates
+// every hour, but its NBS station bulletin is only cut every 6 hours and NBE
+// every 12. The genuinely hourly station product is LAMP, so the panel says so
+// rather than leaving you to wonder whether a 06Z run at 13Z is broken.
 const MOS_MODELS = [
-    { id: 'GFS', label: 'GFS MOS',  sub: 'MAV · short range, 3-hourly to 72 h',
+    { id: 'GFS', label: 'GFS MOS',  sub: 'MAV · 3-hourly out to 72 h', cycleHrs: 6,
       rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p06', 'p12', 'q06', 'q12', 't06_1', 't06_2', 't12_1', 'cig', 'vis', 'obv'] },
-    { id: 'MEX', label: 'GFS Ext',  sub: 'MEX · extended, 12-hourly to 192 h',
+    { id: 'MEX', label: 'GFS Ext',  sub: 'MEX · 12-hourly out to 192 h', cycleHrs: 12,
       rows: ['n_x', 'tmp', 'dpt', 'cld', 'wsp', 'p12', 'q12', 't12_1', 't12_2'] },
-    { id: 'LAV', label: 'LAMP',     sub: 'Localized Aviation MOS · updates hourly',
+    { id: 'LAV', label: 'LAMP',     sub: 'Localized Aviation MOS · hourly out to 25 h', cycleHrs: 1,
       rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p01', 'cig', 'vis', 'obv', 'ccg', 'cvs', 'ppo', 'pco'] },
-    { id: 'NBS', label: 'NBM Short', sub: 'National Blend · short range',
+    { id: 'NBS', label: 'NBM Short', sub: 'National Blend · 3-hourly out to ~72 h', cycleHrs: 6, nbm: true,
       rows: ['tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p06', 'q06', 't06_1', 'cig', 'vis', 'pra', 'psn', 'pzr', 'ppl', 's06'] },
-    { id: 'NBE', label: 'NBM Ext',  sub: 'National Blend · extended',
+    { id: 'NBE', label: 'NBM Ext',  sub: 'National Blend · 12-hourly, extended', cycleHrs: 12, nbm: true,
       rows: ['n_x', 'tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p12', 'q12', 't12_1', 's12'] },
-    { id: 'NAM', label: 'NAM MOS',  sub: 'MET · retires 2026-10-06 12 UTC with NAM', retiring: true,
+    { id: 'NAM', label: 'NAM MOS',  sub: 'MET · retires 2026-10-06 12 UTC with NAM', cycleHrs: 6, retiring: true,
       rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p06', 'p12', 'q06', 'q12', 't06_1', 't12_1', 'cig', 'vis', 'obv'] }
 ];
 
@@ -11259,6 +11265,15 @@ const MOS_ROW_LABELS = {
 };
 
 let mosCache = {};   // `${station}|${model}` -> { rows, fetched }
+
+// IEM returns MOS times as UTC values but writes them WITHOUT a zone designator
+// ("2026-07-28T06:00:00.000", or "2026-07-28 06:00"). A bare date-time is parsed
+// as LOCAL by JS, which silently shifted every projection hour by the viewer's
+// UTC offset. Force the Z on.
+function parseMosUtc(s) {
+    if (!s) return NaN;
+    return Date.parse(String(s).trim().replace(' ', 'T').replace(/Z$/, '') + 'Z');
+}
 
 function mosStationId(raw) {
     const s = (raw || '').trim().toUpperCase();
@@ -11318,24 +11333,35 @@ function renderMosTable(station, def, rows) {
     // Only keep rows this bulletin actually carries, so an empty parameter never
     // takes a line — the real bulletins vary by model and by cycle.
     const useRows = def.rows.filter(k => rows.some(r => r[k] !== null && r[k] !== undefined && r[k] !== ''));
-    const hdr = rows.map(r => {
-        const d = new Date((r.ftime_utc || r.ftime || '').replace(' ', 'T') + (r.ftime_utc ? '' : 'Z'));
-        return isNaN(d) ? '--' : String(d.getUTCHours()).padStart(2, '0');
-    });
-    const days = rows.map(r => {
-        const d = new Date((r.ftime_utc || r.ftime || '').replace(' ', 'T') + (r.ftime_utc ? '' : 'Z'));
-        return isNaN(d) ? '' : String(d.getUTCDate()).padStart(2, '0');
-    });
+    const ftMs = rows.map(r => parseMosUtc(r.ftime_utc || r.ftime));
+    const hdr = ftMs.map(ms => isNaN(ms) ? '--' : String(new Date(ms).getUTCHours()).padStart(2, '0'));
+    const days = ftMs.map(ms => isNaN(ms) ? '' : String(new Date(ms).getUTCDate()).padStart(2, '0'));
     let lastDay = null;
     const dayCells = days.map(dv => {
         const show = dv !== lastDay; lastDay = dv;
         return show ? dv : '';
     });
     const cell = v => (v === null || v === undefined || v === '') ? '' : String(v).trim();
+    // Age the cycle against its own issuance interval, so a 6-hourly bulletin
+    // sitting at 06Z mid-morning reads as on-time instead of looking stale.
+    const runMs = parseMosUtc(rows[0].runtime_utc || rows[0].runtime);
+    let ageNote = '';
+    if (!isNaN(runMs)) {
+        const ageMin = Math.max(0, Math.round((Date.now() - runMs) / 60000));
+        const ageTxt = ageMin < 90 ? `${ageMin} min` : `${(ageMin / 60).toFixed(1)} h`;
+        const nextMs = runMs + def.cycleHrs * 3600 * 1000;
+        const nextTxt = `${String(new Date(nextMs).getUTCHours()).padStart(2, '0')}Z`;
+        const overdue = Date.now() > nextMs + 75 * 60 * 1000;   // allow normal issuance lag
+        ageNote = ` · <span style="color:${overdue ? '#ffb300' : '#8b97a3'};">${ageTxt} old`
+            + (def.cycleHrs > 1 ? `, issued every ${def.cycleHrs} h, next ~${nextTxt}` : ', issued hourly')
+            + `${overdue ? ' — running late' : ''}</span>`;
+    }
     let html = `<div style="font-size:10px;color:#8b97a3;padding:0 2px 8px;line-height:1.5;">
             <b style="color:#cdd6df;">${esc(station)}</b> — ${esc(def.label)} <span style="color:#5b6773;">${esc(def.sub)}</span>
             ${def.retiring ? '<span class="badge orange" style="margin-left:6px;">RETIRING</span>' : ''}
-            <br>Cycle <b style="color:#cdd6df;">${esc(rows[0].runtime || '—')}Z</b> · ${rows.length} forecast projections
+            <br>Cycle <b style="color:#cdd6df;">${esc(rows[0].runtime || '—')}Z</b> · ${rows.length} forecast projections${ageNote}
+            ${def.nbm ? '<br><span style="color:#5b6773;">The NBM system updates hourly, but this station bulletin is only cut every '
+                + def.cycleHrs + ' h. For hourly-updating station guidance use <b style="color:#8b97a3;">LAMP</b>.</span>' : ''}
             ${def.retiring ? '<br><span style="color:#ffb300;">NAM MOS ends 2026-10-06 12 UTC with NAM, SREF, HREF and HiresW. MDL directs users to GFS MOS or NBM.</span>' : ''}
         </div>
         <div style="overflow-x:auto;">
@@ -13856,7 +13882,10 @@ const CHANGELOG = [
         '<b>MOS Guidance</b> panel with MDL\'s station bulletins laid out the way they\'re issued — parameters down the left, projections across. GFS MOS (MAV), GFS Extended (MEX), <b>LAMP</b> (updated hourly, normally the freshest guidance on the page), NBM Short and Extended, plus NAM MOS flagged <b>RETIRING</b>. <b>Nearest</b> finds the closest ASOS to the panel centre from the METAR set already loaded.',
         '<b>On NAM:</b> NAM MOS ends <b>2026-10-06 12 UTC</b> with NAM, SREF, HREF and HiresW, replaced by RRFS/REFS — pushed back from the original Aug 31 date. <b>GFS MOS is not being retired</b>; MDL points NAM MOS users at GFS MOS or NBM. The panel says so rather than quietly serving a dying product.',
         'Model data is deliberately <b>point-based, never gridded</b>. Gridded contours were built and measured first: without a free CORS-open model WMS, the only workable route rate-limited at roughly 30 map draws per day. A point across five models costs about a thousandth of that. Both panels fetch only when opened — no polling, no map layers, no background traffic.',
-        'There is no such thing as AI MOS, in case you were wondering — MDL station guidance is still classical regression and its successor is NBM, statistical blending rather than machine learning. The AI here is the model (AIFS), not the MOS.'
+        'There is no such thing as AI MOS, in case you were wondering — MDL station guidance is still classical regression and its successor is NBM, statistical blending rather than machine learning. The AI here is the model (AIFS), not the MOS.',
+        '<b>Fixed: MOS projection hours were shifted by your timezone offset.</b> IEM returns MOS times as UTC values but writes them with no zone designator ("2026-07-28T06:00:00.000"), and a bare date-time is parsed as <i>local</i> by the browser — so every HR (Z) column was off by the local UTC offset (5 hours on US Central). A 06Z GFS MOS run read 07/10/13… instead of 12/15/18…. Times are now forced to UTC.',
+        '<b>Each MOS bulletin now shows its issuance cadence and run age</b> — "7.2 h old, issued every 6 h, next ~12Z" — so an on-time cycle no longer looks stale, and a genuinely late one is flagged amber. Verified cycle by cycle against IEM\'s archive: <b>LAMP is hourly</b>; GFS MOS and NBM Short are 6-hourly (00/06/12/18Z); GFS Extended and NBM Extended are 12-hourly (00/12Z).',
+        'The two NBM bulletins now say the quiet part out loud: the <b>NBM system runs hourly, but its station bulletins are only cut every 6 or 12 hours</b>. The hourly station product is <b>LAMP</b> — NBM\'s own hourly bulletin (NBH) exists but no CORS-open source publishes it, so the panel points you at LAMP instead.'
     ]},
     { date: 'Jul 27, 2026', items: [
         '<b>GOES-West is here, and satellite is now organized by sector.</b> A single <b>SECTOR</b> selector at the top of the Satellite group picks the bird and the scan area together: GOES-East gives CONUS, Full Disk, Puerto Rico / Caribbean and both mesoscale floaters; GOES-West adds <b>PACUS, Full Disk, Hawaii, Alaska</b> and its own two floaters. Eleven sectors in total, all sixteen ABI channels on each. It is per-panel, so the eastern Pacific can sit beside the Atlantic in a 2- or 4-pane layout — which is what the Pacific hurricane season actually needs.',
@@ -14217,8 +14246,16 @@ const USER_GUIDE = [
         <ul>
             <li><b>GFS MOS (MAV)</b> — short range, 3-hourly to 72 h. The workhorse, and <b>not</b> going away.</li>
             <li><b>GFS Extended (MEX)</b> — 12-hourly to 192 h, with day max/min in the N/X row.</li>
-            <li><b>LAMP</b> — Localized Aviation MOS, <b>updated hourly</b>, so it is normally the freshest guidance on the page. Carries conditional ceiling/visibility and the aviation probabilities.</li>
+            <li><b>LAMP</b> — Localized Aviation MOS, <b>issued every hour</b>, so it is normally the freshest guidance on the page. Carries conditional ceiling/visibility and the aviation probabilities.</li>
             <li><b>NBM Short / Extended</b> — National Blend of Models, including gusts, sky %, snow and precip-type probabilities.</li>
+        </ul>
+        <h3>Why a bulletin can look stale when it isn't</h3>
+        <p>Each bulletin shows its <b>run age and issuance interval</b> — "7.2 h old, issued every 6 h, next ~12Z" — because the cycle a product is <i>issued</i> on is often slower than the model behind it. The header turns amber only when a cycle is genuinely overdue.</p>
+        <p>The clearest example is NBM: the <b>NBM system updates hourly</b>, but its station bulletins are cut every <b>6 hours</b> (NBM Short) or <b>12 hours</b> (NBM Extended), so mid-morning you will correctly see a 06Z run. If you want station guidance that actually refreshes hourly, use <b>LAMP</b>. NBM does publish an hourly bulletin of its own (NBH), but no CORS-open source carries it.</p>
+        <ul>
+            <li>Hourly — LAMP</li>
+            <li>Every 6 h (00/06/12/18Z) — GFS MOS, NBM Short, NAM MOS</li>
+            <li>Every 12 h (00/12Z) — GFS Extended, NBM Extended</li>
             <li><b>NAM MOS (MET)</b> — flagged <b>RETIRING</b>. It ends <b>2026-10-06 12 UTC</b> along with NAM, SREF, HREF and HiresW, replaced by RRFS/REFS. MDL directs users to GFS MOS or NBM.</li>
         </ul>
         <p>On the question of AI MOS: there isn't one. MDL station guidance is still classical regression, and its modern successor is NBM — statistical blending, not machine learning. The AI in this section is the <b>model</b> (AIFS), not the MOS.</p>` },
