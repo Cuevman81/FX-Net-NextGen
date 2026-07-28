@@ -1130,8 +1130,13 @@
     <!-- INTERACTIVE SKEW-T / LOG-P (RAOB, NSHARP-lite) -->
     <div id="skewt-panel" class="floating-panel" style="display:none; width:760px; height:640px;">
         <div class="floating-panel-header" id="skewt-drag">
-            <span><i data-lucide="git-commit"></i> INTERACTIVE SKEW-T (RAOB)</span>
+            <span><i data-lucide="git-commit"></i> INTERACTIVE SKEW-T</span>
             <div style="display:flex; gap:8px; align-items:center;">
+                <select id="skewt-source" title="Observed sounding or model forecast sounding" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;">
+                    <option value="raob" selected>RAOB — observed</option>
+                    <option value="gfs_hrrr">HRRR — 3 km forecast</option>
+                    <option value="gfs_seamless">GFS — global forecast</option>
+                </select>
                 <select id="skewt-station" title="Upper-air site" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
                 <select id="skewt-time" title="Sounding time" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
                 <button id="skewt-refresh" class="btn-primary" style="height:24px; padding:0 10px; font-weight:700; font-size:10px;">Load</button>
@@ -1229,6 +1234,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=259"></script>
+    <script src="app.js?v=260"></script>
 </body>
 </html>

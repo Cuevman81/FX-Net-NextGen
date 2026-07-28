@@ -10981,8 +10981,12 @@ function initProductSidebar() {
 // a genuinely useful signal. NOTE: there is no "AI MOS"; MDL station guidance is
 // still classical regression and its successor is NBM, so the AI tag belongs to
 // the model, not to the MOS panel.
+// HRRR is short-range by design (3 km CONUS, hourly runs, ~48 h) so its trace
+// simply ends partway across the chart — that truncation is honest, and where it
+// disagrees with the globals inside 48 h is exactly where it earns its keep.
 const MODEL_SOURCES = [
     { id: 'gfs_seamless',         label: 'GFS',        org: 'NOAA NCEP', color: '#00e5ff' },
+    { id: 'gfs_hrrr',             label: 'HRRR',       org: 'NOAA 3 km', color: '#ff8a3c', shortRange: true },
     { id: 'ecmwf_ifs025',         label: 'ECMWF IFS',  org: 'ECMWF',     color: '#ff5ad1' },
     { id: 'gem_seamless',         label: 'CMC GEM',    org: 'ECCC',      color: '#ffd166' },
     { id: 'icon_seamless',        label: 'ICON',       org: 'DWD',       color: '#7cff6b' },
@@ -13877,6 +13881,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 28, 2026 (update 2)', items: [
+        '<b>HRRR forecast soundings in the Skew-T.</b> The Skew-T panel now takes a source as well as a site: the observed <b>RAOB</b>, or a model forecast sounding from <b>HRRR</b> (3 km, out to 48 h) or <b>GFS</b> (out to 5 days), stepped by forecast hour. Every index the observed sounding produces — SBCAPE, CIN, Lifted Index, PWAT, LCL, LFC, EL, 0–1 and 0–6 km shear, the barbs and the hodograph — is computed identically from the model profile, so you can flip between the balloon and HRRR at the same site and read the difference straight off. The whole run is cached, so scrubbing hours after the first load is free.',
+        'Cross-check on the first build: at KJAN the 12Z balloon gave PWAT 1.74 in / SBCAPE 1453, and HRRR at 13Z gave <b>PWAT 1.74 in</b> / SBCAPE 1845 — same moisture, more instability an hour into the heating. That the two paths agree on precipitable water is a decent sign the profile assembly is honest.',
+        '<b>HRRR added to Model Comparison</b> alongside GFS, ECMWF IFS, CMC GEM, ICON and AIFS. Its trace simply ends around 48 h because that is the model; inside that window it is the convection-allowing solution, and the spread band now reflects six models rather than five.'
+    ]},
     { date: 'Jul 28, 2026', items: [
         '<b>New MODEL GUIDANCE section.</b> Two panels: <b>Model Comparison</b> plots GFS, ECMWF IFS, CMC GEM, ICON and <b>ECMWF AIFS</b> at a point — panel centre or any ZIP/city — for temperature, dewpoint, wind, precip or MSLP out to 7 days. The shaded band is the inter-model spread and the readout gives mean and worst-case disagreement with the hour it peaks, because agreement is the confidence signal, not any one deterministic run. AIFS is ECMWF\'s operational AI model and draws dashed so it reads apart from the physics runs.',
         '<b>MOS Guidance</b> panel with MDL\'s station bulletins laid out the way they\'re issued — parameters down the left, projections across. GFS MOS (MAV), GFS Extended (MEX), <b>LAMP</b> (updated hourly, normally the freshest guidance on the page), NBM Short and Extended, plus NAM MOS flagged <b>RETIRING</b>. <b>Nearest</b> finds the closest ASOS to the panel centre from the METAR set already loaded.',
@@ -14236,11 +14245,15 @@ const USER_GUIDE = [
         <p>AWIPS ingests full model grids into EDEX and contours them locally — that is a data pipeline, not a web page. FX-Net deliberately does <b>not</b> do that. There is no free, CORS-open gridded source for GFS/ECMWF/CMC, and the one workable route (building a coarse grid and contouring it in the browser) was measured at roughly <b>30 map draws per day</b> before rate limits bite. Point guidance costs about a thousandth of that and answers the question that actually decides a forecast: <b>do the models agree?</b></p>
         <p>Both panels fetch <b>only when you open them</b>. Nothing here polls in the background or touches the map.</p>
         <h3>Model Comparison</h3>
-        <p>Plots <b>GFS</b> (NCEP), <b>ECMWF IFS</b>, <b>CMC GEM</b> (Environment Canada), <b>ICON</b> (DWD) and <b>ECMWF AIFS</b> at a single point — the panel centre, or any ZIP / city you type. Switch between temperature, dewpoint, wind, precip and MSLP; every field arrives in the same request, so changing it redraws instantly with no refetch.</p>
+        <p>Plots <b>GFS</b> (NCEP), <b>HRRR</b> (NCEP 3 km), <b>ECMWF IFS</b>, <b>CMC GEM</b> (Environment Canada), <b>ICON</b> (DWD) and <b>ECMWF AIFS</b> at a single point — the panel centre, or any ZIP / city you type. Switch between temperature, dewpoint, wind, precip and MSLP; every field arrives in the same request, so changing it redraws instantly with no refetch.</p>
         <ul>
+            <li><b>HRRR stops around 48 hours</b> — that is the model, not a gap. Inside that window it is the 3 km convection-allowing solution, and where it parts company with the globals is the interesting part.</li>
             <li><b>AIFS is ECMWF's operational AI model</b> and is drawn dashed so it reads apart from the physics runs. Where it diverges from IFS is worth a look.</li>
             <li>The shaded band is the <b>spread envelope</b> — the min-to-max across all models at each hour. The readout underneath gives mean and worst-case spread with the time it peaks. <b>Wide spread means low confidence</b>, and it usually blows up somewhere past day 4.</li>
         </ul>
+        <h3>Forecast soundings (Skew-T)</h3>
+        <p>The Skew-T panel takes a <b>source</b> as well as a site: <b>RAOB — observed</b> (the 00Z/12Z balloon) or a <b>model forecast sounding</b> from <b>HRRR</b> or <b>GFS</b> at that site's location. Forecast soundings step by hour — HRRR out to 48 h, GFS to 5 days — and the whole run is cached, so scrubbing through hours costs nothing after the first load.</p>
+        <p>Everything downstream is identical to the observed sounding: <b>SBCAPE, CIN, Lifted Index, PWAT, LCL, LFC, EL, 0–1 and 0–6 km shear</b>, the wind barbs and the hodograph are all computed from the profile the same way. That means you can flip between the balloon and HRRR at the same site and read the difference directly — which is the point.</p>
         <h3>MOS Guidance</h3>
         <p>MDL's station bulletins, laid out the way they are issued — parameters down the left, forecast projections across. <b>Nearest</b> picks the closest ASOS to the panel centre (needs METAR obs switched on); otherwise type any ICAO.</p>
         <ul>
@@ -15401,13 +15414,167 @@ async function loadSkewt(station) {
         if (body) body.innerHTML = `<div style="color:#ff6666;font-size:11px;padding:16px;">Could not load a sounding for ${esc(station)} (${esc(e.message)}). Launches are 00Z & 12Z — try another site or an earlier time.</div>`;
     }
 }
+// ─── Model forecast soundings ───────────────────────────────────────────────
+// The observed-RAOB path and this one converge on the SAME level array
+// ({pres,tmpc,dwpc,hght,drct,sknt}), so _skewtCompute and renderSkewT — CAPE,
+// CIN, LI, PWAT, the wind barbs, the hodograph — are reused untouched. That is
+// the whole reason a forecast sounding is cheap here: only the fetch is new.
+// HRRR is the point of the exercise (3 km, hourly runs, convection-allowing);
+// GFS is offered alongside it so you can see the mesoscale solution diverge from
+// the global one at the same spot.
+const SOUNDING_LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100];
+const SOUNDING_MODELS = {
+    raob:         { label: 'RAOB — observed' },
+    gfs_hrrr:     { label: 'HRRR — 3 km forecast', hours: 48 },
+    gfs_seamless: { label: 'GFS — global forecast', hours: 120 }
+};
+
+// Open-Meteo publishes RH per level, not dewpoint. Alduchov-Eskridge Magnus.
+function _dewpointFromRh(tC, rh) {
+    if (tC == null || rh == null) return null;
+    const a = 17.625, b = 243.04;
+    const r = Math.min(100, Math.max(1, rh));
+    const al = Math.log(r / 100) + (a * tC) / (b + tC);
+    return (b * al) / (a - al);
+}
+
+let _modelSndCache = {};   // `${model}|${lat}|${lon}` -> cached run
+
+async function _fetchModelSounding(model, lat, lon) {
+    const key = `${model}|${lat.toFixed(2)}|${lon.toFixed(2)}`;
+    const hit = _modelSndCache[key];
+    if (hit && Date.now() - hit.fetched < 20 * 60 * 1000) return hit;
+    const def = SOUNDING_MODELS[model];
+    const vars = [];
+    SOUNDING_LEVELS.forEach(L => vars.push(
+        `temperature_${L}hPa`, `relative_humidity_${L}hPa`, `geopotential_height_${L}hPa`,
+        `wind_speed_${L}hPa`, `wind_direction_${L}hPa`));
+    vars.push('temperature_2m', 'dewpoint_2m', 'surface_pressure', 'wind_speed_10m', 'wind_direction_10m');
+    // The whole run comes down once and is cached, so stepping forecast hours
+    // costs nothing — same trick the Model Comparison panel uses for its fields.
+    const url = 'https://api.open-meteo.com/v1/forecast'
+        + `?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
+        + `&hourly=${vars.join(',')}&models=${model}`
+        + `&forecast_days=${Math.max(1, Math.ceil((def.hours || 48) / 24))}`
+        + '&wind_speed_unit=kn';   // °C and hPa are already the defaults the renderer wants
+    const res = await fetch(url);
+    if (res.status === 429) throw new Error('Open-Meteo rate limit reached — wait a minute and retry');
+    if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
+    const j = await res.json();
+    const rec = { times: (j.hourly && j.hourly.time) || [], hourly: j.hourly || {}, elevation: j.elevation, fetched: Date.now() };
+    if (!rec.times.length) throw new Error('no forecast returned for this point');
+    _modelSndCache[key] = rec;
+    return rec;
+}
+
+// One timestep of a cached run -> the level array the renderer expects.
+function _modelSoundingProfile(rec, i) {
+    const h = rec.hourly, lv = [];
+    const sfcP = h.surface_pressure ? h.surface_pressure[i] : null;
+    const sfcT = h.temperature_2m ? h.temperature_2m[i] : null;
+    const sfcTd = h.dewpoint_2m ? h.dewpoint_2m[i] : null;
+    // A surface parcel is what makes SBCAPE/CIN mean anything, so seed the
+    // profile with the 2 m state rather than starting at 1000 hPa.
+    if (sfcP != null && sfcT != null && sfcTd != null) {
+        lv.push({ pres: sfcP, tmpc: sfcT, dwpc: sfcTd, hght: rec.elevation != null ? rec.elevation : 0,
+            drct: h.wind_direction_10m ? h.wind_direction_10m[i] : null,
+            sknt: h.wind_speed_10m ? h.wind_speed_10m[i] : null });
+    }
+    SOUNDING_LEVELS.forEach(L => {
+        const t = h[`temperature_${L}hPa`] ? h[`temperature_${L}hPa`][i] : null;
+        const rh = h[`relative_humidity_${L}hPa`] ? h[`relative_humidity_${L}hPa`][i] : null;
+        const z = h[`geopotential_height_${L}hPa`] ? h[`geopotential_height_${L}hPa`][i] : null;
+        if (t == null || rh == null || z == null) return;
+        if (sfcP != null && L > sfcP) return;   // level is underground at this point
+        lv.push({ pres: L, tmpc: t, dwpc: _dewpointFromRh(t, rh), hght: z,
+            drct: h[`wind_direction_${L}hPa`] ? h[`wind_direction_${L}hPa`][i] : null,
+            sknt: h[`wind_speed_${L}hPa`] ? h[`wind_speed_${L}hPa`][i] : null });
+    });
+    return lv.filter(l => l.dwpc != null && isFinite(l.dwpc)).sort((a, b) => b.pres - a.pres);
+}
+
+async function loadSkewtModel(model, station) {
+    const seq = ++_skewtSeq;
+    const meta = document.getElementById('skewt-meta'), body = document.getElementById('skewt-body');
+    const site = RAOB_SITES[station];
+    const def = SOUNDING_MODELS[model];
+    if (!site) { if (meta) meta.textContent = `Unknown site ${station}`; return; }
+    if (meta) meta.textContent = `Fetching ${def.label} for ${station}…`;
+    try {
+        const rec = await _fetchModelSounding(model, site[0], site[1]);
+        if (seq !== _skewtSeq) return;
+        // _fillSkewtForecastHours parks the selection on the hour nearest NOW when
+        // the list is (re)built; only an explicit user pick survives.
+        _fillSkewtForecastHours(rec, def);
+        const sel = document.getElementById('skewt-time');
+        let i = parseInt(sel && sel.value, 10);
+        if (!isFinite(i) || i < 0 || i >= rec.times.length) i = _nearestForecastIndex(rec);
+        const lv = _modelSoundingProfile(rec, i);
+        if (lv.length < 4) throw new Error('profile too sparse at this hour');
+        const D = _skewtCompute(lv);
+        const validZ = rec.times[i].replace('T', ' ') + 'Z';
+        if (meta) meta.innerHTML = `${station} · <b style="color:#ffb300;">${esc(def.label)}</b> · valid ${esc(validZ)} · ${lv.length} lvl · `
+            + `SBCAPE ${Math.round(D.cape)} · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${(D.pw / 25.4).toFixed(2)} in`;
+        if (body) body.innerHTML = renderSkewT(lv, D);
+    } catch (e) {
+        if (seq !== _skewtSeq) return;
+        if (meta) meta.textContent = `Skew-T: ${e.message}`;
+        if (body) body.innerHTML = `<div style="color:#ff6666;font-size:11px;padding:16px;">Could not build a ${esc(def.label)} sounding for ${esc(station)} (${esc(e.message)}).</div>`;
+    }
+}
+
+function _nearestForecastIndex(rec) {
+    const now = Date.now();
+    let best = 0, bd = Infinity;
+    rec.times.forEach((t, i) => {
+        const d = Math.abs(Date.parse(t + 'Z') - now);
+        if (d < bd) { bd = d; best = i; }
+    });
+    return best;
+}
+
+function _fillSkewtForecastHours(rec, def) {
+    const sel = document.getElementById('skewt-time');
+    if (!sel) return;
+    const keep = sel.dataset.mode === def.label ? sel.value : '';
+    sel.innerHTML = '';
+    sel.dataset.mode = def.label;
+    const now = Date.now();
+    rec.times.forEach((t, i) => {
+        const ms = Date.parse(t + 'Z');
+        const fh = Math.round((ms - now) / 3600000);
+        const o = document.createElement('option');
+        o.value = String(i);
+        o.textContent = `${t.slice(8, 10)}/${t.slice(11, 13)}Z  ${fh >= 0 ? 'F+' + fh : fh + 'h'}`;
+        sel.appendChild(o);
+    });
+    // Open-Meteo returns the whole day including hours already past, which are
+    // worth keeping (the model's recent state) but are a poor default.
+    if (keep && sel.querySelector(`option[value="${keep}"]`)) sel.value = keep;
+    else sel.value = String(_nearestForecastIndex(rec));
+}
+
+// Dispatcher — RAOB and model sources share the station selector and the canvas.
+function refreshSkewt() {
+    const src = document.getElementById('skewt-source')?.value || 'raob';
+    const station = document.getElementById('skewt-station')?.value || nearestRaob();
+    if (src === 'raob') { _fillSkewtTimes(document.getElementById('skewt-time'), true); return loadSkewt(station); }
+    return loadSkewtModel(src, station);
+}
+
 let skewtStation = null;
 function _fillSkewtStations(sel) {
     if (!sel || sel.options.length) return;
     Object.keys(RAOB_SITES).sort().forEach(id => { const o = document.createElement('option'); o.value = id; o.textContent = id; sel.appendChild(o); });
 }
-function _fillSkewtTimes(sel) {
-    if (!sel || sel.options.length) return;
+// `force` rebuilds the list — needed when switching back from a model source,
+// whose options are forecast-hour indices rather than synoptic timestamps.
+function _fillSkewtTimes(sel, force) {
+    if (!sel) return;
+    if (sel.options.length && !force) return;
+    if (force && sel.dataset.mode === 'raob') return;
+    sel.innerHTML = '';
+    sel.dataset.mode = 'raob';
     const auto = document.createElement('option'); auto.value = ''; auto.textContent = 'Auto (latest)'; sel.appendChild(auto);
     _synopticTimes(6).forEach(ts => { const o = document.createElement('option'); o.value = ts; o.textContent = ts.slice(5, 16).replace('T', ' ') + 'Z'; sel.appendChild(o); });
 }
@@ -15418,14 +15585,21 @@ async function openSkewtPanel() {
     _fillSkewtStations(stSel); _fillSkewtTimes(tSel);
     skewtStation = nearestRaob();
     if (stSel) stSel.value = skewtStation;
-    await loadSkewt(skewtStation);
+    await refreshSkewt();
 }
 function initSkewtPanel() {
     document.getElementById('btn-skewt')?.addEventListener('click', openSkewtPanel);
     document.getElementById('close-skewt-panel')?.addEventListener('click', () => { const p = document.getElementById('skewt-panel'); if (p) p.style.display = 'none'; });
-    document.getElementById('skewt-refresh')?.addEventListener('click', () => { const s = document.getElementById('skewt-station'); loadSkewt((s && s.value) || nearestRaob()); });
-    document.getElementById('skewt-station')?.addEventListener('change', e => loadSkewt(e.target.value));
-    document.getElementById('skewt-time')?.addEventListener('change', () => { const s = document.getElementById('skewt-station'); loadSkewt((s && s.value) || nearestRaob()); });
+    document.getElementById('skewt-refresh')?.addEventListener('click', () => refreshSkewt());
+    document.getElementById('skewt-station')?.addEventListener('change', () => refreshSkewt());
+    document.getElementById('skewt-time')?.addEventListener('change', () => refreshSkewt());
+    // Switching source resets the time list, since synoptic timestamps and
+    // forecast-hour indices are not interchangeable.
+    document.getElementById('skewt-source')?.addEventListener('change', () => {
+        const t = document.getElementById('skewt-time');
+        if (t) { t.innerHTML = ''; delete t.dataset.mode; }
+        refreshSkewt();
+    });
     const panel = document.getElementById('skewt-panel'), handle = document.getElementById('skewt-drag');
     if (panel && handle) {
         let dx = 0, dy = 0, drag = false; handle.style.cursor = 'move';
