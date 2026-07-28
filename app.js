@@ -13896,6 +13896,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 28, 2026 (update 5)', items: [
+        '<b>Fixed: the Skew-T location box would not accept typing.</b> The box sits in the panel header, which is also the drag handle. That handler cancels the mousedown so a drag does not select text — but a cancelled mousedown also means the browser never moves focus, so clicking the box did nothing and keystrokes went nowhere. It was excluding buttons and dropdowns from the drag, just not text inputs. All three draggable panels now share one exclusion list covering inputs, textareas and editable content, so this cannot come back on the next panel that gets a header field.'
+    ]},
     { date: 'Jul 28, 2026 (update 4)', items: [
         '<b>Forecast soundings anywhere — not just balloon sites.</b> A radiosonde only goes up from ~57 places, but a model has a profile at <i>every</i> grid point, so there was never a reason to limit HRRR/GFS soundings to the RAOB list. Pick HRRR or GFS in the Skew-T and the site dropdown becomes a location box: type an airport id (<b>KMEM</b>, <b>KGPT</b>), a ZIP, a city, or raw <b>lat,lon</b> — or leave it blank to use the active pane\'s centre. RAOB still uses the fixed dropdown, because that is a real physical constraint. Lookups go cheapest-first: the RAOB table, then the ASOS set already in memory, then IEM station metadata, then geocoding — so the common case costs no network call at all.',
         'Sanity check at Slidell, where both are available: the 12Z balloon read SBCAPE 1447 / CIN −109 / PWAT 1.94 in, and HRRR at 14Z read SBCAPE 1918 / CIN −23 / PWAT 1.79 in — moisture within 8%, with CIN eroding and CAPE building exactly as two hours of July heating should. Gulfport, 85 km east and no balloon within reach, came out at SBCAPE 2922 / PWAT 2.01 in.'
@@ -15171,7 +15174,7 @@ function initVadPanel() {
         let dx = 0, dy = 0, drag = false;
         handle.style.cursor = 'move';
         handle.addEventListener('mousedown', e => {
-            if (e.target.closest('button')) return;
+            if (e.target.closest(DRAG_IGNORE)) return;
             drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop;
             e.preventDefault();
         });
@@ -15412,6 +15415,11 @@ function nearestRaob() {
     for (const id in RAOB_SITES) { const s = RAOB_SITES[id]; const dx = (s[1] - c.lng) * Math.cos(c.lat * Math.PI / 180), dy = s[0] - c.lat; const d = dx * dx + dy * dy; if (d < bd) { bd = d; best = id; } }
     return best;
 }
+// Controls inside a panel header must not start a drag: the handler calls
+// preventDefault(), and a prevented mousedown means the browser never focuses
+// the element — a text box in a header silently refuses to accept typing.
+const DRAG_IGNORE = 'button, select, input, textarea, [contenteditable="true"]';
+
 let _skewtSeq = 0;   // drop stale responses when the user switches station/time quickly
 async function loadSkewt(station) {
     const seq = ++_skewtSeq;
@@ -15725,7 +15733,7 @@ function initSkewtPanel() {
     const panel = document.getElementById('skewt-panel'), handle = document.getElementById('skewt-drag');
     if (panel && handle) {
         let dx = 0, dy = 0, drag = false; handle.style.cursor = 'move';
-        handle.addEventListener('mousedown', e => { if (e.target.closest('button') || e.target.closest('select')) return; drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop; e.preventDefault(); });
+        handle.addEventListener('mousedown', e => { if (e.target.closest(DRAG_IGNORE)) return; drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop; e.preventDefault(); });
         window.addEventListener('mousemove', e => { if (!drag) return; panel.style.left = Math.max(0, e.clientX - dx) + 'px'; panel.style.top = Math.max(0, e.clientY - dy) + 'px'; panel.style.right = 'auto'; });
         window.addEventListener('mouseup', () => { drag = false; });
     }
@@ -15871,7 +15879,7 @@ function initSpcMesoPanel() {
     const handle = document.getElementById('spcmeso-drag');
     if (handle) {
         let dx = 0, dy = 0, drag = false; handle.style.cursor = 'move';
-        handle.addEventListener('mousedown', e => { if (e.target.closest('button') || e.target.closest('select')) return; drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop; e.preventDefault(); });
+        handle.addEventListener('mousedown', e => { if (e.target.closest(DRAG_IGNORE)) return; drag = true; dx = e.clientX - panel.offsetLeft; dy = e.clientY - panel.offsetTop; e.preventDefault(); });
         window.addEventListener('mousemove', e => { if (!drag) return; panel.style.left = Math.max(0, e.clientX - dx) + 'px'; panel.style.top = Math.max(0, e.clientY - dy) + 'px'; panel.style.right = 'auto'; });
         window.addEventListener('mouseup', () => { drag = false; });
     }
