@@ -11244,13 +11244,21 @@ function modelLastPoint() {
 // every hour, but its NBS station bulletin is only cut every 6 hours and NBE
 // every 12. The genuinely hourly station product is LAMP, so the panel says so
 // rather than leaving you to wonder whether a 06Z run at 13Z is broken.
+//
+// There is no standalone "HRRR MOS" bulletin and there never has been. HRRR's
+// statistical station guidance ships inside LAMP: MDL has melded HRRR into the
+// LAMP ceiling/visibility elements since v2.0 (2017-04-03) and extended the
+// station guidance to take HRRR input in v2.5 (2023-06-06). So LAV is the HRRR
+// MOS, and its convection/lightning rows (CP1/CC1, LP1/LC1 — 1-h probability
+// and N/L/M/H potential out to 25 h) are the part worth having on screen.
 const MOS_MODELS = [
     { id: 'GFS', label: 'GFS MOS',  sub: 'MAV · 3-hourly out to 72 h', cycleHrs: 6,
       rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p06', 'p12', 'q06', 'q12', 't06_1', 't06_2', 't12_1', 'cig', 'vis', 'obv'] },
     { id: 'MEX', label: 'GFS Ext',  sub: 'MEX · 12-hourly out to 192 h', cycleHrs: 12,
       rows: ['n_x', 'tmp', 'dpt', 'cld', 'wsp', 'p12', 'q12', 't12_1', 't12_2'] },
-    { id: 'LAV', label: 'LAMP',     sub: 'Localized Aviation MOS · hourly out to 25 h', cycleHrs: 1,
-      rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p01', 'cig', 'vis', 'obv', 'ccg', 'cvs', 'ppo', 'pco'] },
+    { id: 'LAV', label: 'LAMP',     sub: 'Localized Aviation MOS · HRRR-melded · hourly', cycleHrs: 1, hrrr: true,
+      rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p01', 'cig', 'vis', 'obv', 'ccg', 'cvs', 'ppo', 'pco',
+             'lp1', 'lc1', 'cp1', 'cc1'] },
     { id: 'NBS', label: 'NBM Short', sub: 'National Blend · 3-hourly out to ~72 h', cycleHrs: 6, nbm: true,
       rows: ['tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p06', 'q06', 't06_1', 'cig', 'vis', 'pra', 'psn', 'pzr', 'ppl', 's06'] },
     { id: 'NBE', label: 'NBM Ext',  sub: 'National Blend · 12-hourly, extended', cycleHrs: 12, nbm: true,
@@ -11265,7 +11273,8 @@ const MOS_ROW_LABELS = {
     p01: 'P01', p06: 'P06', p12: 'P12', q06: 'Q06', q12: 'Q12',
     t06_1: 'T06', t06_2: 'T06/S', t12_1: 'T12', t12_2: 'T12/S',
     cig: 'CIG', vis: 'VIS', obv: 'OBV', ccg: 'CCG', cvs: 'CVS', ppo: 'PPO', pco: 'PCO',
-    pra: 'PRA', psn: 'PSN', pzr: 'PZR', ppl: 'PPL', s06: 'S06', s12: 'S12'
+    pra: 'PRA', psn: 'PSN', pzr: 'PZR', ppl: 'PPL', s06: 'S06', s12: 'S12',
+    lp1: 'LP1', lc1: 'LC1', cp1: 'CP1', cc1: 'CC1'
 };
 
 let mosCache = {};   // `${station}|${model}` -> { rows, fetched }
@@ -11366,6 +11375,9 @@ function renderMosTable(station, def, rows) {
             <br>Cycle <b style="color:#cdd6df;">${esc(rows[0].runtime || '—')}Z</b> · ${rows.length} forecast projections${ageNote}
             ${def.nbm ? '<br><span style="color:#5b6773;">The NBM system updates hourly, but this station bulletin is only cut every '
                 + def.cycleHrs + ' h. For hourly-updating station guidance use <b style="color:#8b97a3;">LAMP</b>.</span>' : ''}
+            ${def.hrrr ? '<br><span style="color:#5b6773;">There is no standalone HRRR MOS. LAMP <b style="color:#8b97a3;">is</b> the HRRR-based '
+                + 'station guidance — MDL statistically melds HRRR into the ceiling, visibility and conditional CIG/VIS elements. '
+                + 'LP1/LC1 and CP1/CC1 run to 25 h; the rest go further.</span>' : ''}
             ${def.retiring ? '<br><span style="color:#ffb300;">NAM MOS ends 2026-10-06 12 UTC with NAM, SREF, HREF and HiresW. MDL directs users to GFS MOS or NBM.</span>' : ''}
         </div>
         <div style="overflow-x:auto;">
@@ -11381,7 +11393,10 @@ function renderMosTable(station, def, rows) {
         <div style="font-size:9px;color:#5b6773;padding:8px 2px 2px;line-height:1.6;">
             MDL bulletins via Iowa Environmental Mesonet. TMP/DPT °F · WSP/GST kt · WDR degrees ·
             P06/P12 PoP % · Q06/Q12 QPF category · T06/T12 thunder (and severe) % ·
-            CIG/VIS/CLD categorical · OBV obstruction to vision.
+            CIG/VIS/CLD categorical · OBV obstruction to vision ·
+            CCG/CVS conditional ceiling/visibility · PPO/PCO precip occurrence % and category ·
+            LP1/CP1 1-h lightning and convection probability % · LC1/CC1 their potential (N/L/M/H).
+            Convection = at least one lightning flash and/or radar ≥ 40 dBZ in the hour ending at that time.
         </div>`;
     body.innerHTML = html;
 }
@@ -13881,6 +13896,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 28, 2026 (update 3)', items: [
+        '<b>LAMP convection and lightning rows added to MOS Guidance.</b> Short answer to "is there an HRRR MOS": no standalone one exists, and there never has been — HRRR\'s statistical station guidance ships <b>inside LAMP</b>, which MDL melds HRRR into for ceiling, visibility and the conditional CIG/VIS elements. LAMP was already in the panel; it just was not labelled as the HRRR product. It is now, and four rows IEM was already sending are now on screen: <b>LP1/CP1</b> (1-hour lightning and convection probability) and <b>LC1/CC1</b> (their potential, N/L/M/H). Convection means at least one lightning flash and/or radar ≥ 40 dBZ in the hour ending at that time. These run to 25 hours where the aviation elements go further, so the trailing blanks are the bulletin, not a gap.'
+    ]},
     { date: 'Jul 28, 2026 (update 2)', items: [
         '<b>HRRR forecast soundings in the Skew-T.</b> The Skew-T panel now takes a source as well as a site: the observed <b>RAOB</b>, or a model forecast sounding from <b>HRRR</b> (3 km, out to 48 h) or <b>GFS</b> (out to 5 days), stepped by forecast hour. Every index the observed sounding produces — SBCAPE, CIN, Lifted Index, PWAT, LCL, LFC, EL, 0–1 and 0–6 km shear, the barbs and the hodograph — is computed identically from the model profile, so you can flip between the balloon and HRRR at the same site and read the difference straight off. The whole run is cached, so scrubbing hours after the first load is free.',
         'Cross-check on the first build: at KJAN the 12Z balloon gave PWAT 1.74 in / SBCAPE 1453, and HRRR at 13Z gave <b>PWAT 1.74 in</b> / SBCAPE 1845 — same moisture, more instability an hour into the heating. That the two paths agree on precipitable water is a decent sign the profile assembly is honest.',
