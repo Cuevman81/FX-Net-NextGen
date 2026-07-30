@@ -13896,6 +13896,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 30, 2026', items: [
+        '<b>Fixed: Storm Rel Velocity, CC, ZDR and KDP rendered nothing.</b> The NODD Level III products decode server-side and come back as a georeferenced PNG in a data URL. MapLibre loads an image source through <b>fetch()</b> rather than an <code>&lt;img&gt;</code> tag — so as far as the browser\'s Content-Security-Policy is concerned that is a <i>connect</i>, not an <i>image</i>. Our policy allowed <code>data:</code> under <code>img-src</code> but not under <code>connect-src</code>, so the fetch was blocked, the source resolved with no image attached, and the layer drew nothing. Worst of all it failed silently: the product legend and timestamp still appeared, so it looked like a radar with no echoes rather than a broken layer. <code>connect-src</code> now permits <code>data:</code>. This also restores the L3 loop, which draws its frames the same way.'
+    ]},
     { date: 'Jul 28, 2026 (update 5)', items: [
         '<b>Fixed: the Skew-T location box would not accept typing.</b> The box sits in the panel header, which is also the drag handle. That handler cancels the mousedown so a drag does not select text — but a cancelled mousedown also means the browser never moves focus, so clicking the box did nothing and keystrokes went nowhere. It was excluding buttons and dropdowns from the drag, just not text inputs. All three draggable panels now share one exclusion list covering inputs, textareas and editable content, so this cannot come back on the next panel that gets a header field.'
     ]},

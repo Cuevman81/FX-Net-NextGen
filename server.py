@@ -58,7 +58,13 @@ CSP = (
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com data:; "
     "img-src 'self' data: blob: https:; "
-    "connect-src 'self' https:; "
+    # data: is required by connect-src, not just img-src: MapLibre loads an
+    # `image` source through fetch(), not an <img> tag, so the L3 radar PNGs
+    # (returned as data URLs) are a connect, not an image, as far as CSP is
+    # concerned. Without this the source resolves with no image attached and
+    # the layer silently draws nothing. A data: URL is inert, already-in-page
+    # content with no network egress, so this does not weaken exfil defence.
+    "connect-src 'self' https: data:; "
     "worker-src 'self' blob:; "
     "child-src 'self' blob:; "
     "object-src 'none'; "
