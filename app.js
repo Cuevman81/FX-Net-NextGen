@@ -273,6 +273,9 @@ const HEALTH_THRESHOLDS = {
     sfcIsobars2mb:    { label: 'Isobars 2mb',       thresholdMs: 15 * 60 * 1000 },
     sfcIsotherms:     { label: 'Isotherms',          thresholdMs: 15 * 60 * 1000 },
     sfcIsodrosotherms:{ label: 'Isodrosotherms',     thresholdMs: 15 * 60 * 1000 },
+    sfcRelh:          { label: 'Rel Humidity',       thresholdMs: 15 * 60 * 1000 },
+    sfcIsotachs:      { label: 'Isotachs',           thresholdMs: 15 * 60 * 1000 },
+    sfcApparent:      { label: 'Apparent Temp',      thresholdMs: 15 * 60 * 1000 },
     probSevere:  { label: 'ProbSevere',       thresholdMs: 5 * 60 * 1000 },
     ndfdTemp:    { label: 'NDFD Temp',        thresholdMs: 2 * 60 * 60 * 1000 },
     airSigmet:   { label: 'SIGMET/AIRMET',    thresholdMs: 20 * 60 * 1000 },
@@ -291,7 +294,7 @@ const HEALTH_THRESHOLDS = {
 const HEALTH_GROUPS = [
     { name: 'RADAR & LIGHTNING', ids: ['radar', 'radarL3', 'mrmsEchotops', 'mrmsQpe', 'lightning'] },
     { name: 'SATELLITE',         ids: ['sat', 'gibsSat'] },
-    { name: 'SURFACE ANALYSIS',  ids: ['metar', 'ndbc', 'sfcIsobars2mb', 'sfcIsotherms', 'sfcIsodrosotherms', 'wpcIsobars', 'wpcFronts', 'ndfdTemp'] },
+    { name: 'SURFACE ANALYSIS',  ids: ['metar', 'ndbc', 'sfcIsobars2mb', 'sfcIsotherms', 'sfcIsodrosotherms', 'sfcRelh', 'sfcIsotachs', 'sfcApparent', 'wpcIsobars', 'wpcFronts', 'ndfdTemp'] },
     { name: 'WARNINGS & WATCHES',ids: ['warnings', 'watches'] },
     { name: 'SPC PRODUCTS',      ids: ['spcOutlook', 'spcMd', 'spcLsr', 'probSevere'] },
     { name: 'AVIATION',          ids: ['airSigmet', 'gairmet', 'pireps', 'taf', 'cwa'] },
@@ -2204,11 +2207,8 @@ function setupMapLayers(map, paneId) {
     });
 
     // ─── Layer 7b2: METAR-Contoured Isobars (2mb), Isotherms (2°F), Isodrosotherms (2°F) ───
-    const contourProducts = [
-        { id: 'sfc-isobars-2mb',       color: '#d0d0d0', field: 'value' },
-        { id: 'sfc-isotherms',         color: '#ff4444', field: 'value' },
-        { id: 'sfc-isodrosotherms',    color: '#44cc44', field: 'value' }
-    ];
+    const contourProducts = Object.entries(SFC_CONTOUR_FIELDS)
+        .map(([id, c]) => ({ id, color: c.color, field: 'value' }));
     contourProducts.forEach(p => {
         map.addSource(p.id, {
             type: 'geojson',
@@ -4676,6 +4676,77 @@ async function fetchCWALabels() {
 // Generates isotherms, isodrosotherms, and 2mb isobars from METAR point obs
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Every surface-analysis contour in one place: the METAR property to contour,
+// the interval, and the QC bounds. `qcTol` is how far an ob may sit from its
+// neighbours' median before it is treated as a bad sensor rather than real
+// weather — set per field, since 12°F between neighbouring sites is a front
+// while 12 mb is a broken barometer.
+//
+// NOTE ON PRESSURE: mslp is used directly and never reconstructed from the
+// altimeter setting. They are different quantities — the altimeter setting
+// reduces to sea level through the STANDARD atmosphere, MSLP through the
+// observed one. Measured against the ~half of stations that report both, they
+// differ by 2.9 mb on average and up to 20 mb in the mountain West, i.e. more
+// than the 2 mb contour interval. Stations omit MSLP precisely where the
+// reduction stops being meaningful (high terrain), so honouring that omission
+// is what NWS and WPC do, and it is why the West is analysed from fewer, real
+// obs instead of many plausible-looking fabricated ones.
+const SFC_CONTOUR_FIELDS = {
+    'sfc-isobars-2mb':    { field: 'mslp', interval: 2,  unit: 'mb', label: 'ISOBARS',
+                            color: '#d0d0d0', health: 'sfcIsobars2mb',     range: [950, 1070], qcTol: 6 },
+    'sfc-isotherms':      { field: 'tmpf', interval: 2,  unit: '°F', label: 'ISOTHERMS',
+                            color: '#ff4444', health: 'sfcIsotherms',      range: [-60, 140],  qcTol: 14 },
+    'sfc-isodrosotherms': { field: 'dwpf', interval: 2,  unit: '°F', label: 'ISODROSOTHERMS',
+                            color: '#44cc44', health: 'sfcIsodrosotherms', range: [-60, 100],  qcTol: 14 },
+    'sfc-relh':           { field: 'relh', interval: 10, unit: '%',  label: 'REL HUMIDITY',
+                            color: '#00d0ff', health: 'sfcRelh',           range: [1, 100],    qcTol: 30 },
+    'sfc-isotachs':       { field: 'sknt', interval: 5,  unit: 'kt', label: 'ISOTACHS',
+                            color: '#ffb300', health: 'sfcIsotachs',       range: [0, 150],    qcTol: 20 },
+    'sfc-apparent':       { field: 'feel', interval: 4,  unit: '°F', label: 'APPARENT TEMP',
+                            color: '#ff7ad1', health: 'sfcApparent',       range: [-80, 150],  qcTol: 16 }
+};
+
+// An ob older than this cannot anchor a surface analysis.
+const SFC_OB_MAX_AGE_MIN = 90;
+
+/**
+ * Reject obs that disagree with their own neighbourhood by more than `tol`.
+ * Uses the median of the nearest few stations, so one bad sensor cannot vote
+ * itself valid, and a genuine gradient (which moves the neighbours too) passes.
+ */
+function spatialOutlierFilter(pts, tol) {
+    if (!isFinite(tol) || pts.length < 8) return pts;
+    const binSize = 2.0, bins = {};
+    pts.forEach((p, i) => {
+        const key = `${Math.floor(p.lon / binSize)},${Math.floor(p.lat / binSize)}`;
+        (bins[key] || (bins[key] = [])).push(i);
+    });
+    const kept = [];
+    for (const p of pts) {
+        const cbx = Math.floor(p.lon / binSize), cby = Math.floor(p.lat / binSize);
+        const cosLat = Math.cos(p.lat * Math.PI / 180);
+        const near = [];
+        for (let by = cby - 1; by <= cby + 1; by++) {
+            for (let bx = cbx - 1; bx <= cbx + 1; bx++) {
+                const bin = bins[`${bx},${by}`];
+                if (!bin) continue;
+                for (const i of bin) {
+                    const q = pts[i];
+                    if (q === p) continue;
+                    const dx = (q.lon - p.lon) * cosLat, dy = q.lat - p.lat;
+                    near.push({ d: dx * dx + dy * dy, v: q.val });
+                }
+            }
+        }
+        if (near.length < 4) { kept.push(p); continue; }   // too sparse to judge
+        near.sort((a, b) => a.d - b.d);
+        const vals = near.slice(0, 8).map(n => n.v).sort((a, b) => a - b);
+        const med = vals[Math.floor(vals.length / 2)];
+        if (Math.abs(p.val - med) <= tol) kept.push(p);
+    }
+    return kept;
+}
+
 /**
  * Inverse Distance Weighting interpolation from scattered points to a regular grid.
  * Uses a spatial index (binning) for fast neighbour lookup.
@@ -4686,9 +4757,13 @@ async function fetchCWALabels() {
  * @param {number} power - IDW exponent (1.5 = smooth blend, 2 = standard, 3 = sharp)
  * @param {number} searchRadius - max degrees to search for neighbours
  * @param {number} minNeighbours - require at least N neighbours or mark NaN
+ * @param {number} maxVoid - if the NEAREST ob is farther than this (degrees),
+ *        mark NaN. Without it IDW happily invents values hundreds of km out
+ *        over the Gulf, the Atlantic and Canada, where there are no ASOS at
+ *        all, and the analysis sprouts contours that no observation supports.
  * @returns {Float64Array} grid[row * cols + col]
  */
-function idwGrid(pts, bounds, cols, rows, power = 1.5, searchRadius = 8, minNeighbours = 3) {
+function idwGrid(pts, bounds, cols, rows, power = 1.5, searchRadius = 8, minNeighbours = 3, maxVoid = Infinity) {
     const grid = new Float64Array(rows * cols);
     const dLon = (bounds.east - bounds.west) / cols;
     const dLat = (bounds.north - bounds.south) / rows;
@@ -4711,7 +4786,7 @@ function idwGrid(pts, bounds, cols, rows, power = 1.5, searchRadius = 8, minNeig
         for (let c = 0; c < cols; c++) {
             const lon = bounds.west + (c + 0.5) * dLon;
             const cosLat = Math.cos(lat * Math.PI / 180);
-            let wSum = 0, vSum = 0, nCount = 0;
+            let wSum = 0, vSum = 0, nCount = 0, nearest = Infinity;
 
             const cbx = Math.floor(lon / binSize);
             const cby = Math.floor(lat / binSize);
@@ -4726,6 +4801,7 @@ function idwGrid(pts, bounds, cols, rows, power = 1.5, searchRadius = 8, minNeig
                         const dy = p.lat - lat;
                         const d = Math.sqrt(dx * dx + dy * dy);
                         if (d > searchRadius) continue;
+                        if (d < nearest) nearest = d;
                         if (d < 0.01) { // Very close — near-exact match
                             wSum += 10000; vSum += 10000 * p.val; nCount++; continue;
                         }
@@ -4736,7 +4812,8 @@ function idwGrid(pts, bounds, cols, rows, power = 1.5, searchRadius = 8, minNeig
                     }
                 }
             }
-            grid[r * cols + c] = (nCount >= minNeighbours && wSum > 0) ? vSum / wSum : NaN;
+            grid[r * cols + c] = (nCount >= minNeighbours && wSum > 0 && nearest <= maxVoid)
+                ? vSum / wSum : NaN;
         }
     }
     return grid;
@@ -4891,56 +4968,51 @@ function generateMetarContours(field, interval) {
     if (!metarGeoJSON || !metarGeoJSON.features || metarGeoJSON.features.length === 0) {
         return { type: 'FeatureCollection', features: [] };
     }
+    const cfg = Object.values(SFC_CONTOUR_FIELDS).find(c => c.field === field)
+        || { range: [-Infinity, Infinity], qcTol: Infinity };
 
     // Collect valid observations
+    const now = Date.now();
     const pts = [];
     metarGeoJSON.features.forEach(f => {
         const p = f.properties;
-        let val = p?.[field];
+        const val = p?.[field];
         const coords = f.geometry?.coordinates;
+        if (val == null || isNaN(val) || !coords) return;
 
-        // For pressure: prefer mslp, fall back to alti converted to mb
-        if (field === 'mslp') {
-            if (val == null || isNaN(val)) {
-                // Convert altimeter (inHg) to mb
-                if (p?.alti != null && !isNaN(p.alti)) {
-                    val = p.alti * 33.8639;
-                } else {
-                    return;
-                }
-            }
-            if (val < 950 || val > 1070) return;  // Bad pressure values
-        }
+        // IEM "currents" holds the LAST report a station made, which for an
+        // offline site can be days stale. An analysis is only as current as
+        // its oldest anchor point, so drop anything past the age limit.
+        const t = Date.parse(p.utc_valid || '');
+        if (isFinite(t) && (now - t) > SFC_OB_MAX_AGE_MIN * 60 * 1000) return;
 
-        // Filter obviously bad temperature/dewpoint values
-        if (field === 'tmpf' && (val < -60 || val > 140)) return;
-        if (field === 'dwpf' && (val < -60 || val > 100)) return;
-
-        if (val != null && !isNaN(val) && coords) {
-            pts.push({ lon: coords[0], lat: coords[1], val });
-        }
+        if (val < cfg.range[0] || val > cfg.range[1]) return;   // gross range check
+        pts.push({ lon: coords[0], lat: coords[1], val });
     });
     if (pts.length < 10) return { type: 'FeatureCollection', features: [] };
 
-    // Remove statistical outliers (> 3 sigma from mean) for all fields
-    const mean = pts.reduce((s, p) => s + p.val, 0) / pts.length;
-    const std = Math.sqrt(pts.reduce((s, p) => s + (p.val - mean) ** 2, 0) / pts.length);
-    if (std > 0) {
-        const filtered = pts.filter(p => Math.abs(p.val - mean) <= 3 * std);
-        pts.length = 0;
-        pts.push(...filtered);
-    }
+    // Spatial QC. A global 3-sigma cut was the old approach, but that measures
+    // a station against the WHOLE CONUS spread — so it throws away exactly the
+    // extremes an analysis exists to show (the core of a hurricane, an Arctic
+    // outbreak) while keeping a sensor stuck 15°F off in a uniform air mass.
+    // Compare each ob to the median of its nearest neighbours instead, which
+    // is what actually distinguishes "bad" from "interesting".
+    const qcPts = spatialOutlierFilter(pts, cfg.qcTol);
 
     // Grid bounds: CONUS — higher resolution for smoother contours
     const bounds = { west: -130, east: -60, south: 23, north: 50 };
     const cols = 280;  // ~0.25° resolution
     const rows = 108;
 
-    // Generate IDW grid (power=1.5 for smoother blending, 8° search radius)
-    let grid = idwGrid(pts, bounds, cols, rows, 1.5, 8, 3);
+    // power 2 over a 6° radius, rather than 1.5 over 8°: the old settings let a
+    // station ~900 km away pull a grid point, which smeared frontal gradients
+    // into mush. maxVoid stops the field being invented offshore.
+    let grid = idwGrid(qcPts, bounds, cols, rows, 2, 6, 3, 2.0);
 
-    // Smooth the grid to remove point-source artifacts (bullseye patterns)
-    grid = smoothGrid(grid, cols, rows, 4);
+    // Smooth the grid to remove point-source artifacts (bullseye patterns).
+    // Two passes, not four — the tighter IDW above no longer needs heavy
+    // post-smoothing to look clean, and four passes flattened real gradients.
+    grid = smoothGrid(grid, cols, rows, 2);
 
     // Determine contour levels from data range, snapped to interval
     let minV = Infinity, maxV = -Infinity;
@@ -4980,7 +5052,8 @@ function renderContourProduct(sourceId, field, interval, label) {
         addLiveLog(`${label}: Waiting for METAR data...`, '#ffaa00');
         return;
     }
-    addLiveLog(`${label}: Generating contours (every ${interval}${field === 'mslp' ? 'mb' : '°F'})...`, '#d0d0d0');
+    const unit = (SFC_CONTOUR_FIELDS[sourceId] && SFC_CONTOUR_FIELDS[sourceId].unit) || '';
+    addLiveLog(`${label}: Generating contours (every ${interval}${unit})...`, '#d0d0d0');
 
     const geojson = generateMetarContours(field, interval);
 
@@ -4989,12 +5062,8 @@ function renderContourProduct(sourceId, field, interval, label) {
     });
 
     // Update data health timestamp
-    const healthMap = {
-        'sfc-isobars-2mb': 'sfcIsobars2mb',
-        'sfc-isotherms': 'sfcIsotherms',
-        'sfc-isodrosotherms': 'sfcIsodrosotherms'
-    };
-    if (healthMap[sourceId]) updateHealth(healthMap[sourceId]);
+    const hk = SFC_CONTOUR_FIELDS[sourceId] && SFC_CONTOUR_FIELDS[sourceId].health;
+    if (hk) updateHealth(hk);
 
     addLiveLog(`${label}: ${geojson.features.length} contour lines generated`, '#00ff88');
 }
@@ -8891,9 +8960,8 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'mrms-qpe-layer'), 'MRMS QPE', '#39ff5a', 'mrmsQpe');
     // Surface / analysis
     add(isLayerVisible(map, 'metars-temp'), 'METAR OBS', '#39ff5a', 'metar');
-    add(isLayerVisible(map, 'sfc-isobars-2mb-line'), 'ISOBARS 2mb', '#d0d0d0', 'sfcIsobars2mb');
-    add(isLayerVisible(map, 'sfc-isotherms-line'), 'ISOTHERMS 2°F', '#ff4444', 'sfcIsotherms');
-    add(isLayerVisible(map, 'sfc-isodrosotherms-line'), 'ISODROSOTHERMS 2°F', '#44cc44', 'sfcIsodrosotherms');
+    Object.entries(SFC_CONTOUR_FIELDS).forEach(([id, c]) =>
+        add(isLayerVisible(map, id + '-line'), `${c.label} ${c.interval}${c.unit}`, c.color, c.health));
     add(isLayerVisible(map, 'wpc-isobars-line'), 'WPC ISOBARS 4mb', '#d0d0d0', 'wpcIsobars');
     add(isLayerVisible(map, 'wpc-fronts-solid'), 'WPC FRONTS', '#4488ff', 'wpcFronts');
     add(isLayerVisible(map, 'wpc-qpf-layer'), 'WPC QPF', '#39ff5a', 'wpcQpf');
@@ -9974,9 +10042,7 @@ function productItemActiveOn(pid, item) {
     else if (layer === 'river-gauges') isActive = isLayerVisible(map, 'river-gauges-layer');
     else if (layer === 'solar-terminator') isActive = isLayerVisible(map, 'solar-night-fill');
     else if (layer === 'wpc-isobars') isActive = isLayerVisible(map, 'wpc-isobars-line');
-    else if (layer === 'sfc-isobars-2mb') isActive = isLayerVisible(map, 'sfc-isobars-2mb-line');
-    else if (layer === 'sfc-isotherms') isActive = isLayerVisible(map, 'sfc-isotherms-line');
-    else if (layer === 'sfc-isodrosotherms') isActive = isLayerVisible(map, 'sfc-isodrosotherms-line');
+    else if (SFC_CONTOUR_FIELDS[layer]) isActive = isLayerVisible(map, layer + '-line');
     else if (layer === 'wpc-fronts') isActive = isLayerVisible(map, 'wpc-fronts-solid');
     else if (layer === 'wpc-qpf') {
         const qpfId = item.getAttribute('data-qpf');
@@ -10661,7 +10727,7 @@ function initProductSidebar() {
             }
 
             // ─── METAR-Contoured Products (Isobars 2mb, Isotherms, Isodrosotherms) ───
-            if (layer === 'sfc-isobars-2mb' || layer === 'sfc-isotherms' || layer === 'sfc-isodrosotherms') {
+            if (SFC_CONTOUR_FIELDS[layer]) {
                 const isActive = !item.classList.contains('active');
                 if (isActive) {
                     // Ensure METARs are loaded first
@@ -10669,11 +10735,7 @@ function initProductSidebar() {
                         addLiveLog('CONTOUR: Fetching METARs first...', '#ffaa00');
                         await fetchMETARs();
                     }
-                    const config = {
-                        'sfc-isobars-2mb':    { field: 'mslp', interval: 2, label: 'ISOBARS 2mb' },
-                        'sfc-isotherms':      { field: 'tmpf', interval: 2, label: 'ISOTHERMS' },
-                        'sfc-isodrosotherms': { field: 'dwpf', interval: 2, label: 'ISODROSOTHERMS' }
-                    }[layer];
+                    const config = SFC_CONTOUR_FIELDS[layer];
                     renderContourProduct(layer, config.field, config.interval, config.label);
                 }
                 map.setLayoutProperty(`${layer}-line`, 'visibility', isActive ? 'visible' : 'none');
@@ -12488,6 +12550,9 @@ function clearPane(map, paneId) {
         'sfc-isobars-2mb-line', 'sfc-isobars-2mb-label',
         'sfc-isotherms-line', 'sfc-isotherms-label',
         'sfc-isodrosotherms-line', 'sfc-isodrosotherms-label',
+        'sfc-relh-line', 'sfc-relh-label',
+        'sfc-isotachs-line', 'sfc-isotachs-label',
+        'sfc-apparent-line', 'sfc-apparent-label',
         'wpc-fronts-solid', 'wpc-fronts-stnry', 'wpc-fronts-trof', 'wpc-fronts-pips',
         'wpc-hl-letter', 'wpc-hl-pressure',
         'wpc-qpf-layer',
@@ -13047,18 +13112,14 @@ function startAutoRefresh() {
 
         // METARs refresh + re-generate any visible contour products
         const metarsActive = Object.values(maps).some(m => isLayerVisible(m, 'metars-temp') || isLayerVisible(m, 'metars-barb'));
-        const isobars2mbActive = Object.values(maps).some(m => isLayerVisible(m, 'sfc-isobars-2mb-line'));
-        const isothermsActive = Object.values(maps).some(m => isLayerVisible(m, 'sfc-isotherms-line'));
-        const isodrosActive = Object.values(maps).some(m => isLayerVisible(m, 'sfc-isodrosotherms-line'));
-        const anyContourActive = isobars2mbActive || isothermsActive || isodrosActive;
+        const activeContours = Object.entries(SFC_CONTOUR_FIELDS)
+            .filter(([id]) => Object.values(maps).some(m => isLayerVisible(m, id + '-line')));
 
-        if (metarsActive || anyContourActive) {
+        if (metarsActive || activeContours.length) {
             await fetchMETARs();
             // Re-generate contours from fresh METAR data
-            if (isobars2mbActive) renderContourProduct('sfc-isobars-2mb', 'mslp', 2, 'ISOBARS 2mb');
-            if (isothermsActive) renderContourProduct('sfc-isotherms', 'tmpf', 2, 'ISOTHERMS');
-            if (isodrosActive) renderContourProduct('sfc-isodrosotherms', 'dwpf', 2, 'ISODROSOTHERMS');
-            if (anyContourActive) addLiveLog('AUTO: Contour products refreshed from new METARs', '#444');
+            activeContours.forEach(([id, c]) => renderContourProduct(id, c.field, c.interval, c.label));
+            if (activeContours.length) addLiveLog('AUTO: Contour products refreshed from new METARs', '#444');
         }
 
         // Solar terminator refresh
@@ -13896,6 +13957,13 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 30, 2026 (update 2)', items: [
+        '<b>Surface analysis accuracy overhaul.</b> The isobars had a real defect: where a station did not report MSLP, the analysis reconstructed one from the altimeter setting. Those are different quantities — the altimeter reduces to sea level through the <i>standard</i> atmosphere, MSLP through the <i>observed</i> one. Measured against the stations reporting both, they differ by <b>2.9 mb on average and up to 20 mb</b> in the mountain West — more than the 2 mb contour interval, so over half the map was being drawn from a number that was not the field being contoured. On the current national set that was <b>1,323 of 2,575 stations</b>. Isobars are now analysed from true MSLP only; sites omit it precisely where sea-level reduction stops being meaningful, which is the same call NWS and WPC make.',
+        '<b>Stale observations no longer anchor the analysis.</b> The feed returns each station\'s <i>last</i> report, which for an offline site can be days old — the oldest in the current set was <b>9.5 days</b>. Obs older than 90 minutes are now excluded, so an analysis is as current as it claims to be.',
+        '<b>Sharper, honest gradients.</b> Interpolation was letting stations ~900 km away pull a grid point, then smoothing four more times, which flattened fronts into mush. Tightened the influence radius and halved the post-smoothing — the same fields now resolve roughly twice the detail. Contours also stop where the observations do, instead of being invented hundreds of km out over the Gulf, the Atlantic and Canada where there are no ASOS at all.',
+        '<b>Better bad-sensor rejection.</b> The old quality check compared each station to the whole-CONUS spread, which throws away exactly the extremes an analysis exists to show — the core of a hurricane, an Arctic outbreak — while happily keeping a sensor stuck 15°F off in a uniform air mass. Each ob is now judged against the median of its own neighbours, which is what actually separates "broken" from "interesting".',
+        '<b>Three new fields</b>, all direct observations rather than derived quantities, so they carry no reduction error: <b>Relative Humidity</b> (10%) for fire weather, <b>Isotachs</b> (5 kt) for wind maxima and gradient winds, and <b>Apparent Temperature</b> (4°F) — heat index in summer, wind chill in winter — for heat and cold hazards. All six surface fields refresh together on the METAR cycle and add no new network calls.'
+    ]},
     { date: 'Jul 30, 2026', items: [
         '<b>Fixed: Storm Rel Velocity, CC, ZDR and KDP rendered nothing.</b> The NODD Level III products decode server-side and come back as a georeferenced PNG in a data URL. MapLibre loads an image source through <b>fetch()</b> rather than an <code>&lt;img&gt;</code> tag — so as far as the browser\'s Content-Security-Policy is concerned that is a <i>connect</i>, not an <i>image</i>. Our policy allowed <code>data:</code> under <code>img-src</code> but not under <code>connect-src</code>, so the fetch was blocked, the source resolved with no image attached, and the layer drew nothing. Worst of all it failed silently: the product legend and timestamp still appeared, so it looked like a radar with no echoes rather than a broken layer. <code>connect-src</code> now permits <code>data:</code>. This also restores the L3 loop, which draws its frames the same way.'
     ]},
