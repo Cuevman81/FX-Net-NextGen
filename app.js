@@ -247,8 +247,12 @@ const HEALTH_THRESHOLDS = {
     hms:      { label: 'HMS Smoke',       thresholdMs: 4 * 60 * 60 * 1000 },
     aqi:      { label: 'AirNow AQI',      thresholdMs: 2 * 60 * 60 * 1000 },
     firms:    { label: 'FIRMS Fires',     thresholdMs: 4 * 60 * 60 * 1000 },
-    wpcIsobars: { label: 'WPC Isobars',   thresholdMs: 4 * 60 * 60 * 1000 },
-    wpcFronts:  { label: 'WPC Fronts/HL', thresholdMs: 4 * 60 * 60 * 1000 },
+    wpcIsobars: { label: 'WPC Isobars',   thresholdMs: 5.5 * 60 * 60 * 1000 },
+    // Aged against the bulletin's own VALID time, not our fetch. WPC analyses
+    // every 3 h and posts ~1-1.5 h after valid time, so the live product is
+    // legitimately ~4.5 h old just before the next one lands; 5.5 h flags a
+    // genuinely stalled analysis without crying wolf every cycle.
+    wpcFronts:  { label: 'WPC Fronts/HL', thresholdMs: 5.5 * 60 * 60 * 1000 },
     wpcQpf:     { label: 'WPC QPF',       thresholdMs: 8 * 60 * 60 * 1000 },
     radarL3:    { label: 'NODD Dual-Pol', thresholdMs: 15 * 60 * 1000 },
     gibsSat:    { label: 'GIBS Satellite', thresholdMs: 60 * 60 * 1000 },
@@ -5086,12 +5090,17 @@ async function fetchWPCIsobars(show) {
         const text = await res.text();
 
         const geojson = parseIsobarsText(text);
+        if (!geojson.features.length) throw new Error('no isobars decoded — format may have changed');
 
         Object.values(maps).forEach(m => {
             if (m.getSource('wpc-isobars')) m.getSource('wpc-isobars').setData(geojson);
         });
 
-        updateHealth('wpcIsobars');
+        // The isobar file carries no valid time in its body, but it comes through
+        // our own origin so Last-Modified is readable — that is when WPC actually
+        // cut the analysis, which is the number worth ageing against.
+        const lm = Date.parse(res.headers.get('last-modified') || '');
+        updateHealth('wpcIsobars', isFinite(lm) ? lm : undefined);
         addLiveLog(`WPC: ${geojson.features.length} isobar contours loaded`, '#00ff88');
     } catch (e) {
         addLiveLog(`WPC ISOBARS ERROR: ${e.message}`, '#ff3333');
@@ -5111,23 +5120,44 @@ function decodeWPCPosition(code) {
     const lonRaw = parseInt(s.substring(2));
 
     if (isNaN(lat) || isNaN(lonRaw)) return null;
-    if (lat < 10 || lat > 80 || lonRaw < 30 || lonRaw > 180) return null;
+    // The unified surface analysis runs east to the Greenwich meridian, so a
+    // 30°W floor silently dropped any Atlantic front beyond it. Today's
+    // easternmost coded point sits at 31°W — one degree from being cut.
+    if (lat < 10 || lat > 80 || lonRaw < 0 || lonRaw > 180) return null;
 
     return { lat, lon: -lonRaw };
+}
+
+// WPC stamps the bulletin "VALID MMDDHHZ" — month, day, analysis hour. It is
+// NOT day/hour/minute: "VALID 073021Z" on a bulletin headed "622 PM EDT THU
+// JUL 30 2026" is July 30 at 21Z, i.e. the 21Z analysis cut at 2222Z.
+// Only the year has to be inferred, and only across a December/January boundary.
+function parseWpcValid(text) {
+    const m = text.match(/^\s*VALID\s+(\d{2})(\d{2})(\d{2})Z/m);
+    if (!m) return null;
+    const mo = +m[1], dd = +m[2], hh = +m[3];
+    if (mo < 1 || mo > 12 || dd < 1 || dd > 31 || hh > 23) return null;
+    const now = new Date();
+    let y = now.getUTCFullYear();
+    if (mo - 1 > now.getUTCMonth() + 1) y -= 1;   // December bulletin read in January
+    const ms = Date.UTC(y, mo - 1, dd, hh, 0);
+    return isFinite(ms) ? ms : null;
 }
 
 function parseCodedBulletin(text) {
     const frontFeatures = [];
     const centerFeatures = [];
     const lines = text.split('\n');
+    const validMs = parseWpcValid(text);
 
     let currentSection = null;
     let lastFront = null;
+    let carryPressure = null;   // pressure whose position sits on the next line
 
     for (let i = 0; i < lines.length; i++) {
         let line = lines[i].trim();
         if (!line || line === '$$' || line.startsWith('VALID')) {
-            currentSection = null; lastFront = null; continue;
+            currentSection = null; lastFront = null; carryPressure = null; continue;
         }
 
         if (/^HIGHS\b/.test(line)) {
@@ -5137,27 +5167,34 @@ function parseCodedBulletin(text) {
             currentSection = 'LOWS';
             line = line.replace(/^LOWS\b\s*/, '').trim();
         } else if (/^(COLD|WARM|STNRY|OCFNT|TROF)\b/.test(line)) {
-            currentSection = null;
+            currentSection = null; carryPressure = null;
         }
 
         if (currentSection === 'HIGHS' || currentSection === 'LOWS') {
             if (!line) continue;
-            const tokens = line.split(/\s+/);
-            for (let t = 0; t < tokens.length - 1; t++) {
+            // A pressure and its position routinely straddle a line break
+            // ("... 1018 \n 4187 1026 ..."), because WPC hard-wraps at 66
+            // columns. Scanning line by line dropped every centre split that
+            // way — 3 of 35 on a typical bulletin, silently. Carry an unpaired
+            // pressure into the next line instead.
+            const tokens = (carryPressure != null ? [String(carryPressure)] : [])
+                .concat(line.split(/\s+/));
+            carryPressure = null;
+            for (let t = 0; t < tokens.length; t++) {
                 const pressure = parseInt(tokens[t]);
-                if (!isNaN(pressure) && pressure >= 900 && pressure <= 1060 && tokens[t + 1]) {
-                    const coords = decodeWPCPosition(tokens[t + 1]);
-                    if (coords) {
-                        centerFeatures.push({
-                            type: 'Feature',
-                            geometry: { type: 'Point', coordinates: [coords.lon, coords.lat] },
-                            properties: {
-                                type: currentSection === 'HIGHS' ? 'H' : 'L',
-                                pressure
-                            }
-                        });
-                        t++; // Consume the coordinate token
-                    }
+                if (isNaN(pressure) || pressure < 900 || pressure > 1060) continue;
+                if (t === tokens.length - 1) { carryPressure = pressure; break; }
+                const coords = decodeWPCPosition(tokens[t + 1]);
+                if (coords) {
+                    centerFeatures.push({
+                        type: 'Feature',
+                        geometry: { type: 'Point', coordinates: [coords.lon, coords.lat] },
+                        properties: {
+                            type: currentSection === 'HIGHS' ? 'H' : 'L',
+                            pressure
+                        }
+                    });
+                    t++; // Consume the coordinate token
                 }
             }
             continue;
@@ -5215,7 +5252,8 @@ function parseCodedBulletin(text) {
 
     return {
         fronts: { type: 'FeatureCollection', features: validFronts },
-        centers: { type: 'FeatureCollection', features: centerFeatures }
+        centers: { type: 'FeatureCollection', features: centerFeatures },
+        validMs
     };
 }
 
@@ -5236,15 +5274,22 @@ async function fetchWPCFronts(show) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text = await res.text();
 
-        const { fronts, centers } = parseCodedBulletin(text);
+        const { fronts, centers, validMs } = parseCodedBulletin(text);
+        if (!fronts.features.length && !centers.features.length) {
+            throw new Error('bulletin decoded to nothing — format may have changed');
+        }
 
         Object.values(maps).forEach(m => {
             if (m.getSource('wpc-fronts')) m.getSource('wpc-fronts').setData(fronts);
             if (m.getSource('wpc-pressure-centers')) m.getSource('wpc-pressure-centers').setData(centers);
         });
 
-        updateHealth('wpcFronts');
-        addLiveLog(`WPC: ${fronts.features.length} fronts, ${centers.features.length} H/L centers loaded`, '#4488ff');
+        // Stamp the ANALYSIS time, not the fetch time. Otherwise a bulletin WPC
+        // stopped updating still reads "2 min ago" every time we re-pull it, and
+        // a stalled surface analysis is exactly the thing you need to notice.
+        updateHealth('wpcFronts', validMs || undefined);
+        const vTxt = validMs ? new Date(validMs).toISOString().substring(8, 16).replace('T', ' ') + 'Z' : 'unknown';
+        addLiveLog(`WPC: ${fronts.features.length} fronts, ${centers.features.length} H/L centers · valid ${vTxt}`, '#4488ff');
     } catch (e) {
         addLiveLog(`WPC FRONTS ERROR: ${e.message}`, '#ff3333');
     }
@@ -13293,13 +13338,7 @@ function startAutoRefresh() {
         });
 
 
-        // WPC Isobars
-        const isobarsActive = Object.values(maps).some(m => isLayerVisible(m, 'wpc-isobars-line'));
-        if (isobarsActive) fetchWPCIsobars(true);
-
-        // WPC Fronts
-        const frontsActive = Object.values(maps).some(m => isLayerVisible(m, 'wpc-fronts-solid'));
-        if (frontsActive) fetchWPCFronts(true);
+        // WPC isobars and fronts moved to their own faster poll — see below.
 
         // NHC tropical (storms + outlook) refreshes on its own faster interval below.
 
@@ -13332,6 +13371,17 @@ function startAutoRefresh() {
         }
 
     }, 30 * 60 * 1000);
+
+    // WPC surface analysis on its own 10-minute poll. The analysis is 3-hourly,
+    // but it does not land on the hour — WPC cuts it ~1-1.5 h after valid time,
+    // so the arrival moment is unpredictable and a 30-minute poll could sit on
+    // the previous analysis for half an hour after the new one was published.
+    // Both products are small text files (~21 KB and ~2 KB) and only fetch while
+    // their layer is on, so checking three times as often is nearly free.
+    setInterval(() => {
+        if (Object.values(maps).some(m => isLayerVisible(m, 'wpc-isobars-line'))) fetchWPCIsobars(true);
+        if (Object.values(maps).some(m => isLayerVisible(m, 'wpc-fronts-solid'))) fetchWPCFronts(true);
+    }, 10 * 60 * 1000);
 
     // NHC tropical layers refresh faster (5 min) — advisories/intermediate
     // advisories update on short cycles during active storms, and the fetches
@@ -13957,6 +14007,13 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Jul 31, 2026', items: [
+        '<b>WPC fronts: three of every thirty-five pressure centers were being dropped.</b> WPC hard-wraps the coded bulletin at 66 columns, so a pressure and its position regularly land on opposite sides of a line break ("… 1018 ⏎ 4187 …"). The parser read line by line, so every centre split that way vanished silently — on the current bulletin that was 2 highs and 1 low, and which ones are lost changes every cycle. Unpaired pressures now carry across the break. Verified against the raw bulletin: <b>17/17 highs and 18/18 lows</b>, where it had been 15 and 17.',
+        '<b>You can now see how old the analysis is.</b> The bulletin\'s own <code>VALID</code> stamp was being discarded, so Data Health aged the fronts against <i>our last fetch</i> — meaning a surface analysis WPC had stopped updating still read as minutes old forever. Fronts are now aged against the analysis valid time, and the isobars against the file\'s Last-Modified (that product carries no time in its body). The legend shows both: <b>WPC FRONTS · 21:00Z</b>, <b>WPC ISOBARS 4mb · 22:22Z</b>.',
+        'The staleness thresholds moved from 4 h to 5.5 h to match. That is not a loosening — it is the correction that goes with aging against valid time instead of fetch time. WPC analyses every 3 h and posts 1–1.5 h afterwards, so the current product is legitimately ~4.5 h old just before the next one lands; the old 4 h limit would have flagged a perfectly healthy analysis every single cycle.',
+        '<b>Fronts and isobars now refresh every 10 minutes</b> instead of 30. The analysis is 3-hourly but does not arrive on the hour, so a slow poll could sit on the previous one for half an hour after the new one published. Both are small text files and only fetch while their layer is on.',
+        'Also: the Atlantic cutoff that silently discarded any coded position east of 30°W has been removed (today\'s bulletin reaches 31°W — one degree from losing data), and a bulletin that decodes to nothing now reports an error instead of quietly blanking the layer.'
+    ]},
     { date: 'Jul 30, 2026 (update 2)', items: [
         '<b>Surface analysis accuracy overhaul.</b> The isobars had a real defect: where a station did not report MSLP, the analysis reconstructed one from the altimeter setting. Those are different quantities — the altimeter reduces to sea level through the <i>standard</i> atmosphere, MSLP through the <i>observed</i> one. Measured against the stations reporting both, they differ by <b>2.9 mb on average and up to 20 mb</b> in the mountain West — more than the 2 mb contour interval, so over half the map was being drawn from a number that was not the field being contoured. On the current national set that was <b>1,323 of 2,575 stations</b>. Isobars are now analysed from true MSLP only; sites omit it precisely where sea-level reduction stops being meaningful, which is the same call NWS and WPC make.',
         '<b>Stale observations no longer anchor the analysis.</b> The feed returns each station\'s <i>last</i> report, which for an offline site can be days old — the oldest in the current set was <b>9.5 days</b>. Obs older than 90 minutes are now excluded, so an analysis is as current as it claims to be.',

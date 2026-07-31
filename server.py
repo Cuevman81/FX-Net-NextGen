@@ -80,10 +80,17 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('X-Content-Type-Options', 'nosniff')
         super().end_headers()
 
-    def _send(self, status, ctype, body):
+    def _send(self, status, ctype, body, extra=None):
         self.send_response(status)
         self.send_header('Content-Type', ctype)
         self.send_header('Access-Control-Allow-Origin', '*')
+        # Pass upstream Last-Modified through. Some NOAA text products (the WPC
+        # isobar file) carry no valid time in the body, so this header is the
+        # only signal for when the analysis was actually cut -- and the app ages
+        # its Data Health row against it. Vercel's rewrites forward it in
+        # production; without this, local dev silently disagreed.
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -98,7 +105,9 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'FXNet-LocalProxy/1.0'})
                 with safe_urlopen(req, timeout=15) as response:
-                    self._send(200, ctype, response.read())
+                    lm = response.headers.get('Last-Modified')
+                    self._send(200, ctype, response.read(),
+                               {'Last-Modified': lm} if lm else None)
             except Exception as e:
                 if ctype == 'application/json':
                     self._send_json({'type': 'FeatureCollection', 'features': [], 'error': str(e)}, 500)
