@@ -14007,6 +14007,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 9, 2026', items: [
+        '<b>The Skew-T now lifts three parcels, not one.</b> A surface parcel is the wrong one to trust in exactly the situations a sounding matters most. Overnight and for elevated convection the air that actually rises starts <i>above</i> the surface, and a surface-based number reads near zero while a real storm threat sits overhead; conversely one overheated surface ob can inflate it. The panel now shows <b>SB</b>, <b>ML</b> (lowest-100 hPa mixed) and <b>MU</b> (most-unstable) side by side, each with its own CAPE, CIN, LCL, LFC, EL and LI. On this morning\'s KILX sounding SB read <b>24 J/kg</b> and MU read <b>2619</b> from a parcel at 949 hPa — the surface-only view called that sounding dead.',
+        '<b>Effective-layer kinematics.</b> Fixed 0–1/0–3 km helicity assumes the storm ingests air from a fixed slab, which is why SPC moved to the <b>effective inflow layer</b> (Thompson et al. 2007) — the levels whose parcels actually have enough CAPE and little enough CIN to be ingested. Added effective SRH, effective bulk shear and <b>Bunkers</b> right-mover storm motion, plus the composites those feed: <b>significant tornado (STP)</b> and <b>supercell (SCP)</b>. The fixed layers are still shown alongside, because the difference between them is itself information.',
+        '<b>New thermodynamics:</b> <b>DCAPE</b> for downdraft and wet-microburst potential, <b>0–3 km and 700–500 mb lapse rates</b>, freezing and −20 °C levels, and a true <b>wet-bulb zero</b> by Normand\'s construction rather than an approximation.',
+        'The kinematics were checked against cases with known answers rather than eyeballed: a semicircle hodograph returns <b>314.2 m²/s²</b> against an analytic πR² of 314.2, a straight-line hodograph with storm motion on the line returns exactly <b>0</b>, and Bunkers deviates exactly <b>7.5 m/s</b> to the right of the mean wind. Everything runs in your browser in about 4 ms and adds no network calls, so it works identically on the observed balloon and on HRRR/GFS forecast soundings.'
+    ]},
     { date: 'Jul 31, 2026', items: [
         '<b>WPC fronts: three of every thirty-five pressure centers were being dropped.</b> WPC hard-wraps the coded bulletin at 66 columns, so a pressure and its position regularly land on opposite sides of a line break ("… 1018 ⏎ 4187 …"). The parser read line by line, so every centre split that way vanished silently — on the current bulletin that was 2 highs and 1 low, and which ones are lost changes every cycle. Unpaired pressures now carry across the break. Verified against the raw bulletin: <b>17/17 highs and 18/18 lows</b>, where it had been 15 and 17.',
         '<b>You can now see how old the analysis is.</b> The bulletin\'s own <code>VALID</code> stamp was being discarded, so Data Health aged the fronts against <i>our last fetch</i> — meaning a surface analysis WPC had stopped updating still read as minutes old forever. Fronts are now aged against the analysis valid time, and the isobars against the file\'s Last-Modified (that product carries no time in its body). The legend shows both: <b>WPC FRONTS · 21:00Z</b>, <b>WPC ISOBARS 4mb · 22:22Z</b>.',
@@ -15356,6 +15362,241 @@ function _moistLapse(Tk, p) {                                                   
     return (num / den) / p;
 }
 function _uv(dir, spd) { const a = dir * Math.PI / 180; return [-spd * Math.sin(a), -spd * Math.cos(a)]; }
+const _KT2MS = 0.514444;
+// Bolton (1980) eq. 39 equivalent potential temperature — the quantity both the
+// most-unstable parcel search and DCAPE's source-level search are ranked on.
+function _thetaE(Tc, Tdc, p) {
+    const Tk = Tc + 273.15, w = _mixr(Tdc, p);
+    const Tl = _lclTempK(Tk, Tdc + 273.15);
+    const th = Tk * Math.pow(1000 / p, 0.2854 * (1 - 0.28 * w));
+    return th * Math.exp((3.376 / Tl - 0.00254) * 1000 * w * (1 + 0.81 * w));
+}
+function _dewpFromW(w, p) {                    // inverse of _mixr, for the mixed-layer parcel
+    const e = w * p / (_epsw + w);
+    if (!(e > 0)) return -80;
+    const l = Math.log(e / 6.112);
+    return 243.5 * l / (17.67 - l);
+}
+// Thin a profile to ~dp-hPa spacing. The effective-inflow scan lifts a parcel from
+// every candidate level, so it runs on a coarsened copy — a 4000-level BUFR sounding
+// would otherwise mean thousands of full lifts for a threshold test that only needs
+// to know whether CAPE clears 100 J/kg.
+function _coarsen(lv, dp) {
+    const out = [lv[0]];
+    let last = lv[0].pres;
+    for (const l of lv) if (last - l.pres >= dp) { out.push(l); last = l.pres; }
+    if (out[out.length - 1] !== lv[lv.length - 1]) out.push(lv[lv.length - 1]);
+    return out;
+}
+
+// ── Generalized parcel lift ────────────────────────────────────────────────
+// The original code lifted only the surface parcel. This takes a start index k
+// and an explicit (p0,T0,Td0) — which lets the mixed-layer parcel carry averaged
+// properties while still starting at the surface, and lets the most-unstable
+// parcel start aloft with everything below it excluded from the integration.
+// Virtual-temperature buoyancy throughout (SPC/SHARPpy convention).
+function _liftParcel(lv, k, p0, T0c, Td0c) {
+    const n = lv.length;
+    const T0 = T0c + 273.15, w0 = _mixr(Td0c, p0);
+    const Tlcl = _lclTempK(T0, Td0c + 273.15);
+    const Plcl = p0 * Math.pow(Tlcl / T0, 1 / 0.2854);
+    const TkLcl = T0 * Math.pow(Plcl / p0, 0.2854);
+    const Tp = new Array(n).fill(NaN), buoy = new Array(n).fill(NaN);
+    const tv = (Tk, w) => Tk * (1 + 0.61 * w);
+    let mT = TkLcl, mP = Plcl;
+    for (let i = k; i < n; i++) {
+        const p = lv[i].pres;
+        if (p >= Plcl) { Tp[i] = T0 * Math.pow(p / p0, 0.2854); mT = TkLcl; mP = Plcl; }
+        else {
+            let Tk = mT, pp = mP;
+            while (pp > p) { const dp = Math.max(-2, p - pp); Tk += _moistLapse(Tk, pp) * dp; pp += dp; }
+            Tp[i] = Tk; mT = Tk; mP = p;
+        }
+        const Tev = tv(lv[i].tmpc + 273.15, _mixr(lv[i].dwpc, p));
+        buoy[i] = (tv(Tp[i], p >= Plcl ? w0 : _mixr(Tp[i] - 273.15, p)) - Tev) / Tev;
+    }
+    const pos = [];
+    for (let i = k; i < n; i++) if (lv[i].pres <= Plcl + 0.5 && buoy[i] > 0) pos.push(i);
+    let cape = 0, cin = 0, lfc = null, el = null, elZ = null;
+    if (pos.length) {
+        const lfcI = pos[0], elI = pos[pos.length - 1];
+        lfc = lv[lfcI].pres; el = lv[elI].pres; elZ = lv[elI].hght;
+        for (let i = lfcI + 1; i <= elI; i++) { const dz = lv[i].hght - lv[i - 1].hght; cape += _gg * 0.5 * (Math.max(buoy[i - 1], 0) + Math.max(buoy[i], 0)) * dz; }
+        for (let i = k + 1; i <= lfcI; i++) { const dz = lv[i].hght - lv[i - 1].hght; cin += _gg * 0.5 * (Math.min(buoy[i - 1], 0) + Math.min(buoy[i], 0)) * dz; }
+    }
+    let li = null;
+    for (let i = k; i < n; i++) if (Math.abs(lv[i].pres - 500) < 8) { li = (lv[i].tmpc + 273.15) - Tp[i]; break; }
+    const lclZ = (_Rd * 0.5 * (T0 + Tlcl) / _gg) * Math.log(p0 / Plcl);
+    return { Tp, buoy, Plcl, lclZ, cape, cin, li, lfc, el, elZ };
+}
+// Mixed-layer parcel: mean theta and mean mixing ratio over the lowest 100 hPa,
+// brought back to the surface. Less hostage to one superadiabatic surface reading
+// than SB, which is why SPC hangs most severe parameters off it.
+function _mlParcel(lv) {
+    const p0 = lv[0].pres, ptop = p0 - 100;
+    let sth = 0, sw = 0, n = 0;
+    for (const l of lv) {
+        if (l.pres < ptop) break;
+        sth += (l.tmpc + 273.15) * Math.pow(1000 / l.pres, 0.2854);
+        sw += _mixr(l.dwpc, l.pres); n++;
+    }
+    if (!n) return null;
+    const Tk = (sth / n) * Math.pow(p0 / 1000, 0.2854);
+    return { k: 0, p: p0, T: Tk - 273.15, Td: _dewpFromW(sw / n, p0) };
+}
+// Most-unstable parcel: highest theta-e in the lowest 300 hPa. This is the one
+// that finds elevated convection a surface parcel reports as zero.
+function _muParcel(lv) {
+    const ptop = lv[0].pres - 300;
+    let best = 0, bthe = -1e9;
+    for (let i = 0; i < lv.length; i++) {
+        if (lv[i].pres < ptop) break;
+        const the = _thetaE(lv[i].tmpc, lv[i].dwpc, lv[i].pres);
+        if (the > bthe) { bthe = the; best = i; }
+    }
+    return { k: best, p: lv[best].pres, T: lv[best].tmpc, Td: lv[best].dwpc };
+}
+// Effective inflow layer (Thompson et al. 2007): the contiguous run of levels whose
+// parcels have CAPE >= 100 J/kg and CIN >= -250 J/kg. Replaces fixed 0-1/0-3 km
+// layers for storm-relative helicity and is what SPC's STP/SCP are defined on.
+function _effInflow(lvC) {
+    const p0 = lvC[0].pres, z0 = lvC[0].hght;
+    let bot = null, top = null;
+    for (let i = 0; i < lvC.length; i++) {
+        if (lvC[i].pres < p0 - 400) break;
+        const r = _liftParcel(lvC, i, lvC[i].pres, lvC[i].tmpc, lvC[i].dwpc);
+        if (r.cape >= 100 && r.cin >= -250) { if (bot === null) bot = i; top = i; }
+        else if (bot !== null) break;
+    }
+    // A single qualifying level is a zero-depth "layer": SRH and shear across it are
+    // identically ~0, which reads as "no helicity" rather than "not applicable".
+    // SPC shows no effective inflow layer in that case, so neither do we.
+    if (bot === null || top <= bot) return null;
+    return {
+        botZ: lvC[bot].hght - z0, topZ: lvC[top].hght - z0,
+        botP: lvC[bot].pres, topP: lvC[top].pres,
+        depth: lvC[top].hght - lvC[bot].hght
+    };
+}
+// Bunkers (2000) internal dynamics method — 0-6 km mean wind deviated 7.5 m/s
+// orthogonal to the 0-6 km shear vector. Returns m/s components.
+function _bunkers(lv) {
+    const w = lv.filter(l => l.drct != null && l.sknt != null && l.hght != null);
+    if (w.length < 2) return null;
+    const z0 = w[0].hght;
+    const meanUV = (zlo, zhi) => {
+        let su = 0, sv = 0, n = 0;
+        for (const l of w) { const z = l.hght - z0; if (z >= zlo && z <= zhi) { const uv = _uv(l.drct, l.sknt); su += uv[0]; sv += uv[1]; n++; } }
+        return n ? [su / n * _KT2MS, sv / n * _KT2MS] : null;
+    };
+    const mean06 = meanUV(0, 6000);
+    if (!mean06) return null;
+    const low = meanUV(0, 500) || mean06, high = meanUV(5500, 6000) || mean06;
+    const sh = [high[0] - low[0], high[1] - low[1]];
+    const mag = Math.hypot(sh[0], sh[1]);
+    if (!(mag > 0)) return { rm: mean06, lm: mean06, mean: mean06 };
+    const D = 7.5;
+    return {
+        rm: [mean06[0] + D * sh[1] / mag, mean06[1] - D * sh[0] / mag],
+        lm: [mean06[0] - D * sh[1] / mag, mean06[1] + D * sh[0] / mag],
+        mean: mean06
+    };
+}
+// Storm-relative helicity over an AGL layer, given storm motion C (m/s).
+function _srh(lv, zlo, zhi, C) {
+    const w = lv.filter(l => l.drct != null && l.sknt != null && l.hght != null);
+    if (w.length < 2 || !C) return null;
+    const z0 = w[0].hght;
+    let s = 0;
+    for (let i = 1; i < w.length; i++) {
+        const za = w[i - 1].hght - z0, zb = w[i].hght - z0;
+        if (zb < zlo || za > zhi) continue;
+        const a = _uv(w[i - 1].drct, w[i - 1].sknt), b = _uv(w[i].drct, w[i].sknt);
+        const u0 = a[0] * _KT2MS - C[0], v0 = a[1] * _KT2MS - C[1];
+        const u1 = b[0] * _KT2MS - C[0], v1 = b[1] * _KT2MS - C[1];
+        s += (u1 * v0 - u0 * v1);
+    }
+    return s;
+}
+// Bulk shear magnitude (kt) between two AGL heights.
+function _bulkShear(lv, zlo, zhi) {
+    const w = lv.filter(l => l.drct != null && l.sknt != null && l.hght != null);
+    if (w.length < 2) return null;
+    const z0 = w[0].hght;
+    const at = agl => { let best = w[0], bd = 1e18; for (const l of w) { const d = Math.abs((l.hght - z0) - agl); if (d < bd) { bd = d; best = l; } } return best; };
+    const a = _uv(at(zlo).drct, at(zlo).sknt), b = _uv(at(zhi).drct, at(zhi).sknt);
+    return Math.hypot(b[0] - a[0], b[1] - a[1]);
+}
+// DCAPE — lowest-theta-e parcel in the lowest 400 hPa brought down moist-adiabatically
+// to the surface. A proxy for downdraft strength / wet-microburst potential.
+function _dcape(lv) {
+    const ptop = lv[0].pres - 400;
+    let src = 0, bthe = 1e9;
+    for (let i = 0; i < lv.length; i++) {
+        if (lv[i].pres < ptop) break;
+        const the = _thetaE(lv[i].tmpc, lv[i].dwpc, lv[i].pres);
+        if (the < bthe) { bthe = the; src = i; }
+    }
+    if (!src) return null;
+    // The descending parcel starts SATURATED at the source level's wet-bulb
+    // temperature — not its dewpoint. Starting at Td makes the parcel several
+    // degrees too cold the whole way down and roughly doubles the answer.
+    let Tk = _wetBulb(lv[src].tmpc, lv[src].dwpc, lv[src].pres) + 273.15;
+    let pp = lv[src].pres, d = 0;
+    for (let i = src - 1; i >= 0; i--) {
+        const p = lv[i].pres;
+        while (pp < p) { const dp = Math.min(2, p - pp); Tk += _moistLapse(Tk, pp) * dp; pp += dp; }
+        const Tenv = lv[i].tmpc + 273.15;
+        d += _gg * ((Tenv - Tk) / Tenv) * (lv[i + 1].hght - lv[i].hght);
+    }
+    return d > 0 ? d : 0;
+}
+function _lapse(lv, zlo, zhi) {                 // °C/km over an AGL layer
+    const z0 = lv[0].hght;
+    const at = agl => { let best = lv[0], bd = 1e18; for (const l of lv) { const d = Math.abs((l.hght - z0) - agl); if (d < bd) { bd = d; best = l; } } return best; };
+    const a = at(zlo), b = at(zhi);
+    const dz = (b.hght - a.hght) / 1000;
+    return dz > 0.1 ? (a.tmpc - b.tmpc) / dz : null;
+}
+function _lapseP(lv, plo, phi) {                // °C/km between two pressure levels
+    const at = p => { let best = lv[0], bd = 1e18; for (const l of lv) { const d = Math.abs(l.pres - p); if (d < bd) { bd = d; best = l; } } return best; };
+    const a = at(plo), b = at(phi);
+    const dz = (b.hght - a.hght) / 1000;
+    return dz > 0.1 ? (a.tmpc - b.tmpc) / dz : null;
+}
+// Wet-bulb temperature by Normand's construction: lift to the LCL, then descend the
+// saturated adiabat back to the starting pressure.
+function _wetBulb(Tc, Tdc, p) {
+    const Tk = Tc + 273.15;
+    const Tlcl = _lclTempK(Tk, Tdc + 273.15);
+    const Plcl = p * Math.pow(Tlcl / Tk, 1 / 0.2854);
+    let T = Tlcl, pp = Plcl;
+    while (pp < p) { const dp = Math.min(2, p - pp); T += _moistLapse(T, pp) * dp; pp += dp; }
+    return T - 273.15;
+}
+function _wbzHeight(lv) {                       // lowest AGL crossing of Tw = 0 °C
+    const z0 = lv[0].hght;
+    let prev = _wetBulb(lv[0].tmpc, lv[0].dwpc, lv[0].pres);
+    for (let i = 1; i < lv.length; i++) {
+        const tw = _wetBulb(lv[i].tmpc, lv[i].dwpc, lv[i].pres);
+        if (prev >= 0 && tw <= 0) {
+            const f = prev / (prev - tw || 1);
+            return lv[i - 1].hght + f * (lv[i].hght - lv[i - 1].hght) - z0;
+        }
+        prev = tw;
+    }
+    return null;
+}
+function _heightOf(lv, Tc) {                    // first AGL crossing of an isotherm
+    const z0 = lv[0].hght;
+    for (let i = 1; i < lv.length; i++) {
+        if (lv[i - 1].tmpc >= Tc && lv[i].tmpc <= Tc) {
+            const f = (lv[i - 1].tmpc - Tc) / (lv[i - 1].tmpc - lv[i].tmpc || 1);
+            return lv[i - 1].hght + f * (lv[i].hght - lv[i - 1].hght) - z0;
+        }
+    }
+    return null;
+}
 
 function _skewtShear(lv) {
     const w = lv.filter(l => l.drct != null && l.sknt != null && l.hght != null);
@@ -15369,47 +15610,71 @@ function _skewtShear(lv) {
     return { shear01: mag(s, u1), shear06: mag(s, u6) };
 }
 function _skewtCompute(lv) {
-    const sfc = lv[0], Psfc = sfc.pres, Tsfc = sfc.tmpc + 273.15, Tdsfc = sfc.dwpc + 273.15;
-    const wsfc = _mixr(sfc.dwpc, Psfc);
-    const Tlcl = _lclTempK(Tsfc, Tdsfc);
-    const Plcl = Psfc * Math.pow(Tlcl / Tsfc, 1 / 0.2854);
-    const TkLcl = Tsfc * Math.pow(Plcl / Psfc, 0.2854);
+    const sfc = lv[0];
     const P = lv.map(l => l.pres), Z = lv.map(l => l.hght), Te = lv.map(l => l.tmpc + 273.15);
-    // Parcel temperature in a single upward pass: dry adiabat below the LCL, moist
-    // above — carrying the pseudoadiabat state forward level-to-level with <=2 hPa
-    // substeps (O(n), works for both coarse IEM and dense Wyoming BUFR profiles).
-    const Tp = new Array(P.length);
-    let mT = TkLcl, mP = Plcl;
-    for (let i = 0; i < P.length; i++) {
-        const p = P[i];
-        if (p >= Plcl) { Tp[i] = Tsfc * Math.pow(p / Psfc, 0.2854); mT = TkLcl; mP = Plcl; }
-        else {
-            let Tk = mT, pp = mP;
-            while (pp > p) { const dp = Math.max(-2, p - pp); Tk += _moistLapse(Tk, pp) * dp; pp += dp; }
-            Tp[i] = Tk; mT = Tk; mP = p;
+    // Surface parcel — still the one drawn on the chart and shaded for CAPE.
+    const SB = _liftParcel(lv, 0, sfc.pres, sfc.tmpc, sfc.dwpc);
+    // Mixed-layer and most-unstable parcels. ML is what the severe composites below
+    // key on; MU is what catches elevated convection that SB reports as zero.
+    const mlp = _mlParcel(lv), mup = _muParcel(lv);
+    const ML = mlp ? _liftParcel(lv, mlp.k, mlp.p, mlp.T, mlp.Td) : null;
+    const MU = mup ? _liftParcel(lv, mup.k, mup.p, mup.T, mup.Td) : null;
+
+    let pw = 0; for (let i = 1; i < lv.length; i++) { const w0 = _mixr(lv[i - 1].dwpc, lv[i - 1].pres), w1 = _mixr(lv[i].dwpc, lv[i].pres); pw += 0.5 * (w0 + w1) * (lv[i - 1].pres - lv[i].pres) * 100 / _gg; }
+
+    // ── Kinematics ──
+    const bunk = _bunkers(lv);
+    const Crm = bunk ? bunk.rm : null;
+    const srh01 = _srh(lv, 0, 1000, Crm), srh03 = _srh(lv, 0, 3000, Crm);
+    // Effective inflow layer runs on a coarsened profile — see _coarsen.
+    const eff = _effInflow(_coarsen(lv, 10));
+    let esrh = null, ebwd = null;
+    if (eff && Crm) {
+        esrh = _srh(lv, eff.botZ, eff.topZ, Crm);
+        // Effective bulk wind difference: inflow base to half the depth between the
+        // inflow base and the MU equilibrium level (Thompson et al. 2007).
+        if (MU && MU.elZ != null) {
+            const half = eff.botZ + 0.5 * ((MU.elZ - lv[0].hght) - eff.botZ);
+            if (half > eff.botZ) ebwd = _bulkShear(lv, eff.botZ, half);
         }
     }
-    // Virtual-temperature buoyancy (SPC/SHARPpy convention — raises CAPE ~10-25%
-    // and eases CIN vs a plain-T calc): parcel carries wsfc below the LCL and its
-    // saturation mixing ratio above; the environment uses its own dewpoint.
-    const tv = (Tk, w) => Tk * (1 + 0.61 * w);
-    const Tev = P.map((p, i) => tv(Te[i], _mixr(lv[i].dwpc, p)));
-    const Tpv = P.map((p, i) => tv(Tp[i], p >= Plcl ? wsfc : _mixr(Tp[i] - 273.15, p)));
-    const buoy = Tpv.map((t, i) => (t - Tev[i]) / Tev[i]);
-    const pos = []; for (let i = 0; i < P.length; i++) if (P[i] <= Plcl + 0.5 && buoy[i] > 0) pos.push(i);
-    let cape = 0, cin = 0, lfc = null, el = null;
-    if (pos.length) {
-        const lfcI = pos[0], elI = pos[pos.length - 1]; lfc = P[lfcI]; el = P[elI];
-        for (let i = lfcI + 1; i <= elI; i++) { const dz = Z[i] - Z[i - 1]; cape += _gg * 0.5 * (Math.max(buoy[i - 1], 0) + Math.max(buoy[i], 0)) * dz; }
-        for (let i = 1; i <= lfcI; i++) { const dz = Z[i] - Z[i - 1]; cin += _gg * 0.5 * (Math.min(buoy[i - 1], 0) + Math.min(buoy[i], 0)) * dz; }
+
+    // ── Composites (SPC formulations) ──
+    let scp = null, stp = null;
+    if (MU && esrh != null && ebwd != null) {
+        const sh = ebwd * _KT2MS;
+        const shT = sh > 20 ? 1 : sh < 10 ? 0 : sh / 20;
+        scp = (MU.cape / 1000) * (esrh / 50) * shT;
     }
-    let li = null; for (let i = 0; i < P.length; i++) { if (Math.abs(P[i] - 500) < 8) { li = Te[i] - Tp[i]; break; } }
-    let pw = 0; for (let i = 1; i < lv.length; i++) { const w0 = _mixr(lv[i - 1].dwpc, lv[i - 1].pres), w1 = _mixr(lv[i].dwpc, lv[i].pres); pw += 0.5 * (w0 + w1) * (lv[i - 1].pres - lv[i].pres) * 100 / _gg; }
-    const lclZ = (_Rd * 0.5 * (Tsfc + Tlcl) / _gg) * Math.log(Psfc / Plcl);
-    return Object.assign({ Plcl, P, Z, Te, Tp, cape, cin, li, pw, lclZ, lfc, el }, _skewtShear(lv));
+    if (ML && eff && esrh != null && ebwd != null) {
+        const sh = ebwd * _KT2MS;
+        const shT = sh > 30 ? 1.5 : sh < 12.5 ? 0 : sh / 20;
+        const lclT = ML.lclZ < 1000 ? 1 : ML.lclZ > 2000 ? 0 : (2000 - ML.lclZ) / 1000;
+        const cinT = ML.cin > -50 ? 1 : ML.cin < -200 ? 0 : (200 + ML.cin) / 150;
+        stp = (ML.cape / 1500) * lclT * (esrh / 150) * shT * cinT;
+    }
+
+    return Object.assign({
+        P, Z, Te, Tp: SB.Tp, Plcl: SB.Plcl,
+        cape: SB.cape, cin: SB.cin, li: SB.li, lclZ: SB.lclZ, lfc: SB.lfc, el: SB.el,
+        pw, SB, ML, MU, mlSrc: mlp, muSrc: mup,
+        eff, bunkers: bunk, srh01, srh03, esrh, ebwd, scp, stp,
+        dcape: _dcape(lv),
+        lr03: _lapse(lv, 0, 3000), lr75: _lapseP(lv, 700, 500),
+        fzZ: _heightOf(lv, 0), m20Z: _heightOf(lv, -20), wbzZ: _wbzHeight(lv)
+    }, _skewtShear(lv));
 }
 
 function _ir(k, v, c) { return `<div style="display:flex;justify-content:space-between;"><span style="color:#8b97a3;">${k}</span><span style="color:${c};font-weight:600;">${v}</span></div>`; }
+// One-line header summary, shared by the observed and model paths so they can't drift.
+function _skewtSummary(D) {
+    const p = x => x == null ? '—' : Math.round(x.cape);
+    let s = `SB ${p(D.SB)} / ML ${p(D.ML)} / MU ${p(D.MU)} J/kg · CIN ${Math.round(D.cin)}`
+        + ` · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${(D.pw / 25.4).toFixed(2)} in`;
+    if (D.esrh != null) s += ` · ESRH ${Math.round(D.esrh)}`;
+    if (D.stp != null) s += ` · STP ${D.stp.toFixed(1)}`;
+    return s;
+}
 function _skewtHodo(wl) {
     const S = 200, cx = S / 2, cy = S / 2;
     const z0 = wl.length ? wl[0].hght : 0;
@@ -15503,21 +15768,58 @@ function renderSkewT(lv, D) {
         <text x="${PL}" y="11" fill="#8b97a3" font-size="8">Skew-T / Log-P (°C) — ▬ T ▬ Td ┈ parcel</text>
     </svg>`;
     const fx = v => v == null ? '—' : Math.round(v);
-    const idxHTML = `<div style="font-size:10px;color:#cdd6df;font-family:Inter,sans-serif;line-height:1.85;min-width:190px;">
-        <div style="color:#8b97a3;text-transform:uppercase;letter-spacing:.5px;font-size:9px;margin-bottom:2px;">Parcel indices (surface-based)</div>
-        ${_ir('SBCAPE', fx(D.cape) + ' J/kg', D.cape > 1000 ? '#ff6a6a' : '#9fd3ff')}
-        ${_ir('SBCIN', fx(D.cin) + ' J/kg', '#7fbfff')}
-        ${_ir('Lifted Index', D.li != null ? D.li.toFixed(1) : '—', D.li < 0 ? '#ff6a6a' : '#9fd3ff')}
+    const f1 = v => v == null ? '—' : v.toFixed(1);
+    // Parcel table — SB / ML / MU side by side, the way NSHARP lays it out. The
+    // point of three columns is that they disagree: MU finds elevated instability
+    // SB reports as zero, and ML resists a single overheated surface reading.
+    const cap = (p, warn) => p == null ? '<td style="text-align:right;color:#5c6b78;">—</td>'
+        : `<td style="text-align:right;color:${warn && p.cape > 1000 ? '#ff6a6a' : '#cdd6df'};font-weight:600;">${Math.round(p.cape)}</td>`;
+    const cell = (p, f, c) => p == null ? '<td style="text-align:right;color:#5c6b78;">—</td>'
+        : `<td style="text-align:right;color:${c || '#cdd6df'};">${f(p)}</td>`;
+    const th = t => `<th style="text-align:right;color:#8b97a3;font-weight:600;padding-left:6px;">${t}</th>`;
+    const rowLbl = t => `<td style="color:#8b97a3;">${t}</td>`;
+    const parcels = [D.SB, D.ML, D.MU];
+    const parcelTable = `<table style="width:100%;border-collapse:collapse;font-size:9.5px;line-height:1.7;">
+        <tr><td></td>${th('SB')}${th('ML')}${th('MU')}</tr>
+        <tr>${rowLbl('CAPE J/kg')}${parcels.map(p => cap(p, true)).join('')}</tr>
+        <tr>${rowLbl('CIN J/kg')}${parcels.map(p => cell(p, x => Math.round(x.cin), '#7fbfff')).join('')}</tr>
+        <tr>${rowLbl('LCL m AGL')}${parcels.map(p => cell(p, x => Math.round(x.lclZ))).join('')}</tr>
+        <tr>${rowLbl('LFC hPa')}${parcels.map(p => cell(p, x => x.lfc ? Math.round(x.lfc) : '—')).join('')}</tr>
+        <tr>${rowLbl('EL hPa')}${parcels.map(p => cell(p, x => x.el ? Math.round(x.el) : '—')).join('')}</tr>
+        <tr>${rowLbl('LI °C')}${parcels.map(p => cell(p, x => x.li != null ? x.li.toFixed(1) : '—', p && p.li < 0 ? '#ff6a6a' : '#cdd6df')).join('')}</tr>
+    </table>`;
+    const effTxt = D.eff ? `${Math.round(D.eff.botZ)}–${Math.round(D.eff.topZ)} m` : 'none';
+    const bunkTxt = D.bunkers
+        ? `${Math.round((270 - Math.atan2(D.bunkers.rm[1], D.bunkers.rm[0]) * 180 / Math.PI + 360) % 360)}° / ${Math.round(Math.hypot(D.bunkers.rm[0], D.bunkers.rm[1]) / _KT2MS)} kt`
+        : '—';
+    const sect = t => `<div style="color:#8b97a3;text-transform:uppercase;letter-spacing:.5px;font-size:9px;margin:7px 0 2px;border-top:1px solid #23303c;padding-top:5px;">${t}</div>`;
+    const idxHTML = `<div style="font-size:10px;color:#cdd6df;font-family:Inter,sans-serif;line-height:1.8;width:100%;">
+        <div style="color:#8b97a3;text-transform:uppercase;letter-spacing:.5px;font-size:9px;margin-bottom:2px;">Parcels — surface / mixed-layer / most-unstable</div>
+        ${parcelTable}
+        ${sect('Kinematics')}
+        ${_ir('0–1 / 0–6 km shear', (D.shear01 != null ? D.shear01 : '—') + ' / ' + (D.shear06 != null ? D.shear06 : '—') + ' kt', '#ffd23c')}
+        ${_ir('Effective shear', D.ebwd != null ? Math.round(D.ebwd) + ' kt' : '—', '#ffd23c')}
+        ${_ir('0–1 / 0–3 km SRH', fx(D.srh01) + ' / ' + fx(D.srh03) + ' m²/s²', '#ffb0f0')}
+        ${_ir('Effective SRH', fx(D.esrh) + ' m²/s²', D.esrh > 150 ? '#ff6a6a' : '#ffb0f0')}
+        ${_ir('Eff. inflow layer', effTxt, '#cdd6df')}
+        ${_ir('Bunkers right', bunkTxt, '#cdd6df')}
+        ${sect('Composites')}
+        ${_ir('Sig. tornado (eff)', f1(D.stp), D.stp > 1 ? '#ff6a6a' : '#9fd3ff')}
+        ${_ir('Supercell (eff)', f1(D.scp), D.scp > 1 ? '#ff6a6a' : '#9fd3ff')}
+        ${sect('Thermo')}
         ${_ir('PWAT', (D.pw / 25.4).toFixed(2) + ' in', '#33c27a')}
-        ${_ir('LCL', fx(D.lclZ) + ' m AGL', '#cdd6df')}
-        ${_ir('LFC', D.lfc ? Math.round(D.lfc) + ' hPa' : '—', '#cdd6df')}
-        ${_ir('EL', D.el ? Math.round(D.el) + ' hPa' : '—', '#cdd6df')}
-        ${_ir('0–1 km shear', D.shear01 != null ? D.shear01 + ' kt' : '—', '#ffd23c')}
-        ${_ir('0–6 km shear', D.shear06 != null ? D.shear06 + ' kt' : '—', '#ffd23c')}
-        <div style="margin-top:6px;border-top:1px solid #23303c;padding-top:5px;color:#8b97a3;font-size:9px;">Surface ${lv[0].tmpc.toFixed(1)}° / ${lv[0].dwpc.toFixed(1)}°C @ ${Math.round(lv[0].pres)} hPa</div>
-        <div style="color:#5c6b78;font-size:8px;margin-top:3px;">Surface-based parcel · virtual-temperature CAPE/CIN.</div>
+        ${_ir('DCAPE', fx(D.dcape) + ' J/kg', '#ffa04d')}
+        ${_ir('0–3 km lapse', f1(D.lr03) + ' °C/km', '#cdd6df')}
+        ${_ir('700–500 lapse', f1(D.lr75) + ' °C/km', D.lr75 > 7 ? '#ff6a6a' : '#cdd6df')}
+        ${_ir('Freezing / −20°', fx(D.fzZ) + ' / ' + fx(D.m20Z) + ' m', '#cdd6df')}
+        ${_ir('Wet-bulb zero', fx(D.wbzZ) + ' m AGL', '#cdd6df')}
+        <div style="margin-top:6px;border-top:1px solid #23303c;padding-top:5px;color:#8b97a3;font-size:9px;">Surface ${lv[0].tmpc.toFixed(1)}° / ${lv[0].dwpc.toFixed(1)}°C @ ${Math.round(lv[0].pres)} hPa${D.muSrc && D.muSrc.k ? ` · MU parcel ${Math.round(D.muSrc.p)} hPa` : ''}</div>
+        <div style="color:#5c6b78;font-size:8px;margin-top:3px;">Virtual-temperature CAPE/CIN · effective inflow layer per Thompson et al. 2007 · Bunkers right-mover storm motion. Chart shows the surface parcel.</div>
     </div>`;
-    return `${skewSVG}<div style="display:flex;flex-direction:column;gap:6px;">${_skewtHodo(wl)}${idxHTML}</div>`;
+    // min-height:0 + overflow-y:auto — in a flex ROW the column stretches to the body
+    // height and its own content spills without the body ever registering overflow,
+    // so the parameter block silently loses its last rows on a short panel.
+    return `${skewSVG}<div style="display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:270px;min-height:0;overflow-y:auto;">${_skewtHodo(wl)}${idxHTML}</div>`;
 }
 
 // ── Data + panel plumbing ──
@@ -15564,7 +15866,7 @@ async function loadSkewt(station) {
         if (lv.length < 3) throw new Error('sounding too sparse');
         const D = _skewtCompute(lv);
         const srcLabel = pr.source === 'wyoming' ? 'BUFR hi-res' : 'std raob';
-        if (meta) meta.innerHTML = `${station} · ${(pr.valid || used).replace('T', ' ')} · ${lv.length} lvl (${srcLabel}) · SBCAPE ${Math.round(D.cape)} · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${(D.pw / 25.4).toFixed(2)} in`;
+        if (meta) meta.innerHTML = `${station} · ${(pr.valid || used).replace('T', ' ')} · ${lv.length} lvl (${srcLabel}) · ${_skewtSummary(D)}`;
         if (body) body.innerHTML = renderSkewT(lv, D);
     } catch (e) {
         if (seq !== _skewtSeq) return;
@@ -15746,8 +16048,7 @@ async function loadSkewtModel(model, where) {
         if (lv.length < 4) throw new Error('profile too sparse at this hour');
         const D = _skewtCompute(lv);
         const validZ = rec.times[i].replace('T', ' ') + 'Z';
-        if (meta) meta.innerHTML = `${esc(pt.label)} · <b style="color:#ffb300;">${esc(def.label)}</b> · valid ${esc(validZ)} · ${lv.length} lvl · `
-            + `SBCAPE ${Math.round(D.cape)} · CIN ${Math.round(D.cin)} · LI ${D.li != null ? D.li.toFixed(1) : '—'} · PWAT ${(D.pw / 25.4).toFixed(2)} in`;
+        if (meta) meta.innerHTML = `${esc(pt.label)} · <b style="color:#ffb300;">${esc(def.label)}</b> · valid ${esc(validZ)} · ${lv.length} lvl · ${_skewtSummary(D)}`;
         if (body) body.innerHTML = renderSkewT(lv, D);
     } catch (e) {
         if (seq !== _skewtSeq) return;
