@@ -14007,6 +14007,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 9, 2026 (update 2)', items: [
+        '<b>SPC Mesoanalysis now splits into 1, 2 or 4 panes.</b> Mesoanalysis is a comparison tool — instability only means something next to the shear, and a composite only means something next to the ingredients underneath it. Flipping a single window between fields makes you hold the previous one in your head. Pick the pane count in the header and each pane gets its own parameter dropdown, all locked to the <b>same sector and the same valid time</b>, so what you are comparing is the fields and not the clock. A fresh 4-pane opens on MSL pressure, surface temp/dewpoint, lapse rates and effective SRH; your layout, the four parameters and the sector are all remembered for next time.',
+        'The panel resizes itself to keep each chart legible — the mesoanalysis contour labels are small, so panes never shrink below roughly 620 px — and it clamps to your screen rather than growing off the edge.'
+    ]},
     { date: 'Aug 9, 2026', items: [
         '<b>The Skew-T now lifts three parcels, not one.</b> A surface parcel is the wrong one to trust in exactly the situations a sounding matters most. Overnight and for elevated convection the air that actually rises starts <i>above</i> the surface, and a surface-based number reads near zero while a real storm threat sits overhead; conversely one overheated surface ob can inflate it. The panel now shows <b>SB</b>, <b>ML</b> (lowest-100 hPa mixed) and <b>MU</b> (most-unstable) side by side, each with its own CAPE, CIN, LCL, LFC, EL and LI. On this morning\'s KILX sounding SB read <b>24 J/kg</b> and MU read <b>2619</b> from a parcel at 949 hPa — the surface-only view called that sounding dead.',
         '<b>Effective-layer kinematics.</b> Fixed 0–1/0–3 km helicity assumes the storm ingests air from a fixed slab, which is why SPC moved to the <b>effective inflow layer</b> (Thompson et al. 2007) — the levels whose parcels actually have enough CAPE and little enough CIN to be ingested. Added effective SRH, effective bulk shear and <b>Bunkers</b> right-mover storm motion, plus the composites those feed: <b>significant tornado (STP)</b> and <b>supercell (SCP)</b>. The fixed layers are still shown alongside, because the difference between them is itself information.',
@@ -14380,7 +14384,7 @@ const USER_GUIDE = [
             <li><b>Watches, Mesoscale Discussions,</b> and <b>Local Storm Reports</b> plot live; click one for its full text.</li>
             <li><b>ProbSevere</b> storm-object polygons show ML-derived severe probabilities per storm.</li>
             <li><b>Skew-T Soundings</b>: SPC’s observed sounding images, or the <b>Interactive Skew-T (RAOB)</b> panel — an NSHARP-style viewer with parcel curves and indices for any upper-air site.</li>
-            <li><b>SPC Mesoanalysis</b> opens the hourly mesoanalysis field viewer.</li>
+            <li><b>SPC Mesoanalysis</b> opens the hourly mesoanalysis field viewer. Split it into <b>1, 2 or 4 panes</b> to read several parameters over the same sector at the same valid time — each pane picks its own field, and your layout, parameters and sector are remembered.</li>
         </ul>` },
 
     { id: 'surface', title: 'Surface Analysis & WPC', html: `
@@ -16266,45 +16270,151 @@ const SPCMESO_PARAMS = [
     ]],
 ];
 
-function _spcMesoLoad() {
-    const sector = document.getElementById('spcmeso-sector')?.value || 's19';
-    const param = document.getElementById('spcmeso-param')?.value || 'pmsl';
-    const cnty = document.getElementById('spcmeso-cnty');
-    const img = document.getElementById('spcmeso-img');
-    const meta = document.getElementById('spcmeso-meta');
-    const bust = Math.floor(Date.now() / 60000);   // per-minute cache-bust
-    if (cnty) cnty.src = `https://www.spc.noaa.gov/exper/mesoanalysis/${sector}/cnty/cnty.gif`;
-    if (img) img.src = `https://www.spc.noaa.gov/exper/mesoanalysis/${sector}/${param}/${param}.gif?${bust}`;
-    if (meta) {
-        let pLabel = param;
-        for (const [, params] of SPCMESO_PARAMS) {
-            const hit = params.find(p => p[0] === param);
-            if (hit) { pLabel = hit[1]; break; }
-        }
-        meta.textContent = `${pLabel} — hourly SPC objective analysis (RAP-based), updates ~:25 past the hour. Loaded ${new Date().toISOString().substring(11, 16)}Z.`;
+// ── Multi-pane state ───────────────────────────────────────────────────────
+// Sector is shared across panes and the parameter is per-pane: the point of
+// splitting the window is to read several fields over the SAME ground at the
+// same valid time. Four defaults chosen so a fresh 4-pane opens on something
+// useful rather than four copies of the same chart.
+const SPCMESO_DEFAULT_PANES = ['pmsl', 'ttd', 'laps', 'effh'];
+let _spcMesoLayout = 1;
+let _spcMesoPanes = SPCMESO_DEFAULT_PANES.slice();
+
+function _spcMesoParamLabel(param) {
+    for (const [, params] of SPCMESO_PARAMS) {
+        const hit = params.find(p => p[0] === param);
+        if (hit) return hit[1];
     }
+    return param;
+}
+function _spcMesoFillParamSelect(sel, value) {
+    SPCMESO_PARAMS.forEach(([group, params]) => {
+        const og = document.createElement('optgroup'); og.label = group;
+        params.forEach(([v, label]) => {
+            const o = document.createElement('option'); o.value = v; o.textContent = label; og.appendChild(o);
+        });
+        sel.appendChild(og);
+    });
+    if (value) sel.value = value;
+}
+// Sector rides along with layout/params: restoring four chosen parameters over the
+// DEFAULT sector would be a half-restore, and the sector is the one thing every
+// pane shares.
+function _spcMesoSaveState() {
+    try {
+        localStorage.setItem('fxnet_spcmeso', JSON.stringify({
+            layout: _spcMesoLayout, panes: _spcMesoPanes,
+            sector: document.getElementById('spcmeso-sector')?.value || ''
+        }));
+    } catch (_) {}
+}
+function _spcMesoRestoreState() {
+    try {
+        const s = JSON.parse(localStorage.getItem('fxnet_spcmeso') || 'null');
+        if (!s) return;
+        if ([1, 2, 4].includes(+s.layout)) _spcMesoLayout = +s.layout;
+        if (Array.isArray(s.panes)) for (let i = 0; i < 4; i++) if (typeof s.panes[i] === 'string') _spcMesoPanes[i] = s.panes[i];
+        const sSel = document.getElementById('spcmeso-sector');
+        if (sSel && s.sector && Array.from(sSel.options).some(o => o.value === s.sector)) sSel.value = s.sector;
+    } catch (_) {}
+}
+// Grow the panel so each pane keeps a legible image, but never past the viewport —
+// the mesoanalysis contour labels are small and unreadable much below ~600 px wide.
+function _spcMesoSizePanel() {
+    const panel = document.getElementById('spcmeso-panel');
+    if (!panel) return;
+    const cols = _spcMesoLayout === 1 ? 1 : 2;
+    const rows = _spcMesoLayout === 4 ? 2 : 1;
+    const cellW = _spcMesoLayout === 1 ? 1000 : _spcMesoLayout === 2 ? 700 : 620;
+    const cellH = cellW * 0.75 + 26;                       // 4:3 image + its param bar
+    const w = Math.min(cols * cellW + (cols - 1) * 6 + 26, window.innerWidth - 40);
+    const h = Math.min(rows * cellH + (rows - 1) * 6 + 92, window.innerHeight - 40);
+    panel.style.width = Math.round(w) + 'px';
+    panel.style.height = Math.round(h) + 'px';
+    if (panel.offsetLeft + w > window.innerWidth) panel.style.left = Math.max(0, window.innerWidth - w - 10) + 'px';
+    if (panel.offsetTop + h > window.innerHeight) panel.style.top = Math.max(0, window.innerHeight - h - 10) + 'px';
+}
+// Rebuild the grid. Images are width:100% inside an aspect-locked box so they
+// reflow when the layout changes or the user resizes the panel.
+function _spcMesoBuildPanes() {
+    const grid = document.getElementById('spcmeso-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    grid.style.gridTemplateColumns = _spcMesoLayout === 1 ? '1fr' : '1fr 1fr';
+    for (let i = 0; i < _spcMesoLayout; i++) {
+        const pane = document.createElement('div');
+        pane.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0;';
+        const sel = document.createElement('select');
+        sel.className = 'spcmeso-pane-param';
+        sel.dataset.pane = String(i);
+        sel.title = 'Parameter for this pane';
+        sel.style.cssText = 'background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;width:100%;';
+        _spcMesoFillParamSelect(sel, _spcMesoPanes[i]);
+        sel.addEventListener('change', () => {
+            _spcMesoPanes[i] = sel.value;
+            _spcMesoSaveState();
+            _spcMesoLoadPane(i);
+        });
+        const box = document.createElement('div');
+        box.style.cssText = 'position:relative;width:100%;aspect-ratio:1000/750;background:#fff;';
+        box.innerHTML = `<img class="spcmeso-cnty" alt="" style="position:absolute;inset:0;width:100%;">`
+                      + `<img class="spcmeso-img" alt="SPC mesoanalysis" style="position:absolute;inset:0;width:100%;">`;
+        pane.appendChild(sel); pane.appendChild(box);
+        grid.appendChild(pane);
+    }
+}
+function _spcMesoLoadPane(i) {
+    const grid = document.getElementById('spcmeso-grid');
+    const pane = grid?.children[i];
+    if (!pane) return;
+    const sector = document.getElementById('spcmeso-sector')?.value || 's19';
+    const param = _spcMesoPanes[i] || 'pmsl';
+    const bust = Math.floor(Date.now() / 60000);   // per-minute cache-bust
+    const cnty = pane.querySelector('.spcmeso-cnty');
+    const img = pane.querySelector('.spcmeso-img');
+    if (cnty) cnty.src = `https://www.spc.noaa.gov/exper/mesoanalysis/${sector}/cnty/cnty.gif`;
+    if (img) {
+        img.src = `https://www.spc.noaa.gov/exper/mesoanalysis/${sector}/${param}/${param}.gif?${bust}`;
+        img.alt = _spcMesoParamLabel(param);
+    }
+}
+function _spcMesoLoad() {
+    for (let i = 0; i < _spcMesoLayout; i++) _spcMesoLoadPane(i);
+    const meta = document.getElementById('spcmeso-meta');
+    if (meta) {
+        const shown = _spcMesoLayout === 1
+            ? _spcMesoParamLabel(_spcMesoPanes[0])
+            : `${_spcMesoLayout} panes — ` + _spcMesoPanes.slice(0, _spcMesoLayout).map(_spcMesoParamLabel).join(' · ');
+        meta.textContent = `${shown} — hourly SPC objective analysis (RAP-based), updates ~:25 past the hour. Loaded ${new Date().toISOString().substring(11, 16)}Z.`;
+    }
+}
+function _spcMesoSetLayout(n) {
+    _spcMesoLayout = n;
+    _spcMesoSaveState();
+    _spcMesoSizePanel();
+    _spcMesoBuildPanes();
+    _spcMesoLoad();
 }
 function initSpcMesoPanel() {
     const openBtn = document.getElementById('btn-spcmeso');
     const panel = document.getElementById('spcmeso-panel');
     if (!openBtn || !panel) return;
     const sSel = document.getElementById('spcmeso-sector');
-    const pSel = document.getElementById('spcmeso-param');
+    const lSel = document.getElementById('spcmeso-layout');
     if (sSel && !sSel.options.length) SPCMESO_SECTORS.forEach(([v, label]) => {
         const o = document.createElement('option'); o.value = `s${v}`; o.textContent = label; sSel.appendChild(o);
     });
-    if (pSel && !pSel.options.length) SPCMESO_PARAMS.forEach(([group, params]) => {
-        const og = document.createElement('optgroup'); og.label = group;
-        params.forEach(([v, label]) => {
-            const o = document.createElement('option'); o.value = v; o.textContent = label; og.appendChild(o);
-        });
-        pSel.appendChild(og);
+    _spcMesoRestoreState();
+    if (lSel) lSel.value = String(_spcMesoLayout);
+    _spcMesoBuildPanes();
+    openBtn.addEventListener('click', () => {
+        panel.style.display = 'block';
+        _spcMesoSizePanel();
+        _spcMesoLoad();
     });
-    openBtn.addEventListener('click', () => { panel.style.display = 'block'; _spcMesoLoad(); });
     document.getElementById('close-spcmeso-panel')?.addEventListener('click', () => { panel.style.display = 'none'; });
     document.getElementById('spcmeso-refresh')?.addEventListener('click', _spcMesoLoad);
-    sSel?.addEventListener('change', _spcMesoLoad);
-    pSel?.addEventListener('change', _spcMesoLoad);
+    sSel?.addEventListener('change', () => { _spcMesoSaveState(); _spcMesoLoad(); });
+    lSel?.addEventListener('change', () => _spcMesoSetLayout(+lSel.value || 1));
     const handle = document.getElementById('spcmeso-drag');
     if (handle) {
         let dx = 0, dy = 0, drag = false; handle.style.cursor = 'move';

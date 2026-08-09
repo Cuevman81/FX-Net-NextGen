@@ -1158,18 +1158,19 @@
         <div class="floating-panel-header" id="spcmeso-drag">
             <span><i data-lucide="activity"></i> SPC MESOANALYSIS</span>
             <div style="display:flex; gap:8px; align-items:center;">
-                <select id="spcmeso-sector" title="Sector" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
-                <select id="spcmeso-param" title="Parameter" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <select id="spcmeso-sector" title="Sector — shared by every pane" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <select id="spcmeso-layout" title="Number of panes — each shows its own parameter over the same sector" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;">
+                    <option value="1">1 pane</option>
+                    <option value="2">2 panes</option>
+                    <option value="4">4 panes</option>
+                </select>
                 <button id="spcmeso-refresh" class="btn-primary" style="height:24px; padding:0 10px; font-weight:700; font-size:10px;">Refresh</button>
                 <button id="close-spcmeso-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
             </div>
         </div>
         <div id="spcmeso-meta" style="font-size:10px; color:#8b97a3; padding:6px 12px; border-bottom:1px solid var(--border);">Hourly SPC objective mesoscale analysis (RAP-based). Images update ~hourly at :25.</div>
-        <div class="floating-panel-body" id="spcmeso-body" style="padding:6px; overflow:auto; background:#fff;">
-            <div style="position:relative; width:1000px; height:750px;">
-                <img id="spcmeso-cnty" alt="" style="position:absolute; inset:0; width:1000px;">
-                <img id="spcmeso-img" alt="SPC mesoanalysis" style="position:absolute; inset:0; width:1000px;">
-            </div>
+        <div class="floating-panel-body" id="spcmeso-body" style="padding:6px; overflow:auto; background:#0a0f16;">
+            <div id="spcmeso-grid" style="display:grid; gap:6px;"></div>
         </div>
     </div>
 
@@ -1238,6 +1239,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=267"></script>
+    <script src="app.js?v=268"></script>
 </body>
 </html>
