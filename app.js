@@ -14007,6 +14007,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 10, 2026', items: [
+        '<b>Fixed: in 4-pane mesoanalysis the bottom two charts were cut off.</b> The panes were sized from the panel\'s <i>width</i> only, so on anything shorter than about a 1000 px-tall screen the second row ran past the bottom of the panel — and because the panel clips rather than scrolls, those two charts were simply gone with no scrollbar to hint at it. Panes are now sized by whichever axis runs out first, so every pane is always fully on screen. Reproduced on a 1440×900 display, where panes 3 and 4 previously ended 206 px below the window.',
+        'Scrolling would have been the wrong repair, incidentally — a four-pane comparison you have to scroll through only ever shows you two panes.',
+        '<b>Click any chart to enlarge it, click again to go back.</b> Four 4:3 charts sharing one screen are each about 400 px wide on a laptop no matter how the window is arranged — that is arithmetic, not layout. So keep the 4-pane for spotting where the signal is, then blow one up to read it: on a 1280×800 screen that takes a pane from 412 px to 864 px.',
+        'Also added a <b>maximize</b> button, and the panel now re-fits itself when you resize the window or drag its corner.'
+    ]},
     { date: 'Aug 9, 2026 (update 2)', items: [
         '<b>SPC Mesoanalysis now splits into 1, 2 or 4 panes.</b> Mesoanalysis is a comparison tool — instability only means something next to the shear, and a composite only means something next to the ingredients underneath it. Flipping a single window between fields makes you hold the previous one in your head. Pick the pane count in the header and each pane gets its own parameter dropdown, all locked to the <b>same sector and the same valid time</b>, so what you are comparing is the fields and not the clock. A fresh 4-pane opens on MSL pressure, surface temp/dewpoint, lapse rates and effective SRH; your layout, the four parameters and the sector are all remembered for next time.',
         'The panel resizes itself to keep each chart legible — the mesoanalysis contour labels are small, so panes never shrink below roughly 620 px — and it clamps to your screen rather than growing off the edge.'
@@ -14384,7 +14390,7 @@ const USER_GUIDE = [
             <li><b>Watches, Mesoscale Discussions,</b> and <b>Local Storm Reports</b> plot live; click one for its full text.</li>
             <li><b>ProbSevere</b> storm-object polygons show ML-derived severe probabilities per storm.</li>
             <li><b>Skew-T Soundings</b>: SPC’s observed sounding images, or the <b>Interactive Skew-T (RAOB)</b> panel — an NSHARP-style viewer with parcel curves and indices for any upper-air site.</li>
-            <li><b>SPC Mesoanalysis</b> opens the hourly mesoanalysis field viewer. Split it into <b>1, 2 or 4 panes</b> to read several parameters over the same sector at the same valid time — each pane picks its own field, and your layout, parameters and sector are remembered.</li>
+            <li><b>SPC Mesoanalysis</b> opens the hourly mesoanalysis field viewer. Split it into <b>1, 2 or 4 panes</b> to read several parameters over the same sector at the same valid time — each pane picks its own field, and your layout, parameters and sector are remembered. In a multi-pane layout, <b>click any chart to enlarge it</b> and click again to return; the maximize button fills the window.</li>
         </ul>` },
 
     { id: 'surface', title: 'Surface Analysis & WPC', html: `
@@ -16317,21 +16323,59 @@ function _spcMesoRestoreState() {
         if (sSel && s.sector && Array.from(sSel.options).some(o => o.value === s.sector)) sSel.value = s.sector;
     } catch (_) {}
 }
+const _SPCMESO_GAP = 6, _SPCMESO_PAD = 12, _SPCMESO_BAR = 24, _SPCMESO_AR = 1000 / 750;
+// Click-to-focus. On a laptop, four 4:3 charts share one screen no matter where
+// they live, so each is ~400 px wide however the window is arranged. Focus keeps
+// the 4-pane overview for spotting the signal and blows one pane up to read it.
+let _spcMesoFocus = null;
+function _spcMesoVisibleIdx() {
+    return _spcMesoFocus != null ? [_spcMesoFocus] : Array.from({ length: _spcMesoLayout }, (_, i) => i);
+}
+function _spcMesoDims() {
+    const n = _spcMesoVisibleIdx().length;
+    return { cols: n === 1 ? 1 : 2, rows: n === 4 ? 2 : 1 };
+}
 // Grow the panel so each pane keeps a legible image, but never past the viewport —
 // the mesoanalysis contour labels are small and unreadable much below ~600 px wide.
 function _spcMesoSizePanel() {
     const panel = document.getElementById('spcmeso-panel');
     if (!panel) return;
-    const cols = _spcMesoLayout === 1 ? 1 : 2;
-    const rows = _spcMesoLayout === 4 ? 2 : 1;
+    const { cols, rows } = _spcMesoDims();
     const cellW = _spcMesoLayout === 1 ? 1000 : _spcMesoLayout === 2 ? 700 : 620;
-    const cellH = cellW * 0.75 + 26;                       // 4:3 image + its param bar
-    const w = Math.min(cols * cellW + (cols - 1) * 6 + 26, window.innerWidth - 40);
-    const h = Math.min(rows * cellH + (rows - 1) * 6 + 92, window.innerHeight - 40);
+    const cellH = cellW / _SPCMESO_AR + _SPCMESO_BAR;
+    const w = Math.min(cols * cellW + (cols - 1) * _SPCMESO_GAP + 26, window.innerWidth - 40);
+    const h = Math.min(rows * cellH + (rows - 1) * _SPCMESO_GAP + 92, window.innerHeight - 40);
     panel.style.width = Math.round(w) + 'px';
     panel.style.height = Math.round(h) + 'px';
     if (panel.offsetLeft + w > window.innerWidth) panel.style.left = Math.max(0, window.innerWidth - w - 10) + 'px';
     if (panel.offsetTop + h > window.innerHeight) panel.style.top = Math.max(0, window.innerHeight - h - 10) + 'px';
+}
+// Size the panes to fit BOTH dimensions of whatever room the panel actually has.
+//
+// Sizing from width alone is what clipped the bottom row: .floating-panel is
+// overflow:hidden and its body is a flex child that reports its CONTENT height, so
+// a 2-row grid happily grew past the panel and was cut off with no scrollbar. And
+// scrolling would be the wrong repair anyway — a 4-pane comparison you have to
+// scroll through only ever shows you two panes. So the cell is driven by whichever
+// axis binds first, and every pane is always on screen.
+function _spcMesoFit() {
+    const panel = document.getElementById('spcmeso-panel');
+    const body = document.getElementById('spcmeso-body');
+    const grid = document.getElementById('spcmeso-grid');
+    if (!panel || !body || !grid || panel.style.display === 'none') return;
+    const { cols, rows } = _spcMesoDims();
+    const header = panel.querySelector('.floating-panel-header');
+    const meta = document.getElementById('spcmeso-meta');
+    const chromeH = (header?.offsetHeight || 46) + (meta?.offsetHeight || 28);
+    const availW = panel.clientWidth - _SPCMESO_PAD;
+    const availH = panel.clientHeight - chromeH - _SPCMESO_PAD;
+    const fromW = (availW - (cols - 1) * _SPCMESO_GAP) / cols;
+    const fromH = ((availH - (rows - 1) * _SPCMESO_GAP) / rows - _SPCMESO_BAR) * _SPCMESO_AR;
+    const cellW = Math.max(180, Math.floor(Math.min(fromW, fromH)));
+    grid.style.gridTemplateColumns = `repeat(${cols}, ${cellW}px)`;
+    grid.style.justifyContent = 'center';
+    grid.style.alignContent = 'start';
+    body.style.maxHeight = Math.max(0, availH + _SPCMESO_PAD) + 'px';
 }
 // Rebuild the grid. Images are width:100% inside an aspect-locked box so they
 // reflow when the layout changes or the user resizes the panel.
@@ -16339,9 +16383,10 @@ function _spcMesoBuildPanes() {
     const grid = document.getElementById('spcmeso-grid');
     if (!grid) return;
     grid.innerHTML = '';
-    grid.style.gridTemplateColumns = _spcMesoLayout === 1 ? '1fr' : '1fr 1fr';
-    for (let i = 0; i < _spcMesoLayout; i++) {
+    const multi = _spcMesoLayout > 1;
+    for (const i of _spcMesoVisibleIdx()) {
         const pane = document.createElement('div');
+        pane.dataset.pane = String(i);
         pane.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0;';
         const sel = document.createElement('select');
         sel.className = 'spcmeso-pane-param';
@@ -16355,16 +16400,27 @@ function _spcMesoBuildPanes() {
             _spcMesoLoadPane(i);
         });
         const box = document.createElement('div');
-        box.style.cssText = 'position:relative;width:100%;aspect-ratio:1000/750;background:#fff;';
+        box.style.cssText = 'position:relative;width:100%;aspect-ratio:1000/750;background:#fff;'
+                          + (multi ? 'cursor:zoom-in;' : '');
         box.innerHTML = `<img class="spcmeso-cnty" alt="" style="position:absolute;inset:0;width:100%;">`
                       + `<img class="spcmeso-img" alt="SPC mesoanalysis" style="position:absolute;inset:0;width:100%;">`;
+        if (multi) {
+            box.style.cursor = _spcMesoFocus != null ? 'zoom-out' : 'zoom-in';
+            box.title = _spcMesoFocus != null ? 'Click to return to all panes' : 'Click to enlarge this pane';
+            box.addEventListener('click', () => {
+                _spcMesoFocus = _spcMesoFocus != null ? null : i;
+                _spcMesoBuildPanes();
+                _spcMesoLoad();
+            });
+        }
         pane.appendChild(sel); pane.appendChild(box);
         grid.appendChild(pane);
     }
+    _spcMesoFit();
 }
 function _spcMesoLoadPane(i) {
     const grid = document.getElementById('spcmeso-grid');
-    const pane = grid?.children[i];
+    const pane = grid?.querySelector(`[data-pane="${i}"]`);
     if (!pane) return;
     const sector = document.getElementById('spcmeso-sector')?.value || 's19';
     const param = _spcMesoPanes[i] || 'pmsl';
@@ -16378,21 +16434,49 @@ function _spcMesoLoadPane(i) {
     }
 }
 function _spcMesoLoad() {
-    for (let i = 0; i < _spcMesoLayout; i++) _spcMesoLoadPane(i);
+    for (const i of _spcMesoVisibleIdx()) _spcMesoLoadPane(i);
     const meta = document.getElementById('spcmeso-meta');
     if (meta) {
-        const shown = _spcMesoLayout === 1
-            ? _spcMesoParamLabel(_spcMesoPanes[0])
-            : `${_spcMesoLayout} panes — ` + _spcMesoPanes.slice(0, _spcMesoLayout).map(_spcMesoParamLabel).join(' · ');
+        const shown = _spcMesoFocus != null
+            ? `${_spcMesoParamLabel(_spcMesoPanes[_spcMesoFocus])} (enlarged — click the chart to return to ${_spcMesoLayout} panes)`
+            : _spcMesoLayout === 1
+                ? _spcMesoParamLabel(_spcMesoPanes[0])
+                : `${_spcMesoLayout} panes — ` + _spcMesoPanes.slice(0, _spcMesoLayout).map(_spcMesoParamLabel).join(' · ');
         meta.textContent = `${shown} — hourly SPC objective analysis (RAP-based), updates ~:25 past the hour. Loaded ${new Date().toISOString().substring(11, 16)}Z.`;
     }
 }
 function _spcMesoSetLayout(n) {
     _spcMesoLayout = n;
+    _spcMesoFocus = null;
     _spcMesoSaveState();
-    _spcMesoSizePanel();
+    if (!_spcMesoMaximized) _spcMesoSizePanel();
     _spcMesoBuildPanes();
     _spcMesoLoad();
+}
+// Maximize: the whole point of 4 panes is room, and on a laptop the auto-sized
+// panel still leaves each chart small. Fills the window and restores to the
+// previous geometry on the second click.
+let _spcMesoMaximized = false, _spcMesoPrevGeom = null;
+function _spcMesoToggleMax() {
+    const panel = document.getElementById('spcmeso-panel');
+    const btn = document.getElementById('spcmeso-max');
+    if (!panel) return;
+    if (!_spcMesoMaximized) {
+        _spcMesoPrevGeom = { w: panel.style.width, h: panel.style.height, l: panel.style.left, t: panel.style.top, r: panel.style.right };
+        panel.style.left = '8px'; panel.style.top = '8px'; panel.style.right = 'auto';
+        panel.style.width = (window.innerWidth - 16) + 'px';
+        panel.style.height = (window.innerHeight - 16) + 'px';
+        _spcMesoMaximized = true;
+        if (btn) btn.title = 'Restore panel size';
+    } else {
+        const g = _spcMesoPrevGeom || {};
+        panel.style.width = g.w || ''; panel.style.height = g.h || '';
+        panel.style.left = g.l || ''; panel.style.top = g.t || ''; panel.style.right = g.r || '';
+        _spcMesoMaximized = false;
+        if (btn) btn.title = 'Maximize to fill the window';
+        if (!g.w) _spcMesoSizePanel();
+    }
+    _spcMesoFit();
 }
 function initSpcMesoPanel() {
     const openBtn = document.getElementById('btn-spcmeso');
@@ -16408,9 +16492,24 @@ function initSpcMesoPanel() {
     _spcMesoBuildPanes();
     openBtn.addEventListener('click', () => {
         panel.style.display = 'block';
-        _spcMesoSizePanel();
+        if (!_spcMesoMaximized) _spcMesoSizePanel();
+        _spcMesoFit();
         _spcMesoLoad();
     });
+    document.getElementById('spcmeso-max')?.addEventListener('click', _spcMesoToggleMax);
+    // Re-fit on a browser resize and on a manual panel drag-resize (.floating-panel
+    // is resize:both), so panes never end up clipped again.
+    window.addEventListener('resize', () => {
+        if (panel.style.display === 'none') return;
+        if (_spcMesoMaximized) { panel.style.width = (window.innerWidth - 16) + 'px'; panel.style.height = (window.innerHeight - 16) + 'px'; }
+        _spcMesoFit();
+    });
+    // ResizeObserver gives live re-fitting mid-drag, but its delivery is tied to the
+    // rendering steps and stops in a backgrounded/throttled tab. A mouseup re-fit is
+    // the belt to that braces: whatever happened during the drag, the panes are
+    // correct once the user lets go.
+    if (window.ResizeObserver) new ResizeObserver(() => _spcMesoFit()).observe(panel);
+    document.addEventListener('mouseup', () => { if (panel.style.display !== 'none') _spcMesoFit(); });
     document.getElementById('close-spcmeso-panel')?.addEventListener('click', () => { panel.style.display = 'none'; });
     document.getElementById('spcmeso-refresh')?.addEventListener('click', _spcMesoLoad);
     sSel?.addEventListener('change', () => { _spcMesoSaveState(); _spcMesoLoad(); });
