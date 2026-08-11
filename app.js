@@ -281,6 +281,7 @@ const HEALTH_THRESHOLDS = {
     sfcIsotachs:      { label: 'Isotachs',           thresholdMs: 15 * 60 * 1000 },
     sfcApparent:      { label: 'Apparent Temp',      thresholdMs: 15 * 60 * 1000 },
     probSevere:  { label: 'ProbSevere',       thresholdMs: 5 * 60 * 1000 },
+    nexradAttr:  { label: 'Storm Attributes', thresholdMs: 15 * 60 * 1000 },
     ndfdTemp:    { label: 'NDFD Temp',        thresholdMs: 2 * 60 * 60 * 1000 },
     airSigmet:   { label: 'SIGMET/AIRMET',    thresholdMs: 20 * 60 * 1000 },
     gairmet:     { label: 'G-AIRMET',         thresholdMs: 20 * 60 * 1000 },
@@ -296,7 +297,7 @@ const HEALTH_THRESHOLDS = {
 // sidebar's categories. Order is the display order; each entry lists the
 // tracker ids that belong under that header.
 const HEALTH_GROUPS = [
-    { name: 'RADAR & LIGHTNING', ids: ['radar', 'radarL3', 'mrmsEchotops', 'mrmsQpe', 'lightning'] },
+    { name: 'RADAR & LIGHTNING', ids: ['radar', 'radarL3', 'nexradAttr', 'mrmsEchotops', 'mrmsQpe', 'lightning'] },
     { name: 'SATELLITE',         ids: ['sat', 'gibsSat'] },
     { name: 'SURFACE ANALYSIS',  ids: ['metar', 'ndbc', 'sfcIsobars2mb', 'sfcIsotherms', 'sfcIsodrosotherms', 'sfcRelh', 'sfcIsotachs', 'sfcApparent', 'wpcIsobars', 'wpcFronts', 'ndfdTemp'] },
     { name: 'WARNINGS & WATCHES',ids: ['warnings', 'watches'] },
@@ -2476,6 +2477,66 @@ function setupMapLayers(map, paneId) {
         paint: { 'text-color': '#ffd23c', 'text-halo-color': '#000000', 'text-halo-width': 1.5 }
     });
 
+    // ─── Layer 7g2: National storm attribute table (IEM SCIT, all NEXRADs) ───
+    // One CORS-open GeoJSON carries every radar's current cell table, so this is
+    // a CONUS-wide hail/rotation census rather than the per-pane STI/MDA above.
+    // Cells are coloured on the severe-hail ladder (0.75" = NWS severe criteria,
+    // 2.00" = significant severe) and ringed white when a mesocyclone is flagged.
+    map.addSource('nexrad-attr', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'natt-vector', type: 'line', source: 'nexrad-attr',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        layout: { visibility: 'none', 'line-cap': 'round' },
+        paint: { 'line-color': '#9fb4c7', 'line-width': 1.2, 'line-dasharray': [2, 1.6], 'line-opacity': 0.75 }
+    });
+    map.addLayer({
+        id: 'natt-cell', type: 'circle', source: 'nexrad-attr',
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'cell']],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['get', 'max_size'],
+                0, 3, 0.75, 6, 1.0, 7.5, 2.0, 10, 3.0, 13],
+            'circle-color': ['step', ['get', 'max_size'],
+                'rgba(110,198,255,0.30)',
+                0.75, 'rgba(255,225,77,0.45)',
+                1.0, 'rgba(255,158,59,0.50)',
+                1.75, 'rgba(255,59,59,0.55)',
+                2.5, 'rgba(255,43,208,0.60)'],
+            'circle-stroke-color': ['case', ['>', ['get', 'meso_n'], 0], '#ffffff',
+                ['step', ['get', 'max_size'],
+                    '#6ec6ff', 0.75, '#ffe14d', 1.0, '#ff9e3b', 1.75, '#ff3b3b', 2.5, '#ff2bd0']],
+            'circle-stroke-width': ['case', ['>', ['get', 'meso_n'], 0], 2.2, 1.3]
+        }
+    });
+    map.addLayer({
+        id: 'natt-tvs', type: 'symbol', source: 'nexrad-attr',
+        filter: ['all', ['==', ['get', 'kind'], 'cell'], ['==', ['get', 'tvs'], 1]],
+        layout: {
+            visibility: 'none',
+            'text-field': '▼', 'text-font': ['Noto Sans Regular'],
+            'text-size': 17, 'text-allow-overlap': true, 'text-ignore-placement': true
+        },
+        paint: { 'text-color': '#ff2b2b', 'text-halo-color': '#000000', 'text-halo-width': 2 }
+    });
+    // Labels stay off the weak cells so a 700-cell CONUS table remains readable.
+    map.addLayer({
+        id: 'natt-label', type: 'symbol', source: 'nexrad-attr',
+        filter: ['all', ['==', ['get', 'kind'], 'cell'],
+            ['any', ['>=', ['get', 'max_size'], 0.75], ['>', ['get', 'meso_n'], 0]]],
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'tag'],
+            'text-font': ['Noto Sans Regular'], 'text-size': 10,
+            'text-offset': [0, -1.3], 'text-anchor': 'bottom',
+            // Unlike the single-radar layers, this one can put 700 cells on
+            // screen at once — let MapLibre drop colliding labels rather than
+            // stacking them, and sort so the biggest hail wins the space.
+            'text-allow-overlap': false, 'text-padding': 3,
+            'symbol-sort-key': ['-', 0, ['get', 'max_size']]
+        },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#000000', 'text-halo-width': 1.6 }
+    });
+
 function getRadarSitesGeoJSON() {
     const features = [];
     for (const [id, coords] of Object.entries(RADAR_LOCATIONS)) {
@@ -3840,6 +3901,38 @@ function initFrontalPipIcons(map) {
     });
     map.on('mouseenter', 'probsevere-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'probsevere-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // ─── National storm attribute (SCIT) cell click ───
+    map.on('click', 'natt-cell', e => {
+        if (!e.features || !e.features[0]) return;
+        const p = e.features[0].properties || {};
+        const row = (k, v) => `<div><span style="color:#888;">${k}:</span> ${v}</div>`;
+        const size = Number(p.max_size) || 0;
+        const sizeColor = size >= 2.5 ? '#ff2bd0' : size >= 1.75 ? '#ff3b3b'
+            : size >= 1.0 ? '#ff9e3b' : size >= 0.75 ? '#ffe14d' : '#6ec6ff';
+        const flags = [];
+        if (Number(p.meso_n) > 0) flags.push(`<span style="color:#ffffff;">MESO ${esc(p.meso_n)}</span>`);
+        if (Number(p.tvs) === 1) flags.push('<span style="color:#ff2b2b;font-weight:bold;">TVS</span>');
+        const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:250px;">
+            <div style="font-weight:bold;color:${sizeColor};font-size:13px;margin-bottom:2px;">Cell ${esc(p.storm_id)} · K${esc(p.nexrad)}</div>
+            ${flags.length ? `<div style="margin-bottom:4px;font-size:10px;letter-spacing:0.5px;">${flags.join(' · ')}</div>` : ''}
+            <div style="line-height:1.6;">
+                ${row('Max hail size', size > 0 ? `<b style="color:${sizeColor};">${size.toFixed(2)}"</b>` : 'none detected')}
+                ${row('Prob of severe hail', p.posh != null ? esc(p.posh) + '%' : '—')}
+                ${row('Prob of hail', p.poh != null ? esc(p.poh) + '%' : '—')}
+                ${row('VIL', p.vil != null ? esc(p.vil) + ' kg/m²' : '—')}
+                ${row('Max reflectivity', p.max_dbz != null ? esc(p.max_dbz) + ' dBZ' : '—')}
+                ${row('Height of max dBZ', p.max_dbz_height != null ? esc(p.max_dbz_height) + ' kft' : '—')}
+                ${row('Storm top', p.top != null ? esc(p.top) + ' kft' : '—')}
+                ${row('Movement', (p.toward != null && p.toward !== '' && Number(p.sknt) > 0)
+                    ? `toward ${Math.round(Number(p.toward))}° @ ${esc(p.sknt)} kt` : 'stationary / new')}
+            </div>
+            <div style="margin-top:5px;font-size:9px;color:#666;">Volume scan ${esc(String(p.valid).replace('T', ' ').replace('Z', 'Z'))}</div>
+        </div>`;
+        popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'natt-cell', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'natt-cell', () => { map.getCanvas().style.cursor = ''; });
 
     // ─── G-AIRMET hazard-area click ───
     map.on('click', 'gairmet-fill', e => {
@@ -7696,6 +7789,60 @@ function concToAqi(conc, pollutant) {
 // `pick` function that reduces the raw FeatureCollection to what gets plotted.
 const _polyOnly = fs => fs.filter(f => f.geometry &&
     (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon'));
+
+// IEM's national NEXRAD storm attribute table — every radar's current SCIT cell
+// list in one CORS-open pull. Carries what the per-site STI does not: POSH/POH,
+// max hail size, VIL, and the height of max reflectivity. `drct` is the bearing
+// the cell is moving FROM (same convention as the L3 product), so the motion
+// vector runs out along the reciprocal.
+const NEXRAD_ATTR_URL = 'https://mesonet.agron.iastate.edu/geojson/nexrad_attr.py';
+const _NATT_VECTOR_MIN_KT = 5;  // below this the reported direction is noise
+const _NATT_VECTOR_SECS = 30 * 60;
+
+function _nattPick(fs) {
+    const out = [];
+    fs.forEach(f => {
+        const g = f.geometry, p = f.properties;
+        if (!g || g.type !== 'Point' || !p) return;
+        const lon = Number(g.coordinates[0]), lat = Number(g.coordinates[1]);
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+        const size = Number(p.max_size) || 0;
+        // meso arrives as a rank string ('1'..'10') or the sentinel 'NONE'
+        const mesoN = /^\d+$/.test(String(p.meso)) ? Number(p.meso) : 0;
+        const sknt = Number(p.sknt) || 0;
+        const drct = Number(p.drct);
+        const toward = Number.isFinite(drct) ? (drct + 180) % 360 : null;
+        const id = `${p.nexrad || '?'}-${p.storm_id || '?'}`;
+        out.push({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [lon, lat] },
+            properties: {
+                kind: 'cell', id,
+                // Trace values (0.01") are algorithm noise, not a hail report —
+                // only size the label once it means something.
+                tag: size >= 0.25 ? `${p.storm_id} ${size.toFixed(2)}"` : String(p.storm_id || ''),
+                nexrad: p.nexrad || '', storm_id: p.storm_id || '',
+                max_size: size, meso_n: mesoN, tvs: (p.tvs && p.tvs !== 'NONE') ? 1 : 0,
+                posh: p.posh, poh: p.poh, vil: p.vil, max_dbz: p.max_dbz,
+                max_dbz_height: p.max_dbz_height, top: p.top,
+                sknt, toward, valid: p.valid || ''
+            }
+        });
+        if (sknt > _NATT_VECTOR_MIN_KT && toward != null) {
+            const m = sknt * _KT2MS * _NATT_VECTOR_SECS;
+            const th = toward * Math.PI / 180;
+            const dLat = (m * Math.cos(th)) / 111320;
+            const dLon = (m * Math.sin(th)) / (111320 * Math.cos(lat * Math.PI / 180));
+            out.push({
+                type: 'Feature',
+                geometry: { type: 'LineString', coordinates: [[lon, lat], [lon + dLon, lat + dLat]] },
+                properties: { kind: 'vector', id }
+            });
+        }
+    });
+    return out;
+}
+
 const GEOJSON_FEEDS = {
     // SIGMETs and AIRMETs — one AWC feed carries both, styled by hazard.
     airsigmet: {
@@ -7742,6 +7889,17 @@ const GEOJSON_FEEDS = {
         fetching: 'Fetching Center Weather Advisories...', what: 'CWAs', color: '#ff5ac4',
         pick: _polyOnly
     },
+    // National storm attributes — fetched straight from IEM (CORS-open), so no
+    // proxy function is spent on it. `count` skips the motion vectors so the log
+    // reports cells; `stamp` ages the feed against the table's own build time.
+    nexradattr: {
+        url: NEXRAD_ATTR_URL, bust: true, source: 'nexrad-attr',
+        health: 'nexradAttr', tag: 'SCIT',
+        fetching: 'Fetching national storm attributes...', what: 'storm cells', color: '#ff2bd0',
+        pick: _nattPick,
+        count: fs => fs.filter(f => f.properties.kind === 'cell').length,
+        stamp: fc => Date.parse(fc.generated_at) || null
+    },
 };
 
 async function fetchGeoJsonFeed(key, show) {
@@ -7749,14 +7907,14 @@ async function fetchGeoJsonFeed(key, show) {
     const cfg = GEOJSON_FEEDS[key];
     addLiveLog(`${cfg.tag}: ${cfg.fetching}`, cfg.color);
     try {
-        const res = await fetch(cfg.url);
+        const res = await fetch(cfg.bust ? cacheBust(cfg.url) : cfg.url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const fc = await res.json();
         const feats = cfg.pick(fc.features || []);
         const clean = { type: 'FeatureCollection', features: feats };
         Object.values(maps).forEach(m => { if (m.getSource(cfg.source)) m.getSource(cfg.source).setData(clean); });
-        updateHealth(cfg.health);
-        addLiveLog(`${cfg.tag}: ${feats.length} ${cfg.what} loaded`, '#00ff88');
+        updateHealth(cfg.health, cfg.stamp ? cfg.stamp(fc) : null);
+        addLiveLog(`${cfg.tag}: ${cfg.count ? cfg.count(feats) : feats.length} ${cfg.what} loaded`, '#00ff88');
     } catch (e) {
         addLiveLog(`${cfg.tag} ${key.toUpperCase()} ERROR: ${e.message}`, '#ff3333');
     }
@@ -7769,6 +7927,7 @@ async function fetchProbSevere(show) { return fetchGeoJsonFeed('probsevere', sho
 async function fetchTaf(show) { return fetchGeoJsonFeed('taf', show); }
 async function fetchGairmet(show) { return fetchGeoJsonFeed('gairmet', show); }
 async function fetchCwa(show) { return fetchGeoJsonFeed('cwa', show); }
+async function fetchNexradAttr(show) { return fetchGeoJsonFeed('nexradattr', show); }
 
 // NDBC marine buoy observations — fixed-width latest_obs.txt (one row per
 // station, 'MM' = missing), proxied via /api/ndbc (NDBC sends no CORS header).
@@ -9037,6 +9196,7 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'spc-lsr-icons'), 'LOCAL STORM REPORTS', '#ff8c00', 'spcLsr');
     add(isLayerVisible(map, 'spc-d48-fill'), 'SPC DAY 4-8 OUTLOOK', '#b87aff', 'spcOutlook');
     add(isLayerVisible(map, 'probsevere-fill'), 'PROBSEVERE (CIMSS)', '#ff9900', 'probSevere');
+    add(isLayerVisible(map, 'natt-cell'), 'STORM ATTRIBUTES (SCIT)', '#ff9e3b', 'nexradAttr');
     add(isLayerVisible(map, 'storm-attr-cell'), `${site} STORM TRACKS (STI)`, '#ff2bd0');
     add(isLayerVisible(map, 'meso-circ'), `${site} MESO/TVS (MDA)`, '#ff9e3b');
     add(isLayerVisible(map, 'airsigmet-fill'), 'SIGMETS / AIRMETS', '#ff9e3b', 'airSigmet');
@@ -10054,6 +10214,7 @@ function productItemActiveOn(pid, item) {
     else if (layer === 'wpc-mpd') isActive = isLayerVisible(map, 'wpc-mpd-fill');
     else if (layer === 'spc-lsr') isActive = isLayerVisible(map, 'spc-lsr-icons');
     else if (layer === 'probsevere') isActive = isLayerVisible(map, 'probsevere-fill');
+    else if (layer === 'nexrad-attr') isActive = isLayerVisible(map, 'natt-cell');
     else if (layer === 'airsigmet') isActive = isLayerVisible(map, 'airsigmet-fill');
     else if (layer === 'gairmet') isActive = isLayerVisible(map, 'gairmet-fill');
     else if (layer === 'pireps') isActive = isLayerVisible(map, 'pireps-layer');
@@ -10383,6 +10544,19 @@ function initProductSidebar() {
                 if (isActive) await fetchLSRs(true);
                 map.setLayoutProperty('spc-lsr-icons', 'visibility', isActive ? 'visible' : 'none');
                 map.setLayoutProperty('spc-lsr-mag', 'visibility', isActive ? 'visible' : 'none');
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── National storm attributes (IEM SCIT table, all NEXRADs) ───
+            if (layer === 'nexrad-attr') {
+                const isActive = !item.classList.contains('active');
+                if (isActive) await fetchNexradAttr(true);
+                const vis = isActive ? 'visible' : 'none';
+                // getLayer guard: clicking a product before the style finishes
+                // loading otherwise throws out of the handler
+                ['natt-vector', 'natt-cell', 'natt-tvs', 'natt-label']
+                    .forEach(l => { if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', vis); });
                 updateSidebarToActivePane();
                 return;
             }
@@ -12616,6 +12790,7 @@ function clearPane(map, paneId) {
         'spc-d48-fill', 'spc-d48-line', 'spc-d48-label',
         'ndfd-temp-layer',
         'storm-attr-track', 'storm-attr-fpos', 'storm-attr-cell', 'storm-attr-label',
+        'natt-vector', 'natt-cell', 'natt-tvs', 'natt-label',
         'meso-circ', 'meso-tvs', 'meso-label',
         'nws-cwa-layer', 'nws-cwa-label-layer',
         'recon-hdob-line', 'recon-hdob-pts', 'recon-hdob-labels',
@@ -13110,6 +13285,9 @@ function startAutoRefresh() {
         if (Object.values(maps).some(m => isLayerVisible(m, 'taf-layer'))) fetchTaf(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'cwa-fill'))) fetchCwa(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'spc-lsr-icons'))) fetchLSRs(true);
+        // National SCIT table rebuilds as each radar finishes a volume scan
+        // (~4-6 min), so 5 min keeps it within one scan of current.
+        if (Object.values(maps).some(m => isLayerVisible(m, 'natt-cell'))) fetchNexradAttr(true);
     }, 5 * 60 * 1000);
 
     // 2. High Frequency (5 minutes)
@@ -14007,6 +14185,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 11, 2026', items: [
+        '<b>New layer: Storm Attributes (SCIT)</b>, under RADAR (NEXRAD). This is every NEXRAD\'s current storm cell table at once — around 700 cells from 60-plus radars in a single national pull, refreshed every 5 minutes.',
+        'The existing Storm Tracks (STI) layer decodes one radar at a time, which is the right tool when you are already interrogating a storm. This is the other question: <i>where in the country should I be looking?</i> It also carries fields the single-site table does not — <b>maximum hail size</b>, <b>probability of severe hail (POSH)</b>, <b>probability of hail</b>, <b>VIL</b>, and the <b>height of maximum reflectivity</b>, which is what separates a tall skinny core from a real hail producer.',
+        'Cells are coloured on the severe-hail ladder — blue below 0.75", yellow at the 0.75" severe threshold, orange past 1.00", red past 1.75", magenta past 2.50" significant-severe — and sized to match, so a hail threat reads at a glance from a CONUS view. A <b>white ring</b> marks a flagged mesocyclone, a <b>red ▼</b> marks a TVS, and the dashed line off each cell is its <b>30-minute projected position</b> at the reported motion.',
+        'Click any cell for the full attribute readout. Labels declutter automatically and the largest hail wins the space, which matters when 700 cells share one screen.'
+    ]},
     { date: 'Aug 10, 2026', items: [
         '<b>Fixed: in 4-pane mesoanalysis the bottom two charts were cut off.</b> The panes were sized from the panel\'s <i>width</i> only, so on anything shorter than about a 1000 px-tall screen the second row ran past the bottom of the panel — and because the panel clips rather than scrolls, those two charts were simply gone with no scrollbar to hint at it. Panes are now sized by whichever axis runs out first, so every pane is always fully on screen. Reproduced on a 1440×900 display, where panes 3 and 4 previously ended 206 px below the window.',
         'Scrolling would have been the wrong repair, incidentally — a four-pane comparison you have to scroll through only ever shows you two panes.',
