@@ -1041,7 +1041,10 @@
     <div id="model-panel" class="floating-panel" style="display:none; width:760px; height:580px;">
         <div class="floating-panel-header" id="model-drag">
             <span><i data-lucide="trending-up"></i> MODEL COMPARISON</span>
-            <button id="close-model-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+            <span style="display:flex; gap:4px; align-items:center;">
+                <button id="model-max" class="btn-icon" title="Maximize to fill the window"><i data-lucide="maximize-2"></i></button>
+                <button id="close-model-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+            </span>
         </div>
         <div class="modal-toolbar" style="gap:8px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;">
             <input id="model-place" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:140px;" />
@@ -1241,6 +1244,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=270"></script>
+    <script src="app.js?v=271"></script>
 </body>
 </html>

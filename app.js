@@ -11265,14 +11265,71 @@ function initProductSidebar() {
 // HRRR is short-range by design (3 km CONUS, hourly runs, ~48 h) so its trace
 // simply ends partway across the chart — that truncation is honest, and where it
 // disagrees with the globals inside 48 h is exactly where it earns its keep.
+// `runDir` is the Open-Meteo data directory whose static/meta.json publishes the
+// cycle this model is currently serving. For the `_seamless` families — which
+// splice a high-res domain onto a global one — it names the GLOBAL member, since
+// that is the run covering the full length of the chart.
 const MODEL_SOURCES = [
-    { id: 'gfs_seamless',         label: 'GFS',        org: 'NOAA NCEP', color: '#00e5ff' },
-    { id: 'gfs_hrrr',             label: 'HRRR',       org: 'NOAA 3 km', color: '#ff8a3c', shortRange: true },
-    { id: 'ecmwf_ifs025',         label: 'ECMWF IFS',  org: 'ECMWF',     color: '#ff5ad1' },
-    { id: 'gem_seamless',         label: 'CMC GEM',    org: 'ECCC',      color: '#ffd166' },
-    { id: 'icon_seamless',        label: 'ICON',       org: 'DWD',       color: '#7cff6b' },
-    { id: 'ecmwf_aifs025_single', label: 'ECMWF AIFS', org: 'ECMWF',     color: '#c08bff', ai: true }
+    { id: 'gfs_seamless',         label: 'GFS',        org: 'NOAA NCEP', color: '#00e5ff', runDir: 'ncep_gfs013' },
+    { id: 'gfs_hrrr',             label: 'HRRR',       org: 'NOAA 3 km', color: '#ff8a3c', shortRange: true, runDir: 'ncep_hrrr_conus' },
+    { id: 'ecmwf_ifs025',         label: 'ECMWF IFS',  org: 'ECMWF',     color: '#ff5ad1', runDir: 'ecmwf_ifs025' },
+    { id: 'gem_seamless',         label: 'CMC GEM',    org: 'ECCC',      color: '#ffd166', runDir: 'cmc_gem_gdps' },
+    { id: 'icon_seamless',        label: 'ICON',       org: 'DWD',       color: '#7cff6b', runDir: 'dwd_icon' },
+    { id: 'ecmwf_aifs025_single', label: 'ECMWF AIFS', org: 'ECMWF',     color: '#c08bff', ai: true, runDir: 'ecmwf_aifs025_single' }
 ];
+
+// ─── Model cycle (initialisation) times ───
+// The /v1/forecast response carries no init time — only the valid times — so the
+// cycle behind each trace is read from Open-Meteo's per-model meta.json, which is
+// CORS-open and ~600 bytes. Cached for the session so re-rendering the chart
+// (changing field, range or panel size) costs nothing.
+const MODEL_RUNS_TTL = 10 * 60 * 1000;
+let _modelRuns = null, _modelRunsAt = 0;
+
+// A published cycle is only believable while the metadata is still tracking the
+// data. Open-Meteo's cmc_gem_gdps meta.json is a live example of the failure:
+// it has been frozen for weeks while the model itself keeps delivering current
+// forecasts, so printing its stated run would put a two-month-old timestamp on
+// a trace that is actually today's. Three cycles plus a six-hour grace is well
+// past any normal delivery delay, and past it we say nothing rather than lie.
+function _modelRunUsable(meta) {
+    const init = meta && meta.last_run_initialisation_time;
+    if (!init) return false;
+    const interval = (meta.update_interval_seconds || 6 * 3600) * 1000;
+    const age = Date.now() - init * 1000;
+    return age > -3600 * 1000 && age <= 3 * interval + 6 * 3600 * 1000;
+}
+
+// Same UTC day → bare hour ("06Z"); otherwise carry the date ("11/18Z").
+function _modelRunLabel(initSec) {
+    const d = new Date(initSec * 1000), now = new Date();
+    const hh = String(d.getUTCHours()).padStart(2, '0') + 'Z';
+    return d.getUTCDate() === now.getUTCDate() && d.getUTCMonth() === now.getUTCMonth()
+        ? hh : `${String(d.getUTCDate()).padStart(2, '0')}/${hh}`;
+}
+
+async function fetchModelRuns() {
+    if (_modelRuns && Date.now() - _modelRunsAt < MODEL_RUNS_TTL) return _modelRuns;
+    const out = {};
+    await Promise.all(MODEL_SOURCES.map(async m => {
+        try {
+            // meta.json ships Last-Modified and ETag but NO Cache-Control, so
+            // browsers apply heuristic freshness and will happily serve the
+            // previous cycle for hours. A stale run time is worse than none —
+            // it is the one number this feature exists to get right.
+            const r = await fetch(cacheBust(`https://api.open-meteo.com/data/${m.runDir}/static/meta.json`));
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const j = await r.json();
+            out[m.id] = _modelRunUsable(j)
+                ? { ok: true, init: j.last_run_initialisation_time, avail: j.last_run_availability_time }
+                : { ok: false, why: 'source has stopped publishing a current cycle time' };
+        } catch (e) {
+            out[m.id] = { ok: false, why: e.message };
+        }
+    }));
+    _modelRuns = out; _modelRunsAt = Date.now();
+    return out;
+}
 
 const MODEL_VARS = {
     temperature_2m: { label: 'Temperature', unit: '°F', dec: 0 },
@@ -11301,7 +11358,13 @@ async function loadModelCompareAt(latNum, lonNum, presetLabel) {
             + `&models=${MODEL_SOURCES.map(m => m.id).join(',')}`
             + `&forecast_days=${days}`
             + '&temperature_unit=fahrenheit&wind_speed_unit=kn&precipitation_unit=inch';
-        const res = await fetch(url);
+        // Cycle times ride alongside the forecast rather than after it — they are
+        // static files on a different path, so a failure there must not cost the
+        // chart. runs resolves to {} at worst.
+        const [res, runs] = await Promise.all([
+            fetch(url),
+            fetchModelRuns().catch(() => ({}))
+        ]);
         if (res.status === 429) throw new Error('Open-Meteo rate limit reached — wait a minute and try again.');
         if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
         const j = await res.json();
@@ -11317,9 +11380,9 @@ async function loadModelCompareAt(latNum, lonNum, presetLabel) {
                 series[m.id][v] = h[`${v}_${m.id}`] || h[v] || [];
             });
         });
-        modelData = { times, series, label, fetched: Date.now() };
+        modelData = { times, series, label, runs: runs || {}, fetched: Date.now() };
         if (panel) panel.dataset.loaded = '1';
-        if (locEl) locEl.textContent = `${label} · ${days}-day · run pulled ${new Date().toISOString().substring(11, 16)}Z`;
+        if (locEl) locEl.textContent = `${label} · ${days}-day · fetched ${new Date().toISOString().substring(11, 16)}Z`;
         renderModelCompare();
     } catch (e) {
         modelData = null;
@@ -11349,17 +11412,34 @@ function renderModelCompare() {
             Model data by <b style="color:#8b97a3;">Open-Meteo.com</b> (CC BY 4.0) — GFS/NCEP, IFS &amp; AIFS/ECMWF, GEM/ECCC, ICON/DWD.
         </div>`;
     const legend = document.getElementById('model-legend');
+    const runs = modelData.runs || {};
     active.forEach(m => {
+        const r = runs[m.id];
+        // The cycle sits with the model that produced it — a trace is only worth
+        // reading once you know which run it came from, and the runs genuinely
+        // differ (HRRR is hourly while IFS is six-hourly and lands ~7 h late).
+        let runHTML;
+        if (r && r.ok) {
+            const ageH = Math.max(0, (Date.now() - r.init * 1000) / 3600000);
+            runHTML = `<span style="color:${m.color};font-family:'Roboto Mono',monospace;" `
+                + `title="${esc(m.label)} ${esc(m.runDir)} — initialised ${new Date(r.init * 1000).toISOString().replace('T', ' ').substring(0, 16)}Z, `
+                + `${ageH.toFixed(1)} h ago">${esc(_modelRunLabel(r.init))}</span>`;
+        } else {
+            runHTML = `<span style="color:#8a6d3b;font-family:'Roboto Mono',monospace;" `
+                + `title="Cycle time unavailable — ${esc((r && r.why) || 'no metadata')}. The forecast itself is current.">run ?</span>`;
+        }
         const sw = document.createElement('span');
         sw.style.cssText = 'display:inline-flex;align-items:center;gap:5px;';
         sw.innerHTML = `<span style="width:16px;height:3px;background:${m.color};display:inline-block;"></span>`
             + `<span style="color:#cdd6df;">${esc(m.label)}</span>`
             + (m.ai ? `<span class="badge" style="background:#5b3d8f;color:#fff;font-size:8px;">AI</span>` : '')
-            + `<span style="color:#5b6773;">${esc(m.org)}</span>`;
+            + `<span style="color:#5b6773;">${esc(m.org)}</span>`
+            + runHTML;
         legend.appendChild(sw);
     });
-    drawModelChart(document.getElementById('model-canvas'), varKey, active);
     renderModelSpread(varKey, active, meta);
+    // Chart last: it sizes itself from whatever height the siblings left behind.
+    drawModelChart(document.getElementById('model-canvas'), varKey, active);
 }
 
 // Mean and worst inter-model spread — the number a forecaster actually wants,
@@ -11386,7 +11466,13 @@ function renderModelSpread(varKey, active, meta) {
 function drawModelChart(canvas, varKey, active) {
     if (!canvas) return;
     const wrap = canvas.parentElement;
-    const cssW = Math.max(560, (wrap?.clientWidth || 700) - 8), cssH = 330;
+    const cssW = Math.max(560, (wrap?.clientWidth || 700) - 8);
+    // Grow into whatever the panel gives us — measure the real height of the
+    // legend/spread/credit blocks rather than assuming, since the legend wraps
+    // to a second line on a narrow panel and not on a maximized one.
+    const used = wrap ? Array.from(wrap.children).reduce(
+        (s, el) => el === canvas ? s : s + el.offsetHeight, 0) : 0;
+    const cssH = Math.max(240, Math.min(900, (wrap?.clientHeight || 460) - used - 22));
     const dpr = window.devicePixelRatio || 1;
     canvas.width = cssW * dpr; canvas.height = cssH * dpr;
     canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
@@ -11471,6 +11557,31 @@ function drawModelChart(canvas, varKey, active) {
     ctx.fillText(`${meta.label.toUpperCase()} (${meta.unit})`, 0, 0); ctx.restore();
 }
 
+// Maximize / restore, mirroring the SPC Mesoanalysis panel. Six traces on a
+// 760 px chart is where fine spread stops being readable, so filling the window
+// is the difference between seeing that the models diverge and seeing by how much.
+let _modelMaximized = false, _modelPrevGeom = null;
+function _modelToggleMax() {
+    const panel = document.getElementById('model-panel');
+    const btn = document.getElementById('model-max');
+    if (!panel) return;
+    if (!_modelMaximized) {
+        _modelPrevGeom = { w: panel.style.width, h: panel.style.height, l: panel.style.left, t: panel.style.top, r: panel.style.right };
+        panel.style.left = '8px'; panel.style.top = '8px'; panel.style.right = 'auto';
+        panel.style.width = (window.innerWidth - 16) + 'px';
+        panel.style.height = (window.innerHeight - 16) + 'px';
+        _modelMaximized = true;
+        if (btn) btn.title = 'Restore panel size';
+    } else {
+        const g = _modelPrevGeom || {};
+        panel.style.width = g.w || '760px'; panel.style.height = g.h || '580px';
+        panel.style.left = g.l || ''; panel.style.top = g.t || ''; panel.style.right = g.r || '';
+        _modelMaximized = false;
+        if (btn) btn.title = 'Maximize to fill the window';
+    }
+    if (modelData) renderModelCompare();
+}
+
 function initModelCompare() {
     const panel = document.getElementById('model-panel');
     if (!panel) return;
@@ -11503,6 +11614,24 @@ function initModelCompare() {
     };
     goBtn?.addEventListener('click', runSearch);
     placeInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+    document.getElementById('model-max')?.addEventListener('click', _modelToggleMax);
+    // Redraw on window resize and after a drag of the panel's own resize grip.
+    // The canvas is a fixed-pixel bitmap, so without this it stays the old size
+    // and simply sits in the corner of a bigger panel.
+    // mouseup fires on every click anywhere in the app, so redraw only when the
+    // panel's box actually changed — otherwise this rebuilds the canvas and
+    // legend on each click for no reason.
+    let _mcT = null, _mcBox = '';
+    const refit = () => {
+        if (panel.style.display === 'none' || !modelData) return;
+        const box = `${panel.clientWidth}x${panel.clientHeight}`;
+        if (box === _mcBox) return;
+        _mcBox = box;
+        clearTimeout(_mcT);
+        _mcT = setTimeout(() => renderModelCompare(), 120);
+    };
+    window.addEventListener('resize', refit);
+    document.addEventListener('mouseup', refit);
     makePanelDraggable(panel, 'model-drag');
 }
 
@@ -14185,6 +14314,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 12, 2026', items: [
+        '<b>Model Comparison now shows which run each model came from.</b> The header used to say "run pulled 13:06Z", which was the time <i>you</i> fetched — not the cycle behind any of the traces. Those differ a lot: HRRR runs hourly, GFS and ICON every six hours, and ECMWF IFS lands roughly seven hours after its nominal time. Each legend entry now carries its own cycle in the model\'s colour, so you can see at a glance that you are comparing, say, HRRR 10Z against IFS 06Z against GFS 00Z. Hover any of them for the full initialisation timestamp and how many hours old it is.',
+        'Where a cycle can\'t be verified the panel says <b>run ?</b> rather than guessing. That is not hypothetical: the upstream metadata for CMC GEM has been frozen for weeks while the model itself keeps delivering current forecasts, so its stated run time would have put a two-month-old stamp on today\'s data. Anything more than three cycles stale is treated as unverifiable and simply not shown — the forecast is still plotted and still current, only the label is withheld.',
+        '<b>The window now maximizes</b>, same as the SPC Mesoanalysis panel — the ⤢ button in the header fills the screen, and clicking again restores the previous size and position. Six traces on a 760 px chart is about where fine spread stops being readable; on a 1280×720 screen the plot goes from 750 px to 1254 px wide and from 353 px to 500 px tall. The chart also re-draws when you drag the panel\'s resize corner or resize the browser, instead of staying its old size in a bigger box.'
+    ]},
     { date: 'Aug 11, 2026', items: [
         '<b>New layer: Storm Attributes (SCIT)</b>, under RADAR (NEXRAD). This is every NEXRAD\'s current storm cell table at once — around 700 cells from 60-plus radars in a single national pull, refreshed every 5 minutes.',
         'The existing Storm Tracks (STI) layer decodes one radar at a time, which is the right tool when you are already interrogating a storm. This is the other question: <i>where in the country should I be looking?</i> It also carries fields the single-site table does not — <b>maximum hail size</b>, <b>probability of severe hail (POSH)</b>, <b>probability of hail</b>, <b>VIL</b>, and the <b>height of maximum reflectivity</b>, which is what separates a tall skinny core from a real hail producer.',
