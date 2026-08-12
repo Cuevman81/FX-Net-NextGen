@@ -11405,7 +11405,16 @@ function renderModelCompare() {
     const varKey = document.getElementById('model-var')?.value || 'temperature_2m';
     const meta = MODEL_VARS[varKey];
     const active = MODEL_SOURCES.filter(m => modelData.series[m.id]?.[varKey]?.some(v => v != null));
-    body.innerHTML = `<canvas id="model-canvas"></canvas>
+    // The plot lives in its own positioned box so the cursor canvas and the
+    // readout can sit on top of it without disturbing the flex column below.
+    body.innerHTML = `<div id="model-plot" style="position:relative;">
+            <canvas id="model-canvas" style="display:block;"></canvas>
+            <canvas id="model-cursor" style="position:absolute;left:0;top:0;pointer-events:none;"></canvas>
+            <div id="model-readout" style="position:absolute;display:none;pointer-events:none;z-index:2;
+                background:rgba(13,17,23,0.96);border:1px solid rgba(255,255,255,0.18);border-radius:4px;
+                padding:6px 8px;font-family:'Roboto Mono',monospace;font-size:10px;line-height:1.55;
+                white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,0.7);"></div>
+        </div>
         <div id="model-legend" style="display:flex;flex-wrap:wrap;gap:10px;padding:8px 2px 2px;font-size:10px;"></div>
         <div id="model-spread" style="font-size:10px;color:#8b97a3;padding:2px;line-height:1.5;"></div>
         <div style="font-size:9px;color:#5b6773;padding:6px 2px 2px;">
@@ -11440,6 +11449,7 @@ function renderModelCompare() {
     renderModelSpread(varKey, active, meta);
     // Chart last: it sizes itself from whatever height the siblings left behind.
     drawModelChart(document.getElementById('model-canvas'), varKey, active);
+    _modelHoverBind();
 }
 
 // Mean and worst inter-model spread — the number a forecaster actually wants,
@@ -11465,17 +11475,25 @@ function renderModelSpread(varKey, active, meta) {
 
 function drawModelChart(canvas, varKey, active) {
     if (!canvas) return;
-    const wrap = canvas.parentElement;
-    const cssW = Math.max(560, (wrap?.clientWidth || 700) - 8);
+    const body = document.getElementById('model-body');
+    const plot = canvas.parentElement;          // #model-plot, sibling of the text blocks
+    const cssW = Math.max(560, (body?.clientWidth || 700) - 8);
     // Grow into whatever the panel gives us — measure the real height of the
     // legend/spread/credit blocks rather than assuming, since the legend wraps
     // to a second line on a narrow panel and not on a maximized one.
-    const used = wrap ? Array.from(wrap.children).reduce(
-        (s, el) => el === canvas ? s : s + el.offsetHeight, 0) : 0;
-    const cssH = Math.max(240, Math.min(900, (wrap?.clientHeight || 460) - used - 22));
+    const used = body ? Array.from(body.children).reduce(
+        (s, el) => el === plot ? s : s + el.offsetHeight, 0) : 0;
+    const cssH = Math.max(240, Math.min(900, (body?.clientHeight || 460) - used - 22));
     const dpr = window.devicePixelRatio || 1;
     canvas.width = cssW * dpr; canvas.height = cssH * dpr;
     canvas.style.width = cssW + 'px'; canvas.style.height = cssH + 'px';
+    const cur = document.getElementById('model-cursor');
+    if (cur) {
+        cur.width = cssW * dpr; cur.height = cssH * dpr;
+        cur.style.width = cssW + 'px'; cur.style.height = cssH + 'px';
+        cur.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    _modelPlot = null;
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, cssH);
@@ -11555,6 +11573,93 @@ function drawModelChart(canvas, varKey, active) {
     ctx.save(); ctx.translate(11, mT + ph / 2); ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = '#00e5ff';
     ctx.fillText(`${meta.label.toUpperCase()} (${meta.unit})`, 0, 0); ctx.restore();
+    // Hand the scales to the cursor overlay so hovering never recomputes them.
+    _modelPlot = { mL, mT, pw, ph, cssW, cssH, t0, t1, vMin, vMax, varKey, active, meta };
+}
+
+// ─── Hover readout ───────────────────────────────────────────────────────────
+// Six traces converging and crossing is exactly where the eye stops being able
+// to read values off a chart, which is the moment you most want the numbers.
+// The crosshair snaps to the forecast hour rather than following the pixel, so
+// the readout is the model's actual output and not an interpolation of it.
+let _modelPlot = null;
+
+function _modelHoverBind() {
+    const plot = document.getElementById('model-plot');
+    if (!plot) return;
+    plot.addEventListener('mousemove', _modelHoverMove);
+    plot.addEventListener('mouseleave', _modelHoverHide);
+}
+
+function _modelHoverHide() {
+    const cur = document.getElementById('model-cursor');
+    const out = document.getElementById('model-readout');
+    if (cur && _modelPlot) cur.getContext('2d').clearRect(0, 0, _modelPlot.cssW, _modelPlot.cssH);
+    if (out) out.style.display = 'none';
+}
+
+function _modelHoverMove(e) {
+    const P = _modelPlot, cur = document.getElementById('model-cursor'), out = document.getElementById('model-readout');
+    if (!P || !cur || !out || !modelData) return;
+    const rect = cur.getBoundingClientRect();
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    if (px < P.mL || px > P.mL + P.pw || py < P.mT || py > P.mT + P.ph) { _modelHoverHide(); return; }
+
+    const times = modelData.times;
+    const target = P.t0 + ((px - P.mL) / P.pw) * (P.t1 - P.t0);
+    // Uniform hourly spacing makes the index a division; the ±1 sweep keeps it
+    // exact if a feed ever comes back with a gap.
+    let i = Math.round((target - P.t0) / ((P.t1 - P.t0) / (times.length - 1)));
+    i = Math.max(0, Math.min(times.length - 1, i));
+    for (const j of [i - 1, i + 1]) {
+        if (j >= 0 && j < times.length && Math.abs(times[j] - target) < Math.abs(times[i] - target)) i = j;
+    }
+
+    const X = ms => P.mL + ((ms - P.t0) / (P.t1 - P.t0)) * P.pw;
+    const Y = v => P.mT + P.ph - ((v - P.vMin) / (P.vMax - P.vMin)) * P.ph;
+    const cx = X(times[i]);
+
+    const c = cur.getContext('2d');
+    c.clearRect(0, 0, P.cssW, P.cssH);
+    c.strokeStyle = 'rgba(255,255,255,0.45)'; c.lineWidth = 1; c.setLineDash([3, 3]);
+    c.beginPath(); c.moveTo(cx, P.mT); c.lineTo(cx, P.mT + P.ph); c.stroke();
+    c.setLineDash([]);
+
+    const rows = [];
+    const vals = [];
+    P.active.forEach(m => {
+        const v = modelData.series[m.id][P.varKey][i];
+        if (v == null) { rows.push({ m, txt: '—', dim: true }); return; }
+        vals.push(v);
+        c.fillStyle = m.color;
+        c.beginPath(); c.arc(cx, Y(v), 3.2, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#0d1117'; c.lineWidth = 1.2; c.stroke();
+        rows.push({ m, txt: `${v.toFixed(P.meta.dec)}${P.meta.unit}` });
+    });
+
+    const d = new Date(times[i]);
+    const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+    const stamp = `${dow} ${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCHours()).padStart(2, '0')}Z`;
+    const hrOut = Math.round((times[i] - Date.now()) / 3600000);
+    let html = `<div style="color:#00e5ff;border-bottom:1px solid rgba(255,255,255,0.15);padding-bottom:3px;margin-bottom:3px;">`
+        + `${esc(stamp)} <span style="color:#5b6773;">${hrOut >= 0 ? '+' + hrOut : hrOut} h</span></div>`;
+    rows.forEach(r => {
+        html += `<div style="display:flex;gap:6px;align-items:center;">`
+            + `<span style="width:10px;height:3px;background:${r.m.color};display:inline-block;flex:0 0 auto;"></span>`
+            + `<span style="color:#8b97a3;flex:1 1 auto;">${esc(r.m.label)}</span>`
+            + `<span style="color:${r.dim ? '#5b6773' : '#e6edf3'};">${esc(r.txt)}</span></div>`;
+    });
+    if (vals.length > 1) {
+        html += `<div style="border-top:1px solid rgba(255,255,255,0.15);margin-top:3px;padding-top:3px;display:flex;gap:6px;">`
+            + `<span style="color:#8b97a3;flex:1 1 auto;">spread</span>`
+            + `<span style="color:#ffd166;">${(Math.max(...vals) - Math.min(...vals)).toFixed(P.meta.dec)}${P.meta.unit}</span></div>`;
+    }
+    out.innerHTML = html;
+    out.style.display = 'block';
+    // Flip to the cursor's other side near an edge so the box never leaves the plot.
+    const bw = out.offsetWidth, bh = out.offsetHeight;
+    out.style.left = (cx + 14 + bw > P.cssW ? Math.max(0, cx - 14 - bw) : cx + 14) + 'px';
+    out.style.top = Math.max(0, Math.min(P.cssH - bh, py - bh / 2)) + 'px';
 }
 
 // Maximize / restore, mirroring the SPC Mesoanalysis panel. Six traces on a
@@ -14314,6 +14419,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 12, 2026 (update 2)', items: [
+        '<b>Hover the Model Comparison chart for a readout.</b> Six traces converging and crossing is exactly the point where the eye stops being able to read a value off the plot — which is the moment you most want the number. Move the cursor anywhere over the chart and a crosshair drops on the nearest forecast hour with every model\'s value listed beside it, colour-matched to its trace, plus the inter-model spread at that hour.',
+        'The crosshair <b>snaps to the forecast hour</b> rather than following the pixel, so what you read is the model\'s actual output and not an interpolation of it. The header line gives the valid time and the lead hour (<b>Sat 15/12Z +70 h</b>), a model that has run out of range shows an em dash rather than a stale last value, and the box flips to the other side of the cursor near the right edge so it never runs off the plot.',
+        'Works in every field — temperature, dewpoint, wind, precip and MSLP each carry their own units and precision — and at any panel size, including maximized.'
+    ]},
     { date: 'Aug 12, 2026', items: [
         '<b>Model Comparison now shows which run each model came from.</b> The header used to say "run pulled 13:06Z", which was the time <i>you</i> fetched — not the cycle behind any of the traces. Those differ a lot: HRRR runs hourly, GFS and ICON every six hours, and ECMWF IFS lands roughly seven hours after its nominal time. Each legend entry now carries its own cycle in the model\'s colour, so you can see at a glance that you are comparing, say, HRRR 10Z against IFS 06Z against GFS 00Z. Hover any of them for the full initialisation timestamp and how many hours old it is.',
         'Where a cycle can\'t be verified the panel says <b>run ?</b> rather than guessing. That is not hypothetical: the upstream metadata for CMC GEM has been frozen for weeks while the model itself keeps delivering current forecasts, so its stated run time would have put a two-month-old stamp on today\'s data. Anything more than three cycles stale is treated as unverifiable and simply not shown — the forecast is still plotted and still current, only the label is withheld.',
