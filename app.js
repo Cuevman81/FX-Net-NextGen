@@ -12018,6 +12018,25 @@ function initGoesSectorSelector() {
 // SECTION 16: RADAR SITE SELECTOR
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// The five NCEP products are tile templates, so a site change just re-points
+// their source URL. Everything else per-site — the NODD Level III overlays
+// (SRM/CC/ZDR/KDP), storm tracks, meso/TVS markers and the VAD panel — is a
+// fetch keyed to a station, so it has to be re-issued. Without this they stay
+// on the previous radar, and because the 120 s poller re-requests whatever
+// station is recorded in paneL3/paneStormAttr/paneMeso, it re-affirms the stale
+// site every cycle and never self-corrects. Toggling the product off and on was
+// the only way out, because that path passes the current site.
+function reloadPaneSiteProducts(paneId, site) {
+    const m = maps[paneId];
+    if (!m) return;
+    const st = paneL3[paneId];
+    // Keep the product code, which carries the elevation tilt, so switching
+    // sites holds your tilt instead of dropping back to the lowest slice.
+    if (st && st.station !== site && isLayerVisible(m, 'radar-l3-layer')) {
+        loadL3Radar(paneId, site, st.product);
+    }
+}
+
 function initRadarSiteSelector() {
     const siteSelect = document.getElementById('radar-site-select');
     const productSelect = document.getElementById('radar-product-select');
@@ -12063,8 +12082,31 @@ function initRadarSiteSelector() {
                     if (m.getSource('site-bdhc')) m.getSource('site-bdhc').setTiles([siteRadarUrl(site, 'bdhc')]);
                     if (m.getSource('site-bdsa')) m.getSource('site-bdsa').setTiles([siteRadarUrl(site, 'bdsa')]);
                     if (m.getSource('site-boha')) m.getSource('site-boha').setTiles([siteRadarUrl(site, 'boha')]);
+                    // The L3 image source is per-map, so each affected pane
+                    // reloads its own overlay.
+                    reloadPaneSiteProducts(id, site);
                 }
             });
+
+            if (!isNational) {
+                // Storm tracks and meso/TVS write into map sources shared by every
+                // pane, so they are re-fetched once for the whole tab rather than
+                // once per pane — the panes all just moved to the same site.
+                if (paneStormAttr[activePaneId] && paneStormAttr[activePaneId].station !== site
+                    && isLayerVisible(map, 'storm-attr-cell')) {
+                    fetchStormAttr(activePaneId, site);
+                }
+                if (paneMeso[activePaneId] && paneMeso[activePaneId].station !== site
+                    && isLayerVisible(map, 'meso-circ')) {
+                    fetchMesoMarkers(activePaneId, site);
+                }
+                // An open VAD panel follows the active pane's radar.
+                const vadPanel = document.getElementById('vad-panel');
+                if (vadPanel && vadPanel.style.display !== 'none' && vadPanel.dataset.station !== site) {
+                    vadPanel.dataset.station = site;
+                    loadVad(site);
+                }
+            }
 
             if (isNational) {
                 if (badge) { badge.textContent = 'National'; badge.className = 'badge blue'; }
@@ -14419,6 +14461,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 17, 2026', items: [
+        '<b>Fixed: single-site products did not follow the SITE selector.</b> Reported against Storm Relative Velocity — you would pick a new radar and SRM kept showing the old one until you unloaded the product and loaded it again. The same fault applied to <b>all four NODD Level III overlays</b> (SRM, CC, ZDR, KDP) and to <b>Storm Tracks</b>, <b>Meso/TVS markers</b> and the <b>VAD Wind Profile</b> panel.',
+        'The five NCEP products are tile templates, so changing site just re-points a URL and they follow for free. Everything else per-site is a fetch tied to a station, and the site handler never re-issued it. Worse, the 120-second refresh re-requested whichever station was still on record, so the display re-affirmed the wrong radar every couple of minutes instead of drifting back on its own — which is why toggling the product was the only cure, since that path is the one that passes the current site.',
+        'All of them now switch with the selector. <b>Your elevation tilt carries across</b> rather than dropping back to the base slice, re-picking the site you are already on does nothing, and the national mosaic is left alone since no single-site product applies to it.'
+    ]},
     { date: 'Aug 12, 2026 (update 2)', items: [
         '<b>Hover the Model Comparison chart for a readout.</b> Six traces converging and crossing is exactly the point where the eye stops being able to read a value off the plot — which is the moment you most want the number. Move the cursor anywhere over the chart and a crosshair drops on the nearest forecast hour with every model\'s value listed beside it, colour-matched to its trace, plus the inter-model spread at that hour.',
         'The crosshair <b>snaps to the forecast hour</b> rather than following the pixel, so what you read is the model\'s actual output and not an interpolation of it. The header line gives the valid time and the lead hour (<b>Sat 15/12Z +70 h</b>), a model that has run out of range shows an em dash rather than a stale last value, and the box flips to the other side of the cursor near the right edge so it never runs off the plot.',
