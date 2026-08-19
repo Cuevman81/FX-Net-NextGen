@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" fill="none" role="img" aria-label="FX-Net NextGen">
+  <circle cx="60" cy="60" r="53" stroke="rgba(0,229,255,0.50)" stroke-width="2.5"/>
+  <circle cx="60" cy="60" r="45" stroke="rgba(0,229,255,0.30)" stroke-width="1.5"/>
+  <circle cx="60" cy="60" r="31" stroke="rgba(0,229,255,0.30)" stroke-width="1.5"/>
+  <circle cx="60" cy="60" r="17" stroke="rgba(0,229,255,0.30)" stroke-width="1.5"/>
+  <path d="M60 3V13M60 107V117M3 60H13M107 60H117" stroke="#00e5ff" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M60 60L86.4 22.3A46 46 0 0 1 96.7 32.3Z" fill="#00e5ff" opacity="0.42"/>
+  <path d="M60 60L96.7 32.3A46 46 0 0 1 103.5 45Z" fill="#00e5ff" opacity="0.30"/>
+  <path d="M60 60L103.5 45A46 46 0 0 1 106 59.2Z" fill="#00e5ff" opacity="0.20"/>
+  <path d="M60 60L106 59.2A46 46 0 0 1 104 73.5Z" fill="#00e5ff" opacity="0.12"/>
+  <path d="M60 60L104 73.5A46 46 0 0 1 97.7 86.4Z" fill="#00e5ff" opacity="0.06"/>
+  <circle cx="84.2" cy="46" r="4.6" fill="#ffb300"/>
+  <path d="M60 60L86.4 22.3" stroke="#00e5ff" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="60" cy="60" r="3.6" fill="#00e5ff"/>
+</svg>

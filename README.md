@@ -1,8 +1,21 @@
-# FX-Net NextGen 🌪️
-**Tactical Meteorological Workstation & Real-Time AWIPS Web Portal**
+<div align="center">
 
-[![Deploy with Vercel](https://vercel.com/button)](https://fx-net-next-gen.vercel.app/)  
-**Live Application:** [https://fx-net-next-gen.vercel.app/](https://fx-net-next-gen.vercel.app/)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/banner-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/brand/banner-light.png">
+  <img alt="FX-Net NextGen — Tactical Meteorological Workstation" src="docs/brand/banner-light.png" width="560">
+</picture>
+
+<p><b>Tactical Meteorological Workstation &amp; Real-Time AWIPS Web Portal</b><br>
+<sub>Multi-pane radar, satellite, soundings and model guidance in the browser — no install, no local server.</sub></p>
+
+<p>
+<a href="https://fx-net-next-gen.vercel.app/"><img alt="Live application" src="https://img.shields.io/badge/live-fx--net--next--gen.vercel.app-00E5FF?style=flat-square&labelColor=0D1117"></a>
+<img alt="Deployed on Vercel" src="https://img.shields.io/badge/deployed-Vercel-EEEEEE?style=flat-square&labelColor=0D1117&logo=vercel">
+<img alt="Built with MapLibre GL JS" src="https://img.shields.io/badge/MapLibre_GL_JS-no_build_step-33C27A?style=flat-square&labelColor=0D1117">
+</p>
+
+</div>
 
 ---
 
