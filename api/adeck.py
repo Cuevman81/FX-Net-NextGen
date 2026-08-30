@@ -13,10 +13,10 @@ import traceback
 # headers, so the browser can't fetch these directly. Two modes:
 #   ?list=1      -> JSON list of active systems (current-year a-decks with a
 #                   recent Last-Modified in the aid_public Apache index)
-#   ?id=al912026 -> the storm's a-deck trimmed to the latest 3 forecast
-#                   cycles (full-season decks for long-lived storms exceed
-#                   1 MB; 3 cycles keeps the payload small and still covers
-#                   late-arriving model runs from earlier cycles)
+#   ?id=al912026 -> the storm's a-deck trimmed and slimmed to the latest 6
+#                   forecast cycles (full-season decks exceed 1 MB; see
+#                   fetch_adeck for how 6 cycles still costs less than the
+#                   3 unslimmed ones did)
 
 AID_PUBLIC = 'https://ftp.nhc.noaa.gov/atcf/aid_public/'
 ACTIVE_WINDOW_HOURS = 96
@@ -222,7 +222,21 @@ def fetch_ofcl(sid):
 
 
 def fetch_adeck(sid):
-    """Return the a-deck text for one storm, trimmed to the latest 3 cycles."""
+    """Return the a-deck text for one storm, trimmed to the latest 6 cycles.
+
+    Six rather than three so a model whose freshest run is a degenerate tau-0
+    stub can still fall back to a cycle that holds a drawable track (GraphCast
+    does this routinely once its tracker starts losing a weak system). Three
+    slimming passes keep the payload SMALLER than the old 3-cycle one:
+
+      * only the 34-kt wind-radii row per (tech, tau) survives - the 50/64-kt
+        rows repeat the position and intensity the client actually reads, and
+        it already discards them
+      * only the first 10 comma fields, which is everything parseAdeckText
+        looks at (dtg, tech, tau, lat, lon, vmax, mslp)
+      * GEFS members (AP01-AP30 / AC00) only in the newest 3 cycles - EPS mode
+        plots each member's latest run, and they are the bulk of a deck
+    """
     if not re.fullmatch(r'(al|ep|cp)\d{6}', sid):
         raise ValueError('bad storm id')
     raw = gzip.decompress(_fetch(f'{AID_PUBLIC}a{sid}.dat.gz'))
@@ -234,8 +248,24 @@ def fetch_adeck(sid):
             dtg = parts[2].strip()
             if len(dtg) == 10 and dtg.isdigit():
                 dtgs.add(dtg)
-    keep = set(sorted(dtgs)[-3:])
-    out = [ln for ln in lines if len(ln.split(',')) > 2 and ln.split(',')[2].strip() in keep]
+    ordered = sorted(dtgs)
+    keep = set(ordered[-6:])
+    members_from = ordered[-3:][0] if len(ordered) >= 3 else ''
+    out = []
+    for ln in lines:
+        parts = ln.split(',')
+        if len(parts) < 10:
+            continue
+        dtg = parts[2].strip()
+        if dtg not in keep:
+            continue
+        tech = parts[4].strip()
+        if dtg < members_from and (tech == 'AC00' or re.fullmatch(r'AP\d{2}', tech)):
+            continue
+        rad = parts[11].strip() if len(parts) > 11 else ''
+        if rad not in ('', '0', '34'):
+            continue
+        out.append(','.join(p.strip() for p in parts[:10]))
     return '\n'.join(out)
 
 

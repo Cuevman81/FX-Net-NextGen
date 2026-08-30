@@ -5739,8 +5739,12 @@ function initNhcAdv() {
 // advisory time; Late cycle = the raw synoptic-time model runs; EPS = GEFS
 // ensemble members. Each model plots from its own most recent cycle.
 const ADECK_MODELS = {
-    // tech: [display name, color, line width, sets]
+    // tech: [display name, color, line width, sets, fallbackFor?]
     // Sets: "E"/"L" = early/late TRACK spaghetti; "e"/"l" = early/late INTENSITY chart
+    // fallbackFor: this tech is ATCF's "previous run" interpolation (the ?2
+    // codes, shifted from the 12-hour-old run). It only plots when the 6-hour
+    // interp it names is missing, so a stale aid fills a gap instead of laying
+    // a second same-colored line over the fresh one.
     OFCL: ['NHC Official Forecast', '#ffffff', 3.5, 'ELel'],
     TVCN: ['Track Consensus', '#00e5ff', 3, 'E'],
     HCCA: ['HCCA Corrected Consensus', '#76ff03', 2.5, 'Ee'],
@@ -5795,12 +5799,23 @@ const ADECK_MODELS = {
     TABM: ['Beta-Advection Medium', '#78909c', 1.2, 'E'],
     TABS: ['Beta-Advection Shallow', '#607d8b', 1.2, 'E'],
     CLP5: ['CLIPER5 Baseline', '#757575', 1.2, 'E'],
-    XTRP: ['Extrapolation', '#616161', 1.2, 'E']
+    XTRP: ['Extrapolation', '#616161', 1.2, 'E'],
+    // ── Previous-run interpolations (early-cycle gap fillers) ──
+    UKX2: ['UKMET (interp, prev run)', '#40c4ff', 2, 'E', 'UKXI'],
+    CMC2: ['Canadian GDPS (interp, prev run)', '#ab47bc', 2, 'E', 'CMCI'],
+    NVG2: ['NAVGEM (interp, prev run)', '#8d6e63', 2, 'E', 'NVGI'],
+    CEM2: ['Canadian Ens Mean (interp, prev run)', '#ce93d8', 1.6, 'E', 'CEMI'],
+    HFA2: ['HAFS-A (interp, prev run)', '#66bb6a', 2, 'Ee', 'HFAI'],
+    HFB2: ['HAFS-B (interp, prev run)', '#26a69a', 2, 'Ee', 'HFBI'],
+    HWF2: ['HWRF (interp, prev run)', '#9ccc65', 2, 'Ee', 'HWFI'],
+    HMN2: ['HMON (interp, prev run)', '#8c9eff', 2, 'Ee', 'HMNI'],
+    CTC2: ['COAMPS-TC (interp, prev run)', '#d4e157', 2, 'Ee', 'CTCI'],
+    GDM2: ['GraphCast Ens (Google DeepMind, interp prev run)', '#f06292', 2, 'Ee', 'GDMI']
 };
 
 // AI / machine-learning model techs — marked distinctly so forecasters can tell
 // data-driven guidance from physics models at a glance.
-const AI_MODELS = new Set(['GDMI', 'GDMN', 'GRPI', 'GRPH', 'GENI', 'GENC', 'EAII', 'EAIO', 'GAII', 'GAIO', 'EGMI', 'EGMN', 'NNIC', 'NNIB']);
+const AI_MODELS = new Set(['GDMI', 'GDMN', 'GDM2', 'GRPI', 'GRPH', 'GENI', 'GENC', 'EAII', 'EAIO', 'GAII', 'GAIO', 'EGMI', 'EGMN', 'NNIC', 'NNIB']);
 const isAiModel = tech => AI_MODELS.has(tech);
 
 let adeckMode = null;    // 'early' | 'late' | 'eps' (global, like other overlays)
@@ -5845,17 +5860,66 @@ function adeckTechMeta(tech, mode) {
     // AI sub-tabs show only AI models; the physics tabs exclude them
     const ai = isAiModel(tech);
     if ((mode === 'ai-early' || mode === 'ai-late') !== ai) return null;
-    return { name: m[0], color: m[1], width: m[2], opacity: 0.9, label: true };
+    return { name: m[0], color: m[1], width: m[2], opacity: 0.9, label: true, fallbackFor: m[4] || null };
+}
+
+// Per tech, the newest cycle that actually holds a DRAWABLE track. Taking the
+// newest cycle unconditionally loses any model whose freshest run is a single
+// tau-0 stub — routine once a tracker starts losing a weak system, and the
+// reason the AI tabs came up empty on AL04 while GraphCast still had a track a
+// cycle back. Previous-run interps (the ?2 codes) are then dropped wherever
+// their 6-hour counterpart survived, so they fill gaps instead of laying a
+// second same-colored line over the fresh one.
+function pickAdeckCycles(rows, keep, minPts) {
+    const byTech = {};
+    rows.forEach(r => {
+        if (r.tau < 0 || !keep(r)) return;
+        if (!byTech[r.tech]) byTech[r.tech] = {};
+        if (!byTech[r.tech][r.dtg]) byTech[r.tech][r.dtg] = new Set();
+        byTech[r.tech][r.dtg].add(r.tau);
+    });
+    const out = {};
+    Object.keys(byTech).forEach(tech => {
+        const dtg = Object.keys(byTech[tech]).sort().reverse()
+            .find(d => byTech[tech][d].size >= minPts);
+        if (dtg) out[tech] = dtg;
+    });
+    Object.keys(out).forEach(tech => {
+        const primary = (ADECK_MODELS[tech] || [])[4];
+        if (primary && out[primary]) delete out[tech];
+    });
+    return out;
+}
+
+// Say WHY a view came up empty. "No tracks available" is true but useless: the
+// two causes look identical on the map and mean different things — the aid
+// isn't in NHC's public deck at all, or it is but its runs carry no track.
+function adeckEmptyReason(rows, mode) {
+    if (mode === 'eps') return 'No GEFS ensemble members in this deck yet';
+    const roster = Object.keys(ADECK_MODELS).filter(t => adeckTechMeta(t, mode));
+    if (!roster.length) return 'No aids defined for this view';
+    const taus = {};
+    rows.forEach(r => {
+        if (r.tau < 0 || roster.indexOf(r.tech) < 0) return;
+        const k = `${r.tech}|${r.dtg}`;
+        if (!taus[k]) taus[k] = new Set();
+        taus[k].add(r.tau);
+    });
+    const seen = [...new Set(Object.keys(taus).map(k => k.split('|')[0]))].sort();
+    return seen.length
+        ? `${seen.join(', ')} in the deck but carrying no track — single-point runs only`
+        : `none of the ${roster.length} aids in this view are in NHC's public a-deck for this system`;
 }
 
 function buildAdeckFeatures(rows, mode) {
-    // Every selected tech plots from its own latest available cycle — "latest
+    // Each tech plots from its own newest cycle that holds a track — "latest
     // guidance" even when late-cycle models lag the current advisory cycle.
-    const latest = {};
-    rows.forEach(r => {
-        if (r.tau < 0 || !adeckTechMeta(r.tech, mode)) return;
-        if (!latest[r.tech] || r.dtg > latest[r.tech]) latest[r.tech] = r.dtg;
-    });
+    const latest = pickAdeckCycles(rows, r => !!adeckTechMeta(r.tech, mode), 2);
+    // Newest cycle anywhere in the DECK — not just among the plotted aids, or a
+    // view holding one stale track (the AI tabs, most of the season) would call
+    // it current. Anything behind it gets its lag stamped on the map label, so
+    // a track the fallback pulled from an older run reads as what it is.
+    const newestCycle = rows.reduce((a, r) => (r.tau >= 0 && r.dtg > a ? r.dtg : a), '');
     const features = [];
     const models = [];
     Object.keys(latest).sort().forEach(tech => {
@@ -5889,11 +5953,20 @@ function buildAdeckFeatures(rows, mode) {
                 geometry: { type: 'Point', coordinates: [p.lon, p.lat] }
             });
         });
-        if (meta.label) features.push({
-            type: 'Feature',
-            properties: { layerType: 'end', tech, lbl: tech + (isAiModel(tech) ? ' ✦' : ''), color: meta.color },
-            geometry: { type: 'Point', coordinates: coords[coords.length - 1] }
-        });
+        if (meta.label) {
+            const lagH = newestCycle ? Math.round((adeckDtgMs(newestCycle) - adeckDtgMs(dtg)) / 3600000) : 0;
+            features.push({
+                type: 'Feature',
+                properties: {
+                    layerType: 'end', tech, color: meta.color,
+                    // Only past one cycle: late-cycle aids sit 6 h behind the
+                    // interps by definition, and stamping every one of them is
+                    // noise. 12 h+ is where a track is materially misplaced.
+                    lbl: tech + (isAiModel(tech) ? ' ✦' : '') + (lagH > 6 ? ` -${lagH}h` : '')
+                },
+                geometry: { type: 'Point', coordinates: coords[coords.length - 1] }
+            });
+        }
     });
     return { features, models, cycles: latest };
 }
@@ -5910,11 +5983,7 @@ const adeckAgeStr = ms => {
 function buildIntensitySeries(rows, mode) {
     const flag = mode === 'early' ? 'e' : 'l';
     const wanted = t => { const m = ADECK_MODELS[t]; return m && m[3].includes(flag); };
-    const latest = {};
-    rows.forEach(r => {
-        if (r.tau < 0 || !r.vmax || !wanted(r.tech)) return;
-        if (!latest[r.tech] || r.dtg > latest[r.tech]) latest[r.tech] = r.dtg;
-    });
+    const latest = pickAdeckCycles(rows, r => !!r.vmax && wanted(r.tech), 2);
     const series = [];
     Object.keys(latest).sort().forEach(tech => {
         const m = ADECK_MODELS[tech];
@@ -6054,7 +6123,7 @@ async function fetchAdeck(show) {
                 info.innerHTML = `Newest run: <b style="color:#00e5ff;">${newestDtg.slice(8, 10)}Z ${newestDtg.slice(6, 8)} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+newestDtg.slice(4, 6) - 1]}</b> (${adeckAgeStr(adeckDtgMs(newestDtg))}) · ${models.length} aids${laggards ? ` · ${laggards} from older runs` : ''}`;
                 info.title = models.map(t => `${t}: ${cycles[t].slice(8, 10)}Z ${cycles[t].slice(6, 8)}`).join('\n');
             } else {
-                info.textContent = adeckMode ? 'No tracks available for this view yet' : '';
+                info.textContent = adeckMode ? `No tracks for this view — ${adeckEmptyReason(rows, adeckMode)}` : '';
                 info.title = '';
             }
         }
@@ -6062,7 +6131,7 @@ async function fetchAdeck(show) {
             const modeLabel = { early: 'early-cycle', late: 'late-cycle', eps: 'GEFS ensemble', 'ai-early': 'early-cycle AI', 'ai-late': 'late-cycle AI' }[adeckMode];
             addLiveLog(models.length
                 ? `GUIDANCE: ${adeckStorm.toUpperCase().slice(0, 4)} ${modeLabel} — ${models.length} tracks, newest run ${newestDtg.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newestDtg))})${laggards ? `, ${laggards} aid(s) still on older runs` : ''} — ${models.join(', ')}`
-                : `GUIDANCE: no ${modeLabel} tracks available yet for ${adeckStorm.toUpperCase().slice(0, 4)}`,
+                : `GUIDANCE: no ${modeLabel} tracks for ${adeckStorm.toUpperCase().slice(0, 4)} — ${adeckEmptyReason(rows, adeckMode)}`,
                 models.length ? '#00e5ff' : '#ffb300');
         }
     } catch (e) {
@@ -14461,6 +14530,15 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 30, 2026', items: [
+        '<b>Fixed: AI model tracks went missing from the tropical guidance tabs.</b> Reported against Invest AL04, where every physics model plotted and <b>Early Cycle AI Models</b> drew nothing at all. The cause was the rule that each aid plots from its own newest cycle — taken literally, with no check that the newest cycle actually holds a track. GraphCast had been losing AL04 for two days, and its 30/12Z interpolated run carried a <i>single</i> point at hour zero. One point is not a line, so the aid was dropped outright — even though its 29/18Z run still had a usable track sitting right there in the same file.',
+        'Each aid now falls back to <b>the most recent cycle that actually contains a forecast track</b>, instead of vanishing on a stub. Across the eight systems active today that restores AL04\'s early-cycle AI track and protects every other model from the same failure — it is not an AI-specific fault, it just showed up there first because AI trackers drop weak systems soonest.',
+        'A track pulled from an older run is <b>labelled with its lag</b> on the map (<b>GDMI ✦ -18h</b>) so it can never be mistaken for current guidance drawn beside fresh aids. The lag is measured against the newest cycle in the whole deck, not the newest one in the tab, so a view holding a single stale track still reports itself honestly. Routine one-cycle offsets are not stamped, since late-cycle aids sit six hours behind the interpolated ones by definition.',
+        '<b>Added the previous-run interpolations</b> — ATCF\'s ?2 aids (GDM2, UKX2, CMC2, CEM2, HFA2, HFB2, HWF2, HMN2, CTC2, NVG2), which are shifted from the 12-hour-old run. Each one only plots when the 6-hour interpolation it stands in for is missing, so it fills a gap rather than laying a second same-coloured line over the fresh track.',
+        '<b>An empty tab now says why it is empty</b>, which matters because the two causes look identical on the map and mean opposite things: the aid is not in NHC\'s public deck at all, or it is there but its runs carry no track. AL97 currently shows one of each — early cycle reports that none of the seven AI aids are distributed for it, late cycle reports that GraphCast is present but single-point only.',
+        'Worth knowing what is actually out there: <b>GraphCast ensemble mean is the only AI track model NHC distributes publicly</b>. GraphCast deterministic, GenCast, ECMWF AIFS, AI-GFS and AI-GEFS appear in no 2026 a-deck — they stay wired and will plot the day they arrive. The neural-net aids <b>NNIC</b> and <b>NNIB</b> are intensity-only and show on the intensity charts, never as tracks.',
+        'The guidance feed also now carries <b>six forecast cycles instead of three</b>, which is what gives the fallback somewhere to reach. It costs less than the old three did — dropping the duplicate 50/64 kt wind-radii rows, the columns nothing reads, and the GEFS members outside the newest three cycles took AL04 from 284 KB down to 195 KB.'
+    ]},
     { date: 'Aug 17, 2026', items: [
         '<b>Fixed: single-site products did not follow the SITE selector.</b> Reported against Storm Relative Velocity — you would pick a new radar and SRM kept showing the old one until you unloaded the product and loaded it again. The same fault applied to <b>all four NODD Level III overlays</b> (SRM, CC, ZDR, KDP) and to <b>Storm Tracks</b>, <b>Meso/TVS markers</b> and the <b>VAD Wind Profile</b> panel.',
         'The five NCEP products are tile templates, so changing site just re-points a URL and they follow for free. Everything else per-site is a fetch tied to a station, and the site handler never re-issued it. Worse, the 120-second refresh re-requested whichever station was still on record, so the display re-affirmed the wrong radar every couple of minutes instead of drifting back on its own — which is why toggling the product was the only cure, since that path is the one that passes the current site.',
