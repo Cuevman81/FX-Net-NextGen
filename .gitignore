@@ -9,7 +9,6 @@
 # Local dev scratch / test artifacts
 *.log
 *_test.json
-test_*.js
 wms_caps.xml
 
 # Python bytecode

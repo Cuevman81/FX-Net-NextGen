@@ -14598,6 +14598,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 30, 2026 (update 3)', items: [
+        '<b>Fixed: the startup prefetch had been silently dead since June.</b> On load the app is meant to pull the Day 1 outlook, mesoscale discussions, river gauges and METARs in the background so those products appear instantly when you click them. That step waited for a map called <code>1</code> — a name that stopped existing when workspace tabs arrived and panes became <code>t1-1</code> — so the wait never ended and the prefetch never ran. Nothing was broken on screen, which is why it went unnoticed; products simply loaded on first click instead of instantly. It now waits for the first pane of the active tab and for its map style to finish loading, then runs. You will see <b>PREFETCH: 4/4 datasets cached and ready</b> in the diagnostic log a few seconds after startup.',
+        '<b>The unit tests now live in the repository.</b> Three suites under <code>tests/</code>, run with <code>node --test tests/*.test.js</code> and no dependencies: the tropical-guidance cycle selection and fallback rules (12 tests), the hidden-tab poller pause (6), and the escaping and https-only link guard (4). They read the functions straight out of <code>app.js</code>, so they test the shipped code rather than a copy of it.'
+    ]},
     { date: 'Aug 30, 2026 (update 2)', items: [
         '<b>Hardening pass from a full application audit.</b> Five changes, none of them visible on the map, all of them the kind of thing that is easier to do now than after it matters.',
         '<b>The last external script is gone.</b> The Speed Insights client is now self-hosted alongside MapLibre and Lucide, so the Content-Security-Policy\'s <code>script-src</code> is <code>\'self\'</code> and nothing else — the page can no longer load a script from any origin but its own, which is the strongest script policy a site can carry.',
@@ -17285,18 +17289,19 @@ function init() {
     // Initial health UI render
     renderHealthUI();
 
-    // Auto-load default products once pane 1 map is ready
+    // Background prefetch once the first pane's style is up. This polled
+    // maps['1'] — a key that stopped existing when workspace tabs namespaced
+    // panes as 't1-1' — so from mid-June the interval spun forever and the
+    // prefetch never ran. Keyed to the active tab's first pane now, and gated
+    // on the style being loaded so the fetches have sources to push into.
+    // (The base-map labels it used to force on are created visible, and the
+    // sidebar reads their state from the layer, so that part is not needed.)
     const waitForMap = setInterval(() => {
-        if (maps['1']) {
+        const firstPane = paneIdsForTab(activeTabId)[0];
+        const map = maps[firstPane];
+        if (map && map.isStyleLoaded()) {
             clearInterval(waitForMap);
-            const map = maps['1'];
-
-            // Auto-activate base map (Cities & Boundaries)
-            if (map.getLayer('esri-labels-layer')) map.setLayoutProperty('esri-labels-layer', 'visibility', 'visible');
-            const cityBtn = document.querySelector('[data-layer="overlay-cities"]');
-            if (cityBtn) cityBtn.classList.add('active');
-
-            addLiveLog('MAP: Clean base map loaded by default', '#888');
+            addLiveLog(`MAP: ${firstPane} ready — base map up`, '#888');
             refreshTimestampLabel();
 
             // ─── Pre-fetch commonly used data in background ───

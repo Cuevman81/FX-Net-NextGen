@@ -149,6 +149,12 @@ Open your browser and navigate to [http://localhost:8888](http://localhost:8888)
 
 `server.py` mirrors the production routing — it runs the same `api/*.py` handlers, applies the same `vercel.json` pass-through proxies, and sends the same Content-Security-Policy — so what works locally is what deploys. Everything except the Level III radar products works without the two dependencies above; the rest of the app is stdlib-only.
 
+### 🧪 Tests
+```bash
+node --test tests/*.test.js
+```
+No dependencies — Node's built-in runner. The suites read the functions they exercise straight out of `app.js` (see `tests/_load.js`), so they test the shipped code rather than a copy of it: tropical-guidance cycle selection and fallback (`adeck.test.js`), the hidden-tab poller pause (`visibility-pause.test.js`), and feed-text escaping plus the https-only link guard (`escape.test.js`).
+
 ---
 
 ## 📄 Legal & Disclaimer
