@@ -54,7 +54,7 @@ SIMPLE_PROXIES = {
 # violation shows up here in local dev rather than first appearing in production.
 CSP = (
     "default-src 'self'; "
-    "script-src 'self' https://cdn.jsdelivr.net; "
+    "script-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com data:; "
     "img-src 'self' data: blob: https:; "

@@ -38,6 +38,60 @@ function guardedRefresh(key, fn) {
         .finally(() => _refreshInFlight.delete(key));
 }
 
+// ═══ BACKGROUND-TAB PAUSE ═══
+// Every poller in the app is a setInterval, and a tab nobody was looking at
+// still ran all of them — the 15 s warning and watch sweeps, the 1 s clock,
+// every feed refresh — at full rate for a whole shift. Patched once here, like
+// the fetch deadline: while the document is hidden a tick is skipped and
+// remembered, and the moment the tab is visible again each skipped callback
+// runs once, so the display catches up in one pass instead of drifting in over
+// the next few minutes. Intervals MapLibre created before this ran are
+// untouched. Workspace tabs (panes alive across the app's own tabs) are a
+// different thing and unaffected.
+(function installVisibilityPause() {
+    if (typeof document === 'undefined' || !('hidden' in document)) return;
+    const nativeSetInterval = window.setInterval.bind(window);
+    const nativeClearInterval = window.clearInterval.bind(window);
+    const missed = new Map();   // interval id -> the callback it skipped
+    window.setInterval = function (fn, ms, ...args) {
+        if (typeof fn !== 'function') return nativeSetInterval(fn, ms, ...args);
+        let id;
+        id = nativeSetInterval(() => {
+            if (document.hidden) { missed.set(id, () => fn(...args)); return; }
+            fn(...args);
+        }, ms);
+        return id;
+    };
+    window.clearInterval = function (id) { missed.delete(id); return nativeClearInterval(id); };
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) return;
+        const run = [...missed.values()];
+        missed.clear();
+        run.forEach(fn => { try { fn(); } catch (e) { console.error('catch-up tick failed:', e); } });
+    });
+})();
+
+// ═══ PRODUCT BROWSER: KEYBOARD ═══
+// The product rows are <div role="button" tabindex="0">. One delegated
+// listener makes Enter and Space act as a click for all of them, and the
+// observer mirrors the .active class into aria-pressed no matter which of the
+// several toggle paths (click, workspace restore, site change) flipped it.
+(function installProductKeyboard() {
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const el = e.target && e.target.closest ? e.target.closest('.product-item') : null;
+        if (!el || el !== e.target) return;   // a control inside the row keeps its own keys
+        e.preventDefault();
+        el.click();
+    });
+    const mirror = el => el.setAttribute('aria-pressed', el.classList.contains('active') ? 'true' : 'false');
+    document.querySelectorAll('.product-item').forEach(mirror);
+    new MutationObserver(muts => muts.forEach(m => {
+        const t = m.target;
+        if (t && t.classList && t.classList.contains('product-item')) mirror(t);
+    })).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+})();
+
 // ═══ GLOBAL STATE ═══
 const maps = {};
 let activePaneId = 't1-1';
@@ -127,6 +181,14 @@ function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, c => (
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
     ));
+}
+
+// A feed-supplied link is only ever rendered as an https URL. Anything else
+// (javascript:, data:, a relative path, junk) collapses to '' and the anchor
+// is simply not drawn.
+function safeHttpsUrl(u) {
+    const s = String(u ?? '').trim();
+    return /^https:\/\/[^\s"'<>]+$/i.test(s) ? esc(s) : '';
 }
 
 // Severity priority for warning z-order. Higher = more urgent = drawn LAST in
@@ -876,6 +938,10 @@ function registerWindBarbs(map) {
     }
 }
 
+// For third-party hosts that ship no Cache-Control (Open-Meteo meta.json, the
+// IEM feeds). NOT for our own /api/* functions — they set their own max-age and
+// Vercel's CDN honours it; a unique query string turns every poll into a MISS
+// that runs the function and hits the upstream for nothing.
 function cacheBust(url) {
     const sep = url.includes('?') ? '&' : '?';
     return url + sep + '_cb=' + Date.now();
@@ -891,7 +957,7 @@ function addLiveLog(msg, color = '#888') {
     if (!c) return;
     const d = document.createElement('div');
     const ts = new Date().toISOString().substring(11, 19);
-    d.innerHTML = `<span style="color:#444">[${ts}]</span> <span style="color:${color}">${msg}</span>`;
+    d.innerHTML = `<span style="color:#444">[${ts}]</span> <span style="color:${color}">${esc(msg)}</span>`;
     c.prepend(d);
     while (c.children.length > 200) c.lastChild.remove();
 }
@@ -3584,11 +3650,11 @@ function initFrontalPipIcons(map) {
         // loudly rather than presenting a day-old cone as current.
         const gisStale = nhcGisStaleBins[p.binnumber || p.BINNUMBER || ''];
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
-            <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:2px;">${name}${ptcTag}</div>
+            <div style="font-weight:bold;color:#ff6600;font-size:14px;margin-bottom:2px;">${esc(name)}${ptcTag}</div>
             <div style="color:#888;font-size:10px;margin-bottom:6px;">${tauLabel}${validTime ? ' — ' + validTime : ''}</div>
             ${gisStale ? `<div style="background:#3d2600;border-left:3px solid #ffb300;padding:5px 8px;margin-bottom:7px;font-size:10px;line-height:1.5;color:#ffd479;">
                 <b>&#9888; OUT OF DATE</b> — this track/cone is advisory <b>#${gisStale.gisAdv}</b> (${gisStale.gisDate}).<br>
-                NHC's current advisory is <b>#${gisStale.officialAdv} — ${gisStale.name} (${gisStale.cls})</b>. NOAA's tropical GIS feed is behind; the text products under <b>Official Advisories</b> are current.
+                NHC's current advisory is <b>#${esc(gisStale.officialAdv)} — ${esc(gisStale.name)} (${esc(gisStale.cls)})</b>. NOAA's tropical GIS feed is behind; the text products under <b>Official Advisories</b> are current.
             </div>` : ''}
             <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;">
                 <span style="color:#888;">Classification:</span><span style="color:#ffcc00;">${cat}</span>
@@ -3806,12 +3872,14 @@ function initFrontalPipIcons(map) {
         const p = e.features[0].properties;
         const mcdNum = p.name || 'Unknown';
         const mcdInfo = p.folderpath || '';
-        const mcdLink = p.popupinfo || '';
+        // Feed fields are text, never markup; the link only renders if it is
+        // an https URL, so a bad feed can't hand the click anything else.
+        const mcdLink = safeHttpsUrl(p.popupinfo);
 
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:300px;">
-            <div style="font-weight:bold;color:#ff3333;font-size:13px;margin-bottom:4px;">Mesoscale Discussion ${mcdNum}</div>
-            <div style="color:#888;margin-bottom:8px;">${mcdInfo}</div>
-            <a href="${mcdLink}" target="_blank" style="display:inline-block;background:#333;color:white;padding:4px 8px;border-radius:2px;text-decoration:none;font-size:10px;">VIEW FULL DISCUSSION →</a>
+            <div style="font-weight:bold;color:#ff3333;font-size:13px;margin-bottom:4px;">Mesoscale Discussion ${esc(mcdNum)}</div>
+            <div style="color:#888;margin-bottom:8px;">${esc(mcdInfo)}</div>
+            ${mcdLink ? `<a href="${mcdLink}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#333;color:white;padding:4px 8px;border-radius:2px;text-decoration:none;font-size:10px;">VIEW FULL DISCUSSION →</a>` : ''}
         </div>`;
         new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -3821,12 +3889,12 @@ function initFrontalPipIcons(map) {
         if (!e.features || !e.features[0]) return;
         const p = e.features[0].properties;
         const fmtZ = s => (s && s.length >= 12) ? `${s.slice(4,6)}/${s.slice(6,8)} ${s.slice(8,10)}:${s.slice(10,12)}Z` : (s || '');
-        const link = p.link || '';
+        const link = safeHttpsUrl(p.link);
         const html = `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;max-width:320px;">
-            <div style="font-weight:bold;color:#33c27a;font-size:13px;margin-bottom:4px;">WPC Mesoscale Precip Discussion #${p.num || '?'}</div>
+            <div style="font-weight:bold;color:#33c27a;font-size:13px;margin-bottom:4px;">WPC Mesoscale Precip Discussion #${esc(p.num || '?')}</div>
             <div style="color:#cfcfcf;margin-bottom:6px;">${esc(p.concern || '')}</div>
             <div style="color:#888;margin-bottom:8px;">Valid ${fmtZ(p.issue)} – ${fmtZ(p.expire)}</div>
-            ${link ? `<a href="${link}" target="_blank" style="display:inline-block;background:#333;color:white;padding:4px 8px;border-radius:2px;text-decoration:none;font-size:10px;">VIEW FULL DISCUSSION →</a>` : ''}
+            ${link ? `<a href="${link}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background:#333;color:white;padding:4px 8px;border-radius:2px;text-decoration:none;font-size:10px;">VIEW FULL DISCUSSION →</a>` : ''}
         </div>`;
         new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -5664,7 +5732,7 @@ function updateNhcAdvInfo() {
 
 async function fetchNhcAdvList() {
     try {
-        const res = await fetch(cacheBust('/api/adeck?nhc=1'));
+        const res = await fetch('/api/adeck?nhc=1');
         nhcAdvStorms = (await res.json()).storms || [];
     } catch (e) {
         nhcAdvStorms = [];
@@ -6083,7 +6151,7 @@ async function openIntensityChart(mode) {
     title.textContent = `${sid} — ${mode === 'early' ? 'EARLY CYCLE' : 'LATE CYCLE (EXPERIMENTAL)'} INTENSITY GUIDANCE`;
     note.textContent = 'Loading…';
     try {
-        const res = await fetch(cacheBust(`/api/adeck?id=${adeckStorm}`));
+        const res = await fetch(`/api/adeck?id=${adeckStorm}`);
         if (!res.ok) throw new Error(`a-deck HTTP ${res.status}`);
         const rows = parseAdeckText(await res.text());
         const series = buildIntensitySeries(rows, mode);
@@ -6104,7 +6172,7 @@ async function openIntensityChart(mode) {
 async function fetchAdeck(show) {
     if (!adeckStorm || !adeckMode) return;
     try {
-        const res = await fetch(cacheBust(`/api/adeck?id=${adeckStorm}`));
+        const res = await fetch(`/api/adeck?id=${adeckStorm}`);
         if (!res.ok) throw new Error(`a-deck HTTP ${res.status}`);
         const rows = parseAdeckText(await res.text());
         const { features, models, cycles } = buildAdeckFeatures(rows, adeckMode);
@@ -6221,7 +6289,7 @@ function setActiveStorm(id) {
 
 async function fetchAdeckList() {
     try {
-        const res = await fetch(cacheBust('/api/adeck?list=1'));
+        const res = await fetch('/api/adeck?list=1');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const all = (await res.json()).storms || [];
         // Drop invests upgraded to a numbered storm (AL91→AL02): files linger but
@@ -6270,8 +6338,8 @@ async function fetchFcstHistory(show) {
     const sid = activeStorm;
     try {
         const [fRes, bRes] = await Promise.all([
-            fetch(cacheBust(`/api/adeck?fcst=${sid}`)),
-            fetch(cacheBust(`/api/adeck?btk=${sid}`)).catch(() => null)
+            fetch(`/api/adeck?fcst=${sid}`),
+            fetch(`/api/adeck?btk=${sid}`).catch(() => null)
         ]);
         const ofcl = fRes.ok ? parseAdeckText(await fRes.text()) : [];
         const bpts = (bRes && bRes.ok) ? parseBdeck(await bRes.text()).filter(p => p.lat != null) : [];
@@ -6462,7 +6530,7 @@ async function openTrendsChart(announce = true) {
     if (announce) { note.textContent = 'Loading…'; tend.innerHTML = ''; }
     try {
         const [btkRes, atlVdm, epacVdm] = await Promise.all([
-            fetch(cacheBust(`/api/adeck?btk=${adeckStorm}`)),
+            fetch(`/api/adeck?btk=${adeckStorm}`),
             fetchAfos('REPNT2', 30).catch(() => []),
             fetchAfos('REPPN2', 15).catch(() => [])
         ]);
@@ -6629,8 +6697,8 @@ async function openShipsPanel(announce = true) {
     if (announce) { body.innerHTML = '<div style="color:#8b97a3;padding:20px;">Loading…</div>'; note.textContent = ''; }
     try {
         const [res, ripRes] = await Promise.all([
-            fetch(cacheBust(`/api/adeck?ships=${adeckStorm}`)),
-            fetch(cacheBust(`/api/adeck?rip=${adeckStorm}`)).catch(() => null)
+            fetch(`/api/adeck?ships=${adeckStorm}`),
+            fetch(`/api/adeck?rip=${adeckStorm}`).catch(() => null)
         ]);
         if (!res.ok) throw new Error(res.status === 500 ? 'no SHIPS diagnostics for this system yet' : `HTTP ${res.status}`);
         const s = parseShips(await res.text());
@@ -6684,7 +6752,7 @@ async function openShipsPanel(announce = true) {
         note.textContent = `SHIPS (GFS) init ${s.initStr} · shear/SST/RH/OHC = environment; green favors intensification, red hostile${rip ? ' · RI/decap consensus from CIRA' : ''}`;
         if (announce) addLiveLog(`SHIPS: ${sid} — ${a.verdict}; shear ${s.shear[0]} kt, mid-RH ${s.rh[0]}%, 24h RI ${ri24val != null ? ri24val.toFixed(0) + '%' : 'n/a'}`, a.color);
     } catch (e) {
-        body.innerHTML = `<div style="color:#ff8a80;padding:16px;">${e.message}</div>`;
+        body.innerHTML = `<div style="color:#ff8a80;padding:16px;">${esc(e.message)}</div>`;
         note.textContent = '';
     }
 }
@@ -6992,7 +7060,7 @@ async function loadNhcKmlDirect() {
 // Same products via our own proxy, for networks that can't reach nhc.noaa.gov
 // directly. The proxy only fetches and unzips; parsing stays here either way.
 async function loadNhcKmlProxied() {
-    const res = await fetch(cacheBust('/api/adeck?gis=1'));
+    const res = await fetch('/api/adeck?gis=1');
     if (!res.ok) throw new Error(`proxy HTTP ${res.status}`);
     const json = await res.json();
     if (!json.products || !json.products.length) throw new Error('proxy returned no products');
@@ -9981,7 +10049,7 @@ function initMeteogram() {
             panel.dataset.loaded = '1';
         } catch (e) {
             if (locEl) locEl.textContent = '—';
-            if (body) body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;line-height:1.5;">${e.message}</div>`;
+            if (body) body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;line-height:1.5;">${esc(e.message)}</div>`;
         }
     };
     if (goBtn) goBtn.addEventListener('click', runPlaceSearch);
@@ -10086,7 +10154,7 @@ async function loadMeteogramAt(latNum, lonNum, presetLabel) {
         panel.dataset.loaded = '1';
     } catch (e) {
         if (locEl) locEl.textContent = '—';
-        body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;line-height:1.5;">Couldn’t load the meteogram.<br><span style="color:#8b97a3;">${e.message}</span></div>`;
+        body.innerHTML = `<div style="color:#ffb300;font-size:12px;padding:20px;line-height:1.5;">Couldn’t load the meteogram.<br><span style="color:#8b97a3;">${esc(e.message)}</span></div>`;
     }
 }
 
@@ -14530,6 +14598,14 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Aug 30, 2026 (update 2)', items: [
+        '<b>Hardening pass from a full application audit.</b> Five changes, none of them visible on the map, all of them the kind of thing that is easier to do now than after it matters.',
+        '<b>The last external script is gone.</b> The Speed Insights client is now self-hosted alongside MapLibre and Lucide, so the Content-Security-Policy\'s <code>script-src</code> is <code>\'self\'</code> and nothing else — the page can no longer load a script from any origin but its own, which is the strongest script policy a site can carry.',
+        '<b>Three remaining unescaped paths closed.</b> The SPC Mesoscale Discussion and WPC MPD popups took link and label fields from the upstream KML as-is; they are now escaped, and a link only renders if it is a real https URL. The diagnostic log, which everything writes to, now escapes at the sink — so a feed-supplied storm or product name can never arrive as markup, whichever of its 140 callers passed it. The CSP already contained all of this; now there is nothing for it to contain.',
+        '<b>The product browser works from the keyboard.</b> Every product row is now a real button to assistive technology — Tab reaches it, Enter or Space toggles it, its on/off state is announced, and a visible focus ring shows where you are. Reduced-motion settings are honoured (the watchdog pulse goes still).',
+        '<b>Pollers pause in a hidden browser tab.</b> Twenty-six refresh timers, from the 15-second warning sweep to the 1-second clock, used to run at full rate in a tab nobody was looking at. They now skip while the tab is hidden and each one fires once the moment you come back, so the display catches up in a single pass. Workspace tabs inside the app are unaffected — panes there stay live as before.',
+        '<b>Tropical guidance stopped defeating its own cache.</b> The a-deck function asks Vercel\'s CDN to hold responses for five minutes, and the CDN does — but the client was stamping a unique timestamp on every request, so every poll from every viewer bypassed the cache, ran the function and fetched from NHC. The stamp is gone; freshness is now controlled in exactly one place.'
+    ]},
     { date: 'Aug 30, 2026', items: [
         '<b>Fixed: AI model tracks went missing from the tropical guidance tabs.</b> Reported against Invest AL04, where every physics model plotted and <b>Early Cycle AI Models</b> drew nothing at all. The cause was the rule that each aid plots from its own newest cycle — taken literally, with no check that the newest cycle actually holds a track. GraphCast had been losing AL04 for two days, and its 30/12Z interpolated run carried a <i>single</i> point at hour zero. One point is not a line, so the aid was dropped outright — even though its 29/18Z run still had a usable track sitting right there in the same file.',
         'Each aid now falls back to <b>the most recent cycle that actually contains a forecast track</b>, instead of vanishing on a stub. Across the eight systems active today that restores AL04\'s early-cycle AI track and protects every other model from the same failure — it is not an AI-specific fault, it just showed up there first because AI trackers drop weak systems soonest.',

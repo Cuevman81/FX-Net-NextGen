@@ -1785,3 +1785,22 @@ select option {
 }
 
 
+
+/* ── Keyboard focus ──
+   Product rows are role=button/tabindex=0 divs; every control gets the same
+   ring. :focus-visible only, so a mouse click never paints it. */
+.product-item:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: -2px; }
+button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent-cyan);
+    outline-offset: 2px;
+}
+
+/* Honour the OS reduced-motion setting: the watchdog pulse and panel
+   transitions become instant. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
