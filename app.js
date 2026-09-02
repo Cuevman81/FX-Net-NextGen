@@ -79,16 +79,22 @@ function guardedRefresh(key, fn) {
 (function installProductKeyboard() {
     document.addEventListener('keydown', e => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
-        const el = e.target && e.target.closest ? e.target.closest('.product-item') : null;
+        const el = e.target && e.target.closest ? e.target.closest('.product-item, .category-label') : null;
         if (!el || el !== e.target) return;   // a control inside the row keeps its own keys
         e.preventDefault();
         el.click();
     });
     const mirror = el => el.setAttribute('aria-pressed', el.classList.contains('active') ? 'true' : 'false');
+    // Category headings are the group toggles: announce open/closed the same way.
+    const mirrorGroup = g => g.querySelector(':scope > .category-label')
+        ?.setAttribute('aria-expanded', g.classList.contains('collapsed') ? 'false' : 'true');
     document.querySelectorAll('.product-item').forEach(mirror);
+    document.querySelectorAll('.category-group').forEach(mirrorGroup);
     new MutationObserver(muts => muts.forEach(m => {
         const t = m.target;
-        if (t && t.classList && t.classList.contains('product-item')) mirror(t);
+        if (!t || !t.classList) return;
+        if (t.classList.contains('product-item')) mirror(t);
+        else if (t.classList.contains('category-group')) mirrorGroup(t);
     })).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
 })();
 
@@ -953,6 +959,8 @@ function cacheBust(url) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function addLiveLog(msg, color = '#888') {
+    // The row that was just toggled on listens for its own failure here.
+    if (typeof productStatusFromLog === 'function') productStatusFromLog(msg, color);
     const c = document.getElementById('live-log-entries');
     if (!c) return;
     const d = document.createElement('div');
@@ -3474,7 +3482,7 @@ function initFrontalPipIcons(map) {
         const validTimeUTC = validDate.toISOString().substring(11, 16) + 'Z';
         const html = `<div style="font-family:'Courier New',monospace;font-size:11px;color:#e0e0e0;background:#0d1117;padding:8px;border-radius:4px;line-height:1.6;">
             <div style="font-weight:bold;color:#00e5ff;font-size:13px;margin-bottom:2px;">${esc(p.station || '')} — ${esc(p.name || 'Unknown')}${p.state ? ', ' + esc(p.state) : ''}</div>
-            <div style="color:#666;font-size:10px;margin-bottom:6px;">${validTimeLocal} (${validTimeUTC})</div>
+            <div style="color:#7d8790;font-size:10px;margin-bottom:6px;">${validTimeLocal} (${validTimeUTC})</div>
             <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;">
                 <span style="color:#888;">Temp:</span><span style="color:#ff4444;">${p.tmpf != null ? Math.round(p.tmpf) + '°F' : 'M'}</span>
                 <span style="color:#888;">Dewpoint:</span><span style="color:#00cc88;">${p.dwpf != null ? Math.round(p.dwpf) + '°F' : 'M'}</span>
@@ -3521,7 +3529,7 @@ function initFrontalPipIcons(map) {
             <div style="border-top:1px solid #333;padding-top:4px;">
                 <span style="color:#888;">Overall AQI:</span> <span style="font-weight:bold;color:${aqiColor(overall)}">${overall} — ${aqiCategory(overall)}</span>
             </div>
-            <div style="color:#555;font-size:9px;margin-top:4px;">Hourly EPA breakpoint AQI (not NowCast)</div>
+            <div style="color:#7d8790;font-size:9px;margin-top:4px;">Hourly EPA breakpoint AQI (not NowCast)</div>
             <div id="${fcstId}" style="margin-top:6px;color:#888;font-size:10px;">Loading forecast…</div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
@@ -3554,7 +3562,7 @@ function initFrontalPipIcons(map) {
             <div><span style="color:#888;">Confidence:</span> ${esc(confLabel)} (${esc(conf)}%)</div>
             <div><span style="color:#888;">Brightness:</span> ${esc(bright)}K</div>
             <div><span style="color:#888;">FRP:</span> ${esc(frp)} MW</div>
-            <div style="color:#555;margin-top:4px;">${coord ? coord[1].toFixed(4) + '°N, ' + Math.abs(coord[0]).toFixed(4) + '°W' : ''}</div>
+            <div style="color:#7d8790;margin-top:4px;">${coord ? coord[1].toFixed(4) + '°N, ' + Math.abs(coord[0]).toFixed(4) + '°W' : ''}</div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -3995,7 +4003,7 @@ function initFrontalPipIcons(map) {
                 ${row('Movement', (p.toward != null && p.toward !== '' && Number(p.sknt) > 0)
                     ? `toward ${Math.round(Number(p.toward))}° @ ${esc(p.sknt)} kt` : 'stationary / new')}
             </div>
-            <div style="margin-top:5px;font-size:9px;color:#666;">Volume scan ${esc(String(p.valid).replace('T', ' ').replace('Z', 'Z'))}</div>
+            <div style="margin-top:5px;font-size:9px;color:#7d8790;">Volume scan ${esc(String(p.valid).replace('T', ' ').replace('Z', 'Z'))}</div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -4151,7 +4159,7 @@ function initFrontalPipIcons(map) {
             ${mag}
             <div style="color:#888;margin-bottom:4px;"><span style="color:#888;">Source:</span> ${esc(p.source)}</div>
             ${p.remark ? `<div style="color:#ccc;font-style:italic;margin-top:4px;border-top:1px solid #333;padding-top:4px;">${esc(p.remark)}</div>` : ''}
-            <div style="color:#555;margin-top:4px;">${coord ? coord[1].toFixed(4) + '°N, ' + Math.abs(coord[0]).toFixed(4) + '°W' : ''}</div>
+            <div style="color:#7d8790;margin-top:4px;">${coord ? coord[1].toFixed(4) + '°N, ' + Math.abs(coord[0]).toFixed(4) + '°W' : ''}</div>
         </div>`;
         popup.setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
@@ -7483,11 +7491,11 @@ async function fetchAqiForecast(lon, lat) {
 // One forecast day row (O3 + PM2.5). AirNow uses '-1'/'' when a pollutant
 // isn't forecast for the area — show the category alone, or a dash.
 function aqiForecastDayHtml(label, a) {
-    if (!a) return `<div style="color:#666;">${label}: N/A</div>`;
+    if (!a) return `<div style="color:#7d8790;">${label}: N/A</div>`;
     const cell = (aqi, cat) => {
         const n = parseInt(aqi, 10);
         if (!isNaN(n) && n >= 0) return `<span style="color:${aqiColor(n)};font-weight:bold;">${n}</span> <span style="color:${aqiColor(n)};">${cat || ''}</span>`;
-        return cat ? `<span style="color:${aqiCatColor(cat)};">${cat}</span>` : '<span style="color:#666;">—</span>';
+        return cat ? `<span style="color:${aqiCatColor(cat)};">${cat}</span>` : '<span style="color:#7d8790;">—</span>';
     };
     const action = (a.ActionDay === '1' || a.ActionDay === 1)
         ? ` <span style="color:#ff5252;font-weight:bold;">⚠ ACTION DAY</span>` : '';
@@ -7502,7 +7510,7 @@ function aqiForecastDayHtml(label, a) {
 
 function renderAqiForecast(fc) {
     if (!fc || (!fc.today && !fc.tomorrow)) {
-        return `<div style="color:#666;font-size:10px;">No AQI forecast issued for this area.</div>`;
+        return `<div style="color:#7d8790;font-size:10px;">No AQI forecast issued for this area.</div>`;
     }
     const ra = (fc.today || fc.tomorrow).RAName || '';
     return `<div style="border-top:1px solid #333;margin-top:6px;padding-top:5px;">
@@ -7701,9 +7709,9 @@ async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
 
         let html = `
             <div style="color:#88ccff; font-size:9px; margin-bottom:2px; font-weight:bold;">${esc(g.name || gaugeId)}</div>
-            <div style="color:#777; font-size:8px; margin-bottom:6px;">${locStr} | WFO: ${esc(wfo)} | ID: ${esc(g.lid)}</div>
+            <div style="color:#777; font-size:9px; margin-bottom:6px;">${locStr} | WFO: ${esc(wfo)} | ID: ${esc(g.lid)}</div>
             <table style="border-collapse:collapse; width:100%; margin-bottom:6px;">
-                <tr style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">
+                <tr style="color:#00e5ff; font-size:9px; text-transform:uppercase; letter-spacing:0.5px;">
                     <td style="padding:1px 6px 3px 0;"></td>
                     <td style="padding:1px 6px 3px 0;">Stage</td>
                     <td style="padding:1px 0 3px 0;">Category</td>
@@ -7723,7 +7731,7 @@ async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
         // Flood categories table
         if (cats.action || cats.minor || cats.moderate || cats.major) {
             html += `<div style="border-top:1px solid rgba(0,229,255,0.15); padding-top:4px; margin-bottom:4px;">
-                <span style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">Flood Stages</span>
+                <span style="color:#00e5ff; font-size:9px; text-transform:uppercase; letter-spacing:0.5px;">Flood Stages</span>
             </div>
             <table style="border-collapse:collapse; width:100%; margin-bottom:6px; font-size:9.5px;">`;
             if (cats.action?.stage > 0) html += `<tr><td style="color:#ffff00; padding:1px 6px 1px 0;">Action</td><td>${cats.action.stage} ft</td></tr>`;
@@ -7736,16 +7744,16 @@ async function showGaugeDetail(gaugeId, lngLat, originalEvent) {
         // Native observed+forecast hydrograph (rendered async from the NWPS stageflow
         // series). Falls back to the AHPS image if the series can't be drawn.
         html += `<div style="border-top:1px solid rgba(0,229,255,0.15); padding-top:4px; margin-bottom:3px;">
-                <span style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">Hydrograph — Observed + Forecast</span>
+                <span style="color:#00e5ff; font-size:9px; text-transform:uppercase; letter-spacing:0.5px;">Hydrograph — Observed + Forecast</span>
             </div>
-            <div id="hydro-chart-slot" data-img="${esc(images.default || '')}" style="width:100%; min-height:150px; color:#6b7a88; font-size:10px;">Loading stage/flow series…</div>`;
+            <div id="hydro-chart-slot" data-img="${esc(images.default || '')}" style="width:100%; min-height:150px; color:#7d8790; font-size:10px;">Loading stage/flow series…</div>`;
 
         // Link to the gauge's official page. This must point at NWPS
         // (water.noaa.gov): the old AHPS site — water.weather.gov/ahps2/ — was
         // retired with the NWPS cutover and no longer resolves at all, so the
         // link failed to connect rather than 404ing. NWPS keys pages by LID.
         const lid = (g.lid || gaugeId || '').toUpperCase();
-        html += `<div style="margin-top:4px;"><a href="https://water.noaa.gov/gauges/${encodeURIComponent(lid)}" target="_blank" rel="noopener noreferrer" style="color:#00e5ff; font-size:8px; text-decoration:none;">Open on water.noaa.gov (NWPS) &rarr;</a></div>`;
+        html += `<div style="margin-top:4px;"><a href="https://water.noaa.gov/gauges/${encodeURIComponent(lid)}" target="_blank" rel="noopener noreferrer" style="color:#00e5ff; font-size:9px; text-decoration:none;">Open on water.noaa.gov (NWPS) &rarr;</a></div>`;
 
         const panel = document.getElementById('river-gauge-panel');
         const body = document.getElementById('river-gauge-body');
@@ -7796,7 +7804,7 @@ async function renderGaugeHydrograph(gaugeId, cats) {
             el.addEventListener('error', () => { el.style.display = 'none'; });
             slot.appendChild(el);
         } else {
-            slot.innerHTML = `<span style="color:#6b7a88;">Hydrograph unavailable.</span>`;
+            slot.innerHTML = `<span style="color:#7d8790;">Hydrograph unavailable.</span>`;
         }
     }
 }
@@ -7827,7 +7835,7 @@ function buildHydrographSVG(obs, fcst, cats, unit, now) {
     const nowX = x(now);
     const gy0 = mT, gy1 = H - mB;
     const yticks = [vMin + pad, (vMin + vMax) / 2, vMax - pad].map(v =>
-        `<text x="${mL - 4}" y="${(y(v) + 3).toFixed(1)}" fill="#6b7a88" font-size="7" text-anchor="end">${v.toFixed(1)}</text>
+        `<text x="${mL - 4}" y="${(y(v) + 3).toFixed(1)}" fill="#7d8790" font-size="7" text-anchor="end">${v.toFixed(1)}</text>
          <line x1="${mL}" y1="${y(v).toFixed(1)}" x2="${W - mR}" y2="${y(v).toFixed(1)}" stroke="#1e2a35" stroke-width="0.5"/>`).join('');
 
     const obsPath = obs.length >= 2 ? `<path d="${path(obs)}" fill="none" stroke="#00e5ff" stroke-width="1.6"/>` : '';
@@ -7841,7 +7849,7 @@ function buildHydrographSVG(obs, fcst, cats, unit, now) {
         ${obsPath}${fcstPath}
         <text x="${mL}" y="${H - 6}" fill="#00e5ff" font-size="7">● Observed</text>
         <text x="${mL + 62}" y="${H - 6}" fill="#ffe14d" font-size="7">╍ Forecast</text>
-        <text x="${W - mR}" y="${H - 6}" fill="#6b7a88" font-size="7" text-anchor="end">${unit}</text>
+        <text x="${W - mR}" y="${H - 6}" fill="#7d8790" font-size="7" text-anchor="end">${unit}</text>
     </svg>`;
 }
 
@@ -8564,7 +8572,7 @@ function applyWatchdogFilter() {
         if (!list.querySelector('.filter-no-results')) {
             const msg = document.createElement('div');
             msg.className = 'filter-no-results';
-            msg.style.cssText = 'font-size:9px;color:#666;text-align:center;padding:8px;font-style:italic;';
+            msg.style.cssText = 'font-size:9px;color:#7d8790;text-align:center;padding:8px;font-style:italic;';
             msg.textContent = `No active alerts for ${stateFilter !== 'all' ? stateFilter : wfoFilter}`;
             list.appendChild(msg);
         }
@@ -10002,6 +10010,19 @@ function initSidebarCollapse() {
     try { startCollapsed = localStorage.getItem('fxnet_sidebar_collapsed') === '1'; } catch (e) { }
     if (startCollapsed) setCollapsed(true, false);
 
+    // Narrow viewports: with no room for a 300 px rail beside the map, start
+    // with the menu folded so the map fills the screen (the stylesheet turns
+    // the rail into an overlay drawer there). A saved preference still wins,
+    // and nothing is persisted from here, so a laptop docked back onto a wide
+    // monitor comes up the way it was left.
+    const narrow = window.matchMedia ? window.matchMedia('(max-width: 1000px)') : null;
+    let hasPref = false;
+    try { hasPref = localStorage.getItem('fxnet_sidebar_collapsed') !== null; } catch (e) { }
+    if (narrow && narrow.matches && !hasPref) setCollapsed(true, false);
+    if (narrow && narrow.addEventListener) narrow.addEventListener('change', ev => {
+        if (ev.matches && !container.classList.contains('sidebar-collapsed')) setCollapsed(true, false);
+    });
+
     const collapseBtn = document.getElementById('sidebar-collapse');
     const reopenBtn = document.getElementById('sidebar-reopen');
     if (collapseBtn) collapseBtn.addEventListener('click', () => setCollapsed(true));
@@ -10133,7 +10154,7 @@ async function loadMeteogramAt(latNum, lonNum, presetLabel) {
     const lat = (+latNum).toFixed(4), lon = (+lonNum).toFixed(4);
 
     if (locEl) locEl.textContent = presetLabel ? `Resolving ${presetLabel}…` : 'Resolving location…';
-    body.innerHTML = `<div style="color:#6b7a88;font-size:12px;padding:20px;">Fetching NWS hourly forecast for ${presetLabel || (lat + ', ' + lon)}…</div>`;
+    body.innerHTML = `<div style="color:#7d8790;font-size:12px;padding:20px;">Fetching NWS hourly forecast for ${presetLabel || (lat + ', ' + lon)}…</div>`;
     try {
         const pRes = await fetch(`https://api.weather.gov/points/${lat},${lon}`, { headers: { 'Accept': 'application/geo+json' } });
         if (!pRes.ok) throw new Error(pRes.status === 404 ? 'NWS point forecasts cover the U.S. and territories only — pan the map over land in the U.S.' : `points ${pRes.status}`);
@@ -10267,7 +10288,7 @@ function renderMeteogram(body, allPeriods, placeName, genTime, hours) {
     svg.push(`</svg>`);
 
     body.style.position = 'relative';
-    body.innerHTML = `<div id="meteo-readout" style="font-family:'Consolas','Monaco',monospace;font-size:11px;color:#6b7a88;padding:1px 2px 7px;min-height:15px;">Hover the chart for values</div>` + svg.join('');
+    body.innerHTML = `<div id="meteo-readout" style="font-family:'Consolas','Monaco',monospace;font-size:11px;color:#7d8790;padding:1px 2px 7px;min-height:15px;">Hover the chart for values</div>` + svg.join('');
 
     // Stash everything the hover handler needs, then wire it up.
     meteoHoverCtx = { N, mL, dx, periods, temps, dews, winds, pops, dirs, tLo, tHi, wMax, panels, wd };
@@ -10285,7 +10306,7 @@ function attachMeteoHover(svg) {
     const hide = () => {
         if (cross) cross.style.display = 'none';
         Object.values(mk).forEach(m => m && (m.style.display = 'none'));
-        if (readout) readout.innerHTML = '<span style="color:#6b7a88">Hover the chart for values</span>';
+        if (readout) readout.innerHTML = '<span style="color:#7d8790">Hover the chart for values</span>';
     };
     svg.addEventListener('mousemove', e => {
         const ctx = meteoHoverCtx; if (!ctx || !cross) return;
@@ -10502,7 +10523,7 @@ function radarStatusRows(site) {
     const cached = radarStationCache[icao];
     if (!cached || !cached.data || !cached.data.properties) {
         fetchRadarStatus(icao).then(() => { if (!isPlaying) refreshTimestampLabel(); });
-        return [{ label: `${icao} · checking status…`, color: '#6b7a88' }];
+        return [{ label: `${icao} · checking status…`, color: '#7d8790' }];
     }
     const p = cached.data.properties;
     const rda = (p.rda && p.rda.properties) || {};
@@ -10524,7 +10545,7 @@ function radarStatusRows(site) {
     const l2 = (l2t && l2t.length >= 16) ? l2t.substring(11, 16) + 'Z' : '';
     if ((cur != null && !isNaN(+cur)) || l2) {
         const latStr = (cur != null && !isNaN(+cur)) ? `L2 ${(+cur).toFixed(1)}s` : 'L2';
-        rows.push({ label: `${latStr}${l2 ? ' · ' + l2 : ''}`, color: '#6b7a88' });
+        rows.push({ label: `${latStr}${l2 ? ' · ' + l2 : ''}`, color: '#7d8790' });
     }
     return rows;
 }
@@ -11486,7 +11507,7 @@ async function loadModelCompareAt(latNum, lonNum, presetLabel) {
     const lat = (+latNum).toFixed(4), lon = (+lonNum).toFixed(4);
     const label = presetLabel || `${lat}, ${lon}`;
     if (locEl) locEl.textContent = `Loading ${label}…`;
-    body.innerHTML = `<div style="color:#6b7a88;font-size:12px;padding:20px;">Pulling ${MODEL_SOURCES.length} models for ${esc(label)}…</div>`;
+    body.innerHTML = `<div style="color:#7d8790;font-size:12px;padding:20px;">Pulling ${MODEL_SOURCES.length} models for ${esc(label)}…</div>`;
     try {
         const days = parseInt(document.getElementById('model-days')?.value) || 7;
         const url = 'https://api.open-meteo.com/v1/forecast'
@@ -11975,7 +11996,7 @@ async function loadMos(stationRaw, modelId) {
         return;
     }
     if (locEl) locEl.textContent = `Loading ${station} ${def.label}…`;
-    body.innerHTML = `<div style="color:#6b7a88;font-size:12px;padding:20px;">Fetching ${esc(def.label)} for ${esc(station)}…</div>`;
+    body.innerHTML = `<div style="color:#7d8790;font-size:12px;padding:20px;">Fetching ${esc(def.label)} for ${esc(station)}…</div>`;
     try {
         const res = await fetch(`https://mesonet.agron.iastate.edu/api/1/mos.json?station=${encodeURIComponent(station)}&model=${encodeURIComponent(def.id)}`);
         if (res.status === 404) throw new Error(`No MOS site ${station}. MOS is issued for airports — try a nearby ICAO id.`);
@@ -12807,7 +12828,7 @@ function updateEroLegend(paneId) {
     if (!legend || !m) return;
     const days = ['1', '2', '3'].filter(d => isLayerVisible(m, `wpc-ero-day${d}-fill`));
     if (days.length === 0) { legend.style.display = 'none'; return; }
-    let html = `<div style="font-size:8px;font-weight:700;color:#39ff5a;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">WPC ERO — DAY ${days.join(', ')}</div>`;
+    let html = `<div style="font-size:9px;font-weight:700;color:#39ff5a;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">WPC ERO — DAY ${days.join(', ')}</div>`;
     ERO_LEGEND_CATS.forEach(c => {
         html += `<div style="display:flex;align-items:center;gap:5px;margin:2px 0;"><span style="width:12px;height:10px;background:${c.color};opacity:0.7;border:1px solid ${c.color};display:inline-block;"></span><span style="font-size:9px;color:#ddd;white-space:nowrap;">${c.label}</span></div>`;
     });
@@ -12888,7 +12909,7 @@ function updateProbLegend(paneId) {
     const hazLabel = hazSet.length === 1 ? SPC_HAZARD_NAMES[hazSet[0]].toUpperCase() : 'SEVERE';
     const dayLabel = daySet.length === 1 ? `DAY ${daySet[0]}` : 'DAY 1–2';
 
-    let html = `<div style="font-size:8px;font-weight:700;color:#ff9a3c;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">SPC ${dayLabel} ${hazLabel} PROB</div>`;
+    let html = `<div style="font-size:9px;font-weight:700;color:#ff9a3c;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">SPC ${dayLabel} ${hazLabel} PROB</div>`;
     sorted.forEach(([L, fill]) => {
         const pct = `${Math.round(parseFloat(L) * 100)}%`;
         html += `<div style="display:flex;align-items:center;gap:5px;margin:2px 0;"><span style="width:12px;height:10px;background:${fill};opacity:0.7;border:1px solid ${fill};display:inline-block;"></span><span style="font-size:9px;color:#ddd;">${pct}</span></div>`;
@@ -12948,7 +12969,7 @@ function updateFireWxLegend(paneId) {
     const sorted = [...items.entries()].sort((a, b) => a[1].rank - b[1].rank);
 
     const dayLabel = days.length === 1 ? `DAY ${days[0]}` : `DAY ${days[0]}–${days[days.length - 1]}`;
-    let html = `<div style="font-size:8px;font-weight:700;color:#ff9a3c;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">SPC ${dayLabel} FIRE WX</div>`;
+    let html = `<div style="font-size:9px;font-weight:700;color:#ff9a3c;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;white-space:nowrap;">SPC ${dayLabel} FIRE WX</div>`;
     sorted.forEach(([label, s]) => {
         const swatch = s.kind === 'dryt'
             ? `<span style="width:12px;height:10px;display:inline-block;border:0;border-top:2px dashed ${s.stroke};"></span>`
@@ -13655,13 +13676,22 @@ function initTabs() {
 
 function startUTCClock() {
     const el = document.getElementById('val-time');
+    const localEl = document.getElementById('val-local-time');
     if (!el) return;
+    // Zone abbreviation once (CDT, EST…). Everything the app shows is in Z; this
+    // readout just saves the offset arithmetic a forecaster does all shift.
+    let tz = '';
+    try {
+        tz = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+            .formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || '';
+    } catch (_) {}
     function tick() {
         const now = new Date();
         const h = String(now.getUTCHours()).padStart(2, '0');
         const m = String(now.getUTCMinutes()).padStart(2, '0');
         const s = String(now.getUTCSeconds()).padStart(2, '0');
         el.textContent = `${h}:${m}:${s} Z`;
+        if (localEl) localEl.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}${tz ? ' ' + tz : ''}`;
     }
     tick();
     setInterval(tick, 1000);
@@ -14356,7 +14386,7 @@ function attachSolarClick(paneId, map) {
             const html = `
                 <div style="color:#88ccff; font-size:8.5px; margin-bottom:5px;">${locStr} — ${dateStr}</div>
                 <table style="border-collapse:collapse; width:100%;">
-                    <tr style="color:#00e5ff; font-size:8px; text-transform:uppercase; letter-spacing:0.5px;">
+                    <tr style="color:#00e5ff; font-size:9px; text-transform:uppercase; letter-spacing:0.5px;">
                         <td style="padding:1px 6px 3px 0;"></td>
                         <td style="padding:1px 6px 3px 0;">UTC</td>
                         <td style="padding:1px 0 3px 0;">${localLabel}</td>
@@ -14598,11 +14628,24 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
-    { date: 'Aug 30, 2026 (update 3)', items: [
+    { date: 'Sep 2, 2026 (update 3)', items: [
+        '<b>The rest of the audit, built.</b> The Aug 30 review left eighteen open items; everything that could be done without rewriting the app is in this release. What is still deliberately parked: splitting the 17,000-line script into modules and the MapLibre 4/5 upgrade — both are multi-day changes that need their own test pass, not a Tuesday afternoon.',
+        '<b>A product that fails now says so on its row.</b> Click a product and the row takes an amber stripe while it loads. If its handler logs a failure, the stripe turns red with a ✕, the reason becomes the row\'s tooltip, and a toast appears bottom-right — no more digging through the diagnostic log to learn why the map stayed empty. Turning the product off clears it.',
+        '<b>Send a colleague exactly what you are looking at.</b> <b>Copy Link to This Display</b> (under Analysis Tools) puts a link on the clipboard that opens your current display — site, layers, view, every visible pane — on their screen. It is the same bundle a saved procedure holds, folded into the address; nothing is stored on a server, and the link is only written when you ask for it.',
+        '<b>Every floating panel maximizes.</b> The ⤢ button the Model Comparison and SPC Mesoanalysis panels grew last month is now on all of them — Skew-T, Meteogram, MOS, VAD, Text Products — and double-clicking any panel title does the same thing. The Skew-T scales to the window when maximized.',
+        '<b>Press ? for the keyboard shortcuts.</b> Fifteen key bindings existed with a single tooltip to hint at them. The sheet lists the lot — loop control, pane focus, menu toggle, panel dismissal — and the keyboard button beside Data Health opens it too.',
+        '<b>Local time beside Z.</b> The header shows your browser\'s local time and zone next to the Z clock, so the arithmetic every forecaster does a hundred times a shift is done once, on screen. Products and advisories stay in Z, as they should.',
+        '<b>Readable on a laptop at arm\'s length.</b> The three greys that failed contrast (as low as 2.5:1) are one grey at 5:1 or better; captions and labels that were set at 8 px are 9–10 px. Dense stays dense — the change is the smallest that gets the secondary text over the line.',
+        '<b>Narrow screens no longer scroll sideways.</b> Under 1000 px the menu becomes a drawer over a full-width map and starts folded (Ctrl+\\ or the ▶ tab brings it back); the control bar wraps; floating panels cannot outgrow the window. This is the honest version of a responsive layout — the workstation is built for a wide monitor — rather than a tablet redesign.',
+        '<b>Screen readers get the structure.</b> The nineteen product categories are real headings, so a reader can jump between NWS Warnings, Radar, Tropical and the rest, and every one of the 32 dropdowns and inputs has a name. The category headings also take keyboard focus, since they are the group toggles.',
+        '<b>What\'s New starts collapsed.</b> It used to expand itself on the first load after a release and mark the release read whether or not you looked. The NEW dot now carries that job and stays until you open the panel.',
+        '<b>Under the hood:</b> the ten API functions answer HEAD (uptime monitors probing that way saw a 501 before); the radar and satellite proxies check every query parameter against an allow-list before building a URL; a GitHub Action syntax-checks every script and function and runs the test suite on each push, so a typo fails the commit before Vercel can deploy it; the dev server and README are no longer served from production; and the repository carries an MIT license, which the README had implied but never granted.'
+    ]},
+    { date: 'Sep 2, 2026 (update 2)', items: [
         '<b>Fixed: the startup prefetch had been silently dead since June.</b> On load the app is meant to pull the Day 1 outlook, mesoscale discussions, river gauges and METARs in the background so those products appear instantly when you click them. That step waited for a map called <code>1</code> — a name that stopped existing when workspace tabs arrived and panes became <code>t1-1</code> — so the wait never ended and the prefetch never ran. Nothing was broken on screen, which is why it went unnoticed; products simply loaded on first click instead of instantly. It now waits for the first pane of the active tab and for its map style to finish loading, then runs. You will see <b>PREFETCH: 4/4 datasets cached and ready</b> in the diagnostic log a few seconds after startup.',
         '<b>The unit tests now live in the repository.</b> Three suites under <code>tests/</code>, run with <code>node --test tests/*.test.js</code> and no dependencies: the tropical-guidance cycle selection and fallback rules (12 tests), the hidden-tab poller pause (6), and the escaping and https-only link guard (4). They read the functions straight out of <code>app.js</code>, so they test the shipped code rather than a copy of it.'
     ]},
-    { date: 'Aug 30, 2026 (update 2)', items: [
+    { date: 'Sep 2, 2026', items: [
         '<b>Hardening pass from a full application audit.</b> Five changes, none of them visible on the map, all of them the kind of thing that is easier to do now than after it matters.',
         '<b>The last external script is gone.</b> The Speed Insights client is now self-hosted alongside MapLibre and Lucide, so the Content-Security-Policy\'s <code>script-src</code> is <code>\'self\'</code> and nothing else — the page can no longer load a script from any origin but its own, which is the strongest script policy a site can carry.',
         '<b>Three remaining unescaped paths closed.</b> The SPC Mesoscale Discussion and WPC MPD popups took link and label fields from the upstream KML as-is; they are now escaped, and a link only renders if it is a real https URL. The diagnostic log, which everything writes to, now escapes at the sink — so a feed-supplied storm or product name can never arrive as markup, whichever of its 140 callers passed it. The CSP already contained all of this; now there is nothing for it to contain.',
@@ -14923,8 +14966,11 @@ function initWhatsNew() {
 
     if (dot) dot.style.display = (seen === latestId) ? 'none' : 'inline-block';
     header.addEventListener('click', () => setOpen(body.style.display === 'none'));
-    // Auto-expand ONCE when there's an unseen release; collapsed on later loads.
-    setOpen(seen !== latestId);
+    // Always starts collapsed. It used to auto-expand on the first load after a
+    // release, taking the top third of the sidebar before anyone asked for it —
+    // and marking the release seen whether or not it was read. The NEW dot
+    // carries that job now and stays until the panel is actually opened.
+    setOpen(false);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -15650,7 +15696,7 @@ function initProcedures() {
         .proc-name:hover{color:#00e5ff;}
         .proc-del{cursor:pointer;color:#ff6666;padding-left:8px;font-size:11px;}
         .proc-legacy{color:#ffb300;border:1px solid #ffb30055;border-radius:3px;padding:0 4px;margin-left:6px;font-size:9px;letter-spacing:.5px;cursor:help;}
-        .proc-empty{padding:4px 10px;font-size:10px;color:#5c6b78;font-style:italic;}`;
+        .proc-empty{padding:4px 10px;font-size:10px;color:#7d8790;font-style:italic;}`;
     const style = document.createElement('style');
     style.textContent = css;
     document.head.appendChild(style);
@@ -15857,7 +15903,7 @@ function _vadBarbPaths(cx, cy, dirFrom, spd, len) {
     return { lines, flags };
 }
 function renderVadSVG(prof) {
-    if (!prof || prof.length < 2) return '<div style="color:#6b7a88;font-size:12px;padding:16px;">No VAD wind data in range right now (needs echoes/insects aloft). Try again during precip or a well-mixed afternoon.</div>';
+    if (!prof || prof.length < 2) return '<div style="color:#7d8790;font-size:12px;padding:16px;">No VAD wind data in range right now (needs echoes/insects aloft). Try again during precip or a well-mixed afternoon.</div>';
     // Levels cluster tightly at low altitude, so space rows EVENLY by level (each
     // labeled with its true height) to keep barbs and labels from overlapping.
     const lv = prof.slice().sort((a, b) => a.alt_ft - b.alt_ft);
@@ -16354,7 +16400,7 @@ function renderSkewT(lv, D) {
         const x1 = xTP(T, Pbot), y1 = yP(Pbot), x2 = xTP(T, Ptop), y2 = yP(Ptop);
         const c = T === 0 ? '#4a6a55' : '#26333f';
         iso += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${c}" stroke-width="${T === 0 ? 1.1 : 0.6}"/>`;
-        if (x1 >= PL - 2 && x1 <= PR + 2) iso += `<text x="${x1.toFixed(1)}" y="${(PB + 11).toFixed(1)}" fill="#6b7a88" font-size="7" text-anchor="middle">${T}</text>`;
+        if (x1 >= PL - 2 && x1 <= PR + 2) iso += `<text x="${x1.toFixed(1)}" y="${(PB + 11).toFixed(1)}" fill="#7d8790" font-size="7" text-anchor="middle">${T}</text>`;
     }
     // dry adiabats (faint, clipped)
     let dry = '';
@@ -16415,9 +16461,9 @@ function renderSkewT(lv, D) {
     // Parcel table — SB / ML / MU side by side, the way NSHARP lays it out. The
     // point of three columns is that they disagree: MU finds elevated instability
     // SB reports as zero, and ML resists a single overheated surface reading.
-    const cap = (p, warn) => p == null ? '<td style="text-align:right;color:#5c6b78;">—</td>'
+    const cap = (p, warn) => p == null ? '<td style="text-align:right;color:#7d8790;">—</td>'
         : `<td style="text-align:right;color:${warn && p.cape > 1000 ? '#ff6a6a' : '#cdd6df'};font-weight:600;">${Math.round(p.cape)}</td>`;
-    const cell = (p, f, c) => p == null ? '<td style="text-align:right;color:#5c6b78;">—</td>'
+    const cell = (p, f, c) => p == null ? '<td style="text-align:right;color:#7d8790;">—</td>'
         : `<td style="text-align:right;color:${c || '#cdd6df'};">${f(p)}</td>`;
     const th = t => `<th style="text-align:right;color:#8b97a3;font-weight:600;padding-left:6px;">${t}</th>`;
     const rowLbl = t => `<td style="color:#8b97a3;">${t}</td>`;
@@ -16457,7 +16503,7 @@ function renderSkewT(lv, D) {
         ${_ir('Freezing / −20°', fx(D.fzZ) + ' / ' + fx(D.m20Z) + ' m', '#cdd6df')}
         ${_ir('Wet-bulb zero', fx(D.wbzZ) + ' m AGL', '#cdd6df')}
         <div style="margin-top:6px;border-top:1px solid #23303c;padding-top:5px;color:#8b97a3;font-size:9px;">Surface ${lv[0].tmpc.toFixed(1)}° / ${lv[0].dwpc.toFixed(1)}°C @ ${Math.round(lv[0].pres)} hPa${D.muSrc && D.muSrc.k ? ` · MU parcel ${Math.round(D.muSrc.p)} hPa` : ''}</div>
-        <div style="color:#5c6b78;font-size:8px;margin-top:3px;">Virtual-temperature CAPE/CIN · effective inflow layer per Thompson et al. 2007 · Bunkers right-mover storm motion. Chart shows the surface parcel.</div>
+        <div style="color:#7d8790;font-size:9px;margin-top:3px;">Virtual-temperature CAPE/CIN · effective inflow layer per Thompson et al. 2007 · Bunkers right-mover storm motion. Chart shows the surface parcel.</div>
     </div>`;
     // min-height:0 + overflow-y:auto — in a flex ROW the column stretches to the body
     // height and its own content spills without the body ever registering overflow,
@@ -17023,6 +17069,7 @@ function _spcMesoBuildPanes() {
         pane.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:0;';
         const sel = document.createElement('select');
         sel.className = 'spcmeso-pane-param';
+        sel.setAttribute('aria-label', 'Mesoanalysis parameter for this pane');
         sel.dataset.pane = String(i);
         sel.title = 'Parameter for this pane';
         sel.style.cssText = 'background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;width:100%;';
@@ -17215,6 +17262,10 @@ function init() {
     initVadPanel();
     initSkewtPanel();
     initSpcMesoPanel();
+    initPanelMaximize();
+    initShortcutSheet();
+    initShareLink();
+    initProductStatus();
 
     // Start warning watchdog (check every 15 seconds for rapid convective updates)
     addLiveLog('WATCHDOG: National feed monitoring active (15s polling)', '#00ff88');
@@ -17317,11 +17368,252 @@ function init() {
                 const ok = results.filter(r => r.status === 'fulfilled').length;
                 addLiveLog(`PREFETCH: ${ok}/4 datasets cached and ready`, '#00ff88');
             });
+
+            // A shared display link (#v=…) is applied over the restored workspace.
+            applySharedViewFromHash();
         }
     }, 200);
 
     updateSidebarToActivePane();
     addLiveLog('FX-Net NextGen READY', '#00ff88');
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 30: AUDIT PASS — toasts, row status, panel maximize, shortcuts, share
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Transient status toast, bottom-right (AlertViz owns the top-right stack).
+// `html` must already be escaped by the caller.
+function fxToast(html, kind = 'info', ttl = 5000) {
+    let c = document.getElementById('fx-toast-container');
+    if (!c) { c = document.createElement('div'); c.id = 'fx-toast-container'; document.body.appendChild(c); }
+    const t = document.createElement('div');
+    t.className = `fx-toast${kind === 'error' ? '' : ' ' + kind}`;
+    t.setAttribute('role', 'status');
+    t.innerHTML = html;
+    t.addEventListener('click', () => t.remove());
+    c.appendChild(t);
+    while (c.children.length > 4) c.firstChild.remove();
+    setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 400); }, ttl);
+}
+
+// ─── Per-row load status ───
+// A product that failed used to look exactly like one that worked: the row went
+// active, the map stayed empty, and the reason sat in the collapsed diagnostic
+// log. Every failure path already logs in red, so the row that was just toggled
+// on takes an amber "loading" stripe, and the first red log line inside the
+// next 20 s turns it into a red ✕ with the message as its tooltip plus a toast.
+// A green line (the handlers' success colour) clears the stripe early.
+const _PRODUCT_FAIL_COLORS = new Set(['#ff3333', '#ff4444', 'red']);
+const _PRODUCT_OK_COLORS = new Set(['#00ff88', '#33c27a', '#39ff5a']);
+let _productPending = null;   // { el, timer }
+function _productPendingClear() {
+    if (!_productPending) return;
+    clearTimeout(_productPending.timer);
+    _productPending.el.classList.remove('loading');
+    _productPending = null;
+}
+function _productRestoreTitle(el) {
+    if (el.dataset.origTitle == null) return;
+    if (el.dataset.origTitle) el.title = el.dataset.origTitle; else el.removeAttribute('title');
+    delete el.dataset.origTitle;
+}
+function productStatusFromLog(msg, color) {
+    if (!_productPending) return;
+    const c = String(color || '').toLowerCase();
+    if (_PRODUCT_FAIL_COLORS.has(c)) {
+        const el = _productPending.el;
+        _productPendingClear();
+        el.classList.add('failed');
+        if (el.dataset.origTitle == null) el.dataset.origTitle = el.getAttribute('title') || '';
+        el.title = `Failed to load — ${msg}`;
+        const name = el.querySelector('span')?.textContent || 'Product';
+        fxToast(`<b>${esc(name)}</b> did not load. ${esc(msg)}`, 'error', 7000);
+    } else if (_PRODUCT_OK_COLORS.has(c)) {
+        _productPendingClear();
+    }
+}
+function initProductStatus() {
+    // Capture phase: runs before the toggle handler flips .active, so the class
+    // still says which way this click goes.
+    document.addEventListener('click', e => {
+        const el = e.target && e.target.closest ? e.target.closest('.product-item[data-layer]') : null;
+        if (!el) return;
+        // A second click on the row that is still loading is the user turning
+        // it off (or giving up) — its handler hasn't flipped .active yet.
+        const wasPending = !!_productPending && _productPending.el === el;
+        _productPendingClear();
+        el.classList.remove('failed');
+        _productRestoreTitle(el);
+        if (wasPending || el.classList.contains('active')) return;   // turning off
+        el.classList.add('loading');
+        _productPending = { el, timer: setTimeout(_productPendingClear, 20000) };
+    }, true);
+}
+
+// ─── Panel maximize ───
+// Model Comparison and SPC Mesoanalysis grew their own ⤢ buttons; every other
+// floating panel gets the same control, injected beside its close button, so
+// the gesture learned on one panel works on all of them. Double-clicking a
+// header toggles it too. A window resize event is dispatched afterwards so
+// panels that refit on resize (model, mesoanalysis) redraw at the new size.
+const _panelMaxState = {};
+function togglePanelMax(panel) {
+    if (!panel) return;
+    const own = panel.querySelector('.floating-panel-header [id$="-max"]');
+    if (own && own.dataset.generic !== '1') { own.click(); return; }   // bespoke implementation
+    const id = panel.id;
+    if (!_panelMaxState[id]) {
+        _panelMaxState[id] = { w: panel.style.width, h: panel.style.height, l: panel.style.left, t: panel.style.top, r: panel.style.right };
+        panel.style.left = '8px'; panel.style.top = '8px'; panel.style.right = 'auto';
+        panel.style.width = (window.innerWidth - 16) + 'px';
+        panel.style.height = (window.innerHeight - 16) + 'px';
+        panel.classList.add('maximized');
+    } else {
+        const g = _panelMaxState[id];
+        panel.style.width = g.w; panel.style.height = g.h; panel.style.left = g.l; panel.style.top = g.t; panel.style.right = g.r;
+        panel.classList.remove('maximized');
+        delete _panelMaxState[id];
+    }
+    if (own) own.title = _panelMaxState[id] ? 'Restore panel size' : 'Maximize to fill the window';
+    window.dispatchEvent(new Event('resize'));
+}
+function initPanelMaximize() {
+    document.querySelectorAll('.floating-panel').forEach(panel => {
+        const header = panel.querySelector('.floating-panel-header');
+        if (!header) return;
+        if (!header.querySelector('[id$="-max"]')) {
+            const close = header.querySelector('button[id^="close-"]');
+            const btn = document.createElement('button');
+            btn.className = 'btn-icon';
+            btn.id = `${panel.id}-max`;
+            btn.dataset.generic = '1';
+            btn.title = 'Maximize to fill the window';
+            btn.setAttribute('aria-label', 'Maximize panel');
+            btn.innerHTML = '<i data-lucide="maximize-2"></i>';
+            btn.addEventListener('click', e => { e.stopPropagation(); togglePanelMax(panel); });
+            if (close && close.parentNode) close.parentNode.insertBefore(btn, close); else header.appendChild(btn);
+        }
+        header.addEventListener('dblclick', e => {
+            if (e.target.closest('button, select, input, a')) return;
+            togglePanelMax(panel);
+        });
+    });
+    try { lucide.createIcons(); } catch (_) {}
+}
+
+// ─── Keyboard shortcut sheet ───
+// Fifteen key bindings existed with one tooltip to hint at them. `?` (or the
+// keyboard button beside Data Health) lists them; Esc or the × closes.
+// A row's keys are joined with "+" for chords and "–" for ranges/pairs.
+const SHORTCUTS = [
+    ['Display', [
+        ['Show / hide the product menu', ['Ctrl', '\\'], '+'],
+        ['Focus pane 1–8 in the active tab', ['1', '8'], '–'],
+        ['This sheet', ['?']],
+        ['Close a panel, leave a tool, or stop a loop', ['Esc']]
+    ]],
+    ['Loop', [
+        ['Play / pause', ['Space']],
+        ['Step back / forward (while looping)', ['←', '→'], '–'],
+        ['First / last frame (while looping)', ['Home', 'End'], '–']
+    ]],
+    ['Product menu', [
+        ['Move between rows and category headings', ['Tab']],
+        ['Toggle the focused product or category', ['Enter']],
+        ['Rename a workspace tab', ['double-click tab']]
+    ]],
+    ['Panels', [
+        ['Maximize / restore any floating panel', ['double-click title']],
+        ['Run a search box (place, station, guide)', ['Enter']],
+        ['Escape interrogation mode', ['Esc']]
+    ]]
+];
+function initShortcutSheet() {
+    const overlay = document.getElementById('shortcut-overlay');
+    const body = document.getElementById('shortcut-body');
+    if (!overlay || !body) return;
+    body.innerHTML = SHORTCUTS.map(([title, rows]) =>
+        `<div class="shortcut-group"><h3>${esc(title)}</h3>` +
+        rows.map(([what, keys, join]) =>
+            `<div class="shortcut-row"><span>${esc(what)}</span><span>` +
+            keys.map(k => `<kbd class="key">${esc(k)}</kbd>`).join(`<span class="plus">${esc(join || '')}</span>`) +
+            `</span></div>`).join('') + `</div>`).join('') +
+        `<div class="shortcut-foot">Arrow keys pan the map when no loop is running. Keys are ignored while you are typing in a box or a modal is open.</div>`;
+    const setOpen = open => {
+        overlay.style.display = open ? 'flex' : 'none';
+        if (open) document.getElementById('shortcut-close')?.focus();
+    };
+    const typing = el => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+    document.getElementById('btn-shortcuts')?.addEventListener('click', () => setOpen(overlay.style.display === 'none'));
+    document.getElementById('shortcut-close')?.addEventListener('click', () => setOpen(false));
+    overlay.addEventListener('click', e => { if (e.target === overlay) setOpen(false); });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && overlay.style.display !== 'none') { setOpen(false); return; }
+        if (e.key !== '?' || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return;
+        e.preventDefault();
+        setOpen(overlay.style.display === 'none');
+    });
+    try { lucide.createIcons(); } catch (_) {}
+}
+
+// ─── Shareable display link ───
+// A procedure — the same bundle "Save Current Display" stores — serialised into
+// the URL fragment as URL-safe base64. Read once on load and applied over the
+// restored workspace, then stripped from the address bar so a reload goes back
+// to the user's own tabs. Only written when asked, so the URL isn't churning
+// during a shift and nothing about the display touches a server.
+function encodeShareState(proc) {
+    const bytes = new TextEncoder().encode(JSON.stringify(proc));
+    let bin = '';
+    bytes.forEach(b => { bin += String.fromCharCode(b); });
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function decodeShareState(str) {
+    try {
+        const b64 = String(str || '').replace(/-/g, '+').replace(/_/g, '/');
+        const bin = atob(b64);
+        const json = new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
+        const proc = JSON.parse(json);
+        if (!proc || proc.v !== 2 || !proc.panes || typeof proc.panes !== 'object') return null;
+        return proc;
+    } catch (_) { return null; }
+}
+function shareStateFromHash(hash) {
+    const m = /(?:^#|&)v=([A-Za-z0-9_-]+)/.exec(hash || '');
+    return m ? decodeShareState(m[1]) : null;
+}
+function initShareLink() {
+    document.getElementById('share-view')?.addEventListener('click', async () => {
+        const proc = captureProcedure();
+        const url = `${location.origin}${location.pathname}#v=${encodeShareState(proc)}`;
+        let copied = false;
+        try { await navigator.clipboard.writeText(url); copied = true; } catch (_) {}
+        if (!copied) window.prompt('Copy this link:', url);
+        addLiveLog(`SHARE: link ${copied ? 'copied' : 'shown'} — ${proc.layout || 1}-pane, ${procLayerCount(proc)} products, ${url.length} characters`, '#00ff88');
+        fxToast(copied
+            ? '<b>Link copied.</b> It opens this display — site, layers, view, every visible pane — for whoever you send it to.'
+            : '<b>Link ready</b> in the prompt — copy it from there.', 'ok');
+    });
+}
+function applySharedViewFromHash() {
+    const proc = shareStateFromHash(location.hash);
+    if (!proc) return;
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (_) {}
+    addLiveLog(`SHARE: opening a shared ${proc.layout || 1}-pane display (${procLayerCount(proc)} products)`, '#00e5ff');
+    // applyProcedure clears and re-applies a pane only once its base layers
+    // exist; the first pane's style is up here but its 'load' work may not be.
+    let tries = 0;
+    const wait = setInterval(() => {
+        const m = maps[paneIdsForTab(activeTabId)[0]];
+        if ((m && m.getLayer && m.getLayer('radar-layer')) || ++tries > 50) {
+            clearInterval(wait);
+            applyProcedure(proc);
+            const n = proc.layout || 1;
+            fxToast(`<b>Shared display opened</b> — ${n} pane${n > 1 ? 's' : ''}, ${procLayerCount(proc)} products — applied to the active tab. Your saved procedures are untouched.`, 'info', 8000);
+        }
+    }, 200);
 }
 
 // Page-level wiring that used to live in index.html's trailing inline <script>.

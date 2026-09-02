@@ -1,2 +1,6 @@
 # Not part of the deployed site.
 tests/
+.github/
+server.py
+README.md
+__pycache__/

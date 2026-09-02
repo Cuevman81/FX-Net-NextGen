@@ -39,6 +39,9 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 - **Keyboard Loop Control**: `Space` play/pause · `←`/`→` step frames · `Home`/`End` oldest/newest · `Esc` stop · `1`–`8` select a pane. Arrow keys are only claimed while a loop is running, so they otherwise pan the map. Loop **MODE** (Forward or Rock) and **DWELL** (extra hold on the newest frame) are in the bottom toolbar.
 - **Per-Pane Legend & Data Health**: A live legend stack timestamps every active product (imagery valid time or last fetch), and a collapsible Data Health monitor groups every feed by category with red/amber/green status dots.
 
+- **Shareable displays** — *Copy Link to This Display* puts a link on the clipboard that opens your exact display (site, layers, view, every visible pane) on a colleague's screen. Nothing is stored server-side; the bundle lives in the URL fragment.
+- **Every floating panel maximizes** (⤢ or double-click its title), a product that fails to load says so on its own row, and the header shows local time beside Z.
+
 ### 🚨 Real-Time Weather Alerts & Vector Watches
 - **National Watchdog**: Polls official NWS feeds every 15 seconds for rapid convective updates. A live scrolling ticker surfaces new Tornado, Severe Thunderstorm, and Flash Flood warnings.
 - **High-Fidelity Watch Vectors**: Integrates NOAA's REST MapServer feature service to draw county-precise polygon boundaries for Severe Thunderstorm and Tornado watches, with Impact-Based-Warning (IBW) pulse styling for Considerable/Catastrophic tags.
@@ -122,12 +125,14 @@ This project is configured for instant cloud hosting on **Vercel** with no manag
 ### 🔒 Hardening
 - **Strict Content-Security-Policy** — `script-src 'self'` and nothing else: no `'unsafe-inline'`, no CDN origins. Every script the page runs is served from its own origin (MapLibre, Lucide and the Speed Insights client are vendored and pinned), so an injected inline handler arriving through a malformed or compromised upstream feed cannot execute and no third-party origin can be tricked into supplying code. The policy is mirrored byte-for-byte in `server.py` so violations surface in local development rather than first appearing in production.
 - **Feed text is never markup.** A single `esc()` helper wraps every value that reaches `innerHTML` — alert text, LSR remarks, gauge and storm names, product labels, the diagnostic log — and feed-supplied links render only when they are genuine https URLs.
-- **Keyboard-operable product browser.** Every product row is a real button to assistive technology (`role`, `tabindex`, `aria-pressed`, visible focus), and the app honours `prefers-reduced-motion`.
+- **Keyboard-operable product browser.** Every product row is a real button to assistive technology (`role`, `tabindex`, `aria-pressed`, visible focus), every category is a real heading that doubles as its group toggle, every form control is named, and the app honours `prefers-reduced-motion`. Press `?` for the shortcut sheet.
 - **Polite in the background.** Refresh timers pause while the browser tab is hidden and catch up in one pass when it is shown again.
 - **Vendored dependencies** — MapLibre GL JS and Lucide are pinned and self-hosted (`vendor/`), so a CDN outage or a mutated `@latest` release can neither break nor tamper with the app.
 - **Feed text is escaped** everywhere it reaches a popup or panel; upstream data is never trusted as markup.
 - **Every network call has a deadline**, so a hung government endpoint can't leave requests pending indefinitely or stack repeats behind itself; fast pollers are additionally guarded against overlapping themselves.
-- **Proxies validate their inputs** — storm IDs, station codes, and layer names are pattern-matched and numeric parameters clamped before they reach a URL. Upstream failures are logged server-side and returned to the browser generically, so internal URLs and paths never appear in a client response.
+- **Proxies validate their inputs** — storm IDs, station codes, radar products and satellite layers are pattern-matched or allow-listed and numeric parameters clamped before they reach a URL. Upstream failures are logged server-side and returned to the browser generically, so internal URLs and paths never appear in a client response. Every function answers `HEAD`, so uptime monitors see the API as up.
+- **Nothing ships that the page doesn't use.** `.vercelignore` keeps the dev server, tests, CI config and README out of the deployment.
+- **A commit is checked before it can deploy.** A GitHub Action syntax-checks every script and Vercel function and runs the unit tests on each push (`.github/workflows/ci.yml`).
 
 ---
 
@@ -153,11 +158,13 @@ Open your browser and navigate to [http://localhost:8888](http://localhost:8888)
 ```bash
 node --test tests/*.test.js
 ```
-No dependencies — Node's built-in runner. The suites read the functions they exercise straight out of `app.js` (see `tests/_load.js`), so they test the shipped code rather than a copy of it: tropical-guidance cycle selection and fallback (`adeck.test.js`), the hidden-tab poller pause (`visibility-pause.test.js`), and feed-text escaping plus the https-only link guard (`escape.test.js`).
+No dependencies — Node's built-in runner. The suites read the functions they exercise straight out of `app.js` (see `tests/_load.js`), so they test the shipped code rather than a copy of it: tropical-guidance cycle selection and fallback (`adeck.test.js`), the hidden-tab poller pause (`visibility-pause.test.js`), feed-text escaping plus the https-only link guard (`escape.test.js`), and the shareable-display-link codec (`share-link.test.js`). The same suite runs in CI on every push.
 
 ---
 
 ## 📄 Legal & Disclaimer
 Terminology, data feeds, and acronyms (AWIPS, FX-Net, WPC, SPC, NHC, METAR) are public domain properties of the United States Government (NOAA / National Weather Service) pursuant to 17 U.S.C. § 105. 
+
+Released under the [MIT License](LICENSE).
 
 *Designed and maintained as an independent professional forecasting tool by Rodney Cuevas.*

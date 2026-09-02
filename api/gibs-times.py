@@ -23,6 +23,15 @@ import traceback
 GIBS = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0'
 GIBS_TILES = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best'
 _LAYER_RE = re.compile(r'^[A-Za-z0-9_\-]+$')   # guard against path injection
+# Allow-list of the GIBS layers the client actually requests (app.js GIBS_PRODUCTS),
+# and the tile-matrix sets those layers publish. Anything else is refused before
+# a URL is built, so the function can never be pointed at an arbitrary GIBS path.
+_KNOWN_LAYERS = frozenset(
+    f'GOES-{bird}_ABI_{suffix}'
+    for bird in ('East', 'West')
+    for suffix in ('GeoColor', 'Band13_Clean_Infrared', 'Band2_Red_Visible_1km',
+                   'Air_Mass', 'Dust', 'FireTemp'))
+_TMS_RE = re.compile(r'^GoogleMapsCompatible_Level[0-9]$')
 
 # GIBS lists a timestamp in its time domain as soon as a scan is scheduled, but
 # the actual tiles are frequently NOT published — both at the leading edge (the
@@ -103,11 +112,23 @@ def recent_times(layer, tms, n):
 
 
 class handler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        # Uptime monitors probe with HEAD by default. Answer with headers only —
+        # no upstream fetch — so a monitor sees 200 instead of the 501 that
+        # BaseHTTPRequestHandler returns for an unimplemented method.
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+
     def do_GET(self):
         try:
             qs = parse_qs(urlparse(self.path).query)
             layer = qs.get('layer', ['GOES-East_ABI_GeoColor'])[0]
             tms = qs.get('tms', ['GoogleMapsCompatible_Level7'])[0]
+            if layer not in _KNOWN_LAYERS or not _TMS_RE.match(tms):
+                raise ValueError('unknown layer or tile matrix set')
             n = max(1, min(int(qs.get('n', ['30'])[0]), 60))
             body = json.dumps({'times': recent_times(layer, tms, n)}).encode()
             self.send_response(200)

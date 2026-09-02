@@ -120,6 +120,16 @@ def fetch_active_mpds():
 
 
 class handler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        # Uptime monitors probe with HEAD by default. Answer with headers only —
+        # no upstream fetch — so a monitor sees 200 instead of the 501 that
+        # BaseHTTPRequestHandler returns for an unimplemented method.
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+
     def do_GET(self):
         try:
             body = json.dumps(fetch_active_mpds()).encode()

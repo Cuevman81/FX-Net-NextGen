@@ -29,6 +29,7 @@ import traceback
 
 L3_BUCKET = 'https://unidata-nexrad-level3.s3.amazonaws.com'
 _STATION_RE = re.compile(r'^[A-Z0-9]{3,4}$')   # guard against URL injection
+_PRODUCT_RE = re.compile(r'^[A-Z0-9]{3,10}$')  # N0B/NST… plus the STORMTRACK/VAD/MESO aliases
 
 # Per-product calibration. value = scale*code + offset for code>=2 (codes 0,1 are
 # below-threshold / range-folded -> transparent). gate_km = range-bin spacing.
@@ -642,11 +643,25 @@ def build_radar(station, product, offset=0):
 
 
 class handler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        # Uptime monitors probe with HEAD by default. Answer with headers only —
+        # no upstream fetch — so a monitor sees 200 instead of the 501 that
+        # BaseHTTPRequestHandler returns for an unimplemented method.
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+
     def do_GET(self):
         try:
             qs = parse_qs(urlparse(self.path).query)
             station = qs.get('station', ['KDGX'])[0].upper()
             product = qs.get('product', ['N0B'])[0].upper()
+            # Both go straight into the S3 listing prefix; a bad value only
+            # yields an empty listing, but reject it up front like raob.py does.
+            if not _STATION_RE.match(station) or not _PRODUCT_RE.match(product):
+                raise ValueError('bad station/product')
             try:
                 offset = max(0, min(int(qs.get('offset', ['0'])[0]), 19))
             except ValueError:

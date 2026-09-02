@@ -14,7 +14,7 @@
     <script src="vendor/maplibre-gl.js"></script>
     <link href="vendor/maplibre-gl.css" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=121">
+    <link rel="stylesheet" href="style.css?v=122">
     <!-- Vercel Speed Insights + Web Analytics shim (external so CSP can forbid inline script; the client is vendored so script-src is self alone) -->
     <script type="module" src="boot.js?v=2"></script>
     <script defer src="/_vercel/insights/script.js"></script>
@@ -71,16 +71,16 @@
                 <div id="product-filter-empty" class="filter-empty" style="display:none;">No products match.</div>
                 <!-- NWS WARNINGS -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="bell"></i> NWS WARNINGS</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="bell"></i> NWS WARNINGS</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="nws-warnings-only"><span>Active Warnings</span> <span class="badge red">LIVE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="nws-advisories-only"><span>Advisories & Statements</span> <span class="badge yellow">LIVE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="nws-watches-only"><span>Active Watches</span> <span class="badge orange">LIVE</span></div>
                     <div id="warning-ticker" class="warning-ticker-container">
                         <div id="watchdog-filter-bar" style="display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid #1e2a35;">
-                            <select id="watchdog-filter-state" style="flex:1;background:#0a1018;color:#aaa;border:1px solid #1e2a35;border-radius:3px;font-size:10px;padding:2px;">
+                            <select id="watchdog-filter-state" aria-label="Filter warnings by state" style="flex:1;background:#0a1018;color:#aaa;border:1px solid #1e2a35;border-radius:3px;font-size:10px;padding:2px;">
                                 <option value="all">All States</option>
                             </select>
-                            <select id="watchdog-filter-wfo" style="flex:1;background:#0a1018;color:#aaa;border:1px solid #1e2a35;border-radius:3px;font-size:10px;padding:2px;">
+                            <select id="watchdog-filter-wfo" aria-label="Filter warnings by forecast office" style="flex:1;background:#0a1018;color:#aaa;border:1px solid #1e2a35;border-radius:3px;font-size:10px;padding:2px;">
                                 <option value="all">All WFOs</option>
                             </select>
                         </div>
@@ -92,7 +92,7 @@
 
                 <!-- RADAR (NEXRAD) -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="radio"></i> RADAR (NEXRAD)</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="radio"></i> RADAR (NEXRAD)</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="radar-ref"><span>Reflectivity</span> <span class="badge blue" id="radar-mode-badge">National</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="radar-vel"><span>Velocity</span> <span class="badge orange">SITE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="radar-hc"><span>Hydrometeor Class</span> <span class="badge orange">SITE</span></div>
@@ -119,7 +119,7 @@
 
                 <!-- MRMS PRODUCTS -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="radar"></i> MRMS (National)</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="radar"></i> MRMS (National)</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="mrms-echotops"><span>Enhanced Echo Tops</span> <span class="badge green">CONUS</span></div>
                     <div class="sub-category">QPE (Radar + Gauge Estimated Precip)</div>
                     <div class="product-item" role="button" tabindex="0" data-layer="mrms-qpe" data-qpe="1h"><span>1-Hour QPE</span></div>
@@ -130,10 +130,10 @@
 
                 <!-- SATELLITE (GOES-EAST / GOES-WEST) -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="satellite"></i> Satellite (GOES)</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="satellite"></i> Satellite (GOES)</h2>
                     <div class="sector-row">
                         <label for="goes-sector-select">SECTOR</label>
-                        <select id="goes-sector-select">
+                        <select id="goes-sector-select" aria-label="GOES sector">
                             <optgroup label="GOES-East (75°W)">
                                 <option value="east-conus">CONUS</option>
                                 <option value="east-fulldisk">Full Disk (N Hem)</option>
@@ -182,13 +182,13 @@
 
                 <!-- LIGHTNING -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="zap"></i> LIGHTNING</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="zap"></i> LIGHTNING</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="lightning"><span>NLDN Strike Density</span> <span class="badge green">LIVE</span></div>
                 </div>
 
                 <!-- SPC PRODUCTS -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="shield-alert"></i> SPC PRODUCTS</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="shield-alert"></i> SPC PRODUCTS</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-outlook" data-day="1"><span>Day 1 Convective Outlook</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-outlook" data-day="2"><span>Day 2 Convective Outlook</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-outlook" data-day="3"><span>Day 3 Convective Outlook</span></div>
@@ -211,7 +211,7 @@
 
                 <!-- AVIATION -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="plane"></i> AVIATION</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="plane"></i> AVIATION</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="airsigmet"><span>SIGMETs / AIRMETs</span> <span class="badge orange">AWC</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="gairmet"><span>Graphical AIRMETs (G-AIRMET)</span> <span class="badge orange">AWC</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="pireps"><span>Pilot Reports (PIREPs)</span> <span class="badge green">AWC</span></div>
@@ -222,7 +222,7 @@
 
                 <!-- SURFACE ANALYSIS -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="thermometer"></i> SURFACE ANALYSIS</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="thermometer"></i> SURFACE ANALYSIS</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="metars"><span>METAR Plotted Obs</span> <span class="badge green">LIVE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="ndbc"><span>NDBC Buoys (Marine Obs)</span> <span class="badge green">HOURLY</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="wpc-isobars"><span>Isobars (4mb WPC)</span> <span class="badge blue">WPC</span></div>
@@ -250,7 +250,7 @@
 
                 <!-- NHC TROPICAL -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="cloud-lightning"></i> NHC TROPICAL</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="cloud-lightning"></i> NHC TROPICAL</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="nhc-storms"><span>Active Storms & Cones</span> <span class="badge red" id="nhc-storms-badge">LIVE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="nhc-fcst-history"><span>Forecast History (run-to-run)</span> <span class="badge blue">TREND</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="nhc-outlook"><span>Tropical Outlook Areas</span> <span class="badge orange">NHC</span></div>
@@ -259,7 +259,7 @@
                     <div class="product-item" role="button" tabindex="0" id="nhc-two-epac" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
                     <div class="sub-category">Official Advisories (per storm)</div>
                     <div style="padding:3px 12px 5px;">
-                        <select id="nhcadv-storm-select" style="width:100%;background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;">
+                        <select id="nhcadv-storm-select" aria-label="Storm for NHC advisory" style="width:100%;background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;">
                             <option value="">Loading systems…</option>
                         </select>
                         <div id="nhcadv-info" style="margin-top:3px;font-size:9px;line-height:1.4;color:#8b97a3;"></div>
@@ -274,7 +274,7 @@
                     <div class="product-item" role="button" tabindex="0" id="recon-vdm"><span>Vortex Data Message</span> <span class="badge orange">FIX</span></div>
                     <div class="sub-category">Model Guidance (Spaghetti)</div>
                     <div style="padding:3px 12px 5px;">
-                        <select id="adeck-storm-select" style="width:100%;background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;">
+                        <select id="adeck-storm-select" aria-label="Storm for model guidance" style="width:100%;background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;">
                             <option value="">Loading systems…</option>
                         </select>
                         <div id="adeck-cycle-info" style="margin-top:3px;font-size:9px;line-height:1.4;color:#8b97a3;"></div>
@@ -293,7 +293,7 @@
 
                 <!-- CPC CLIMATE OUTLOOKS -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="sun"></i> CPC CLIMATE OUTLOOKS</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="sun"></i> CPC CLIMATE OUTLOOKS</h2>
                     <div class="sub-category">Temperature</div>
                     <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="6-10"><span>6-10 Day Temp</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="8-14"><span>8-14 Day Temp</span></div>
@@ -308,21 +308,21 @@
 
                 <!-- RIVERS & HYDROLOGY -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="waves"></i> RIVERS & HYDROLOGY</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="waves"></i> RIVERS & HYDROLOGY</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="river-gauges"><span>River Gauges (Flood Status)</span> <span class="badge blue">LIVE</span></div>
                     <div class="sub-category">Click gauge for hydrograph &amp; forecast</div>
                 </div>
 
                 <!-- DROUGHT -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="droplets"></i> DROUGHT</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="droplets"></i> DROUGHT</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="drought-monitor"><span>US Drought Monitor</span> <span class="badge orange">USDM</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="cpc-drought-outlook"><span>CPC Drought Outlook</span> <span class="badge blue">CPC</span></div>
                 </div>
 
                 <!-- FIRE & SMOKE -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="flame"></i> FIRE & SMOKE</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="flame"></i> FIRE & SMOKE</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="firms-fires"><span>Active Fires (VIIRS/MODIS)</span> <span class="badge orange">NASA</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="hms-smoke"><span>HMS Smoke Plumes</span> <span class="badge orange">NOAA</span></div>
                     <div class="sub-category">SPC Fire Weather Outlook</div>
@@ -338,7 +338,7 @@
 
                 <!-- AIR QUALITY -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="wind"></i> AIR QUALITY</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="wind"></i> AIR QUALITY</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="airnow-aqi"><span>AQI Monitors</span> <span class="badge green">LIVE</span></div>
                 </div>
 
@@ -348,14 +348,14 @@
 
                 <!-- SOLAR -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="sunrise"></i> SOLAR</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="sunrise"></i> SOLAR</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="solar-terminator"><span>Day/Night Terminator</span> <span class="badge blue">LIVE</span></div>
                     <div class="sub-category">Click map for local sun data</div>
                 </div>
 
                 <!-- OVERLAYS -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="map"></i> OVERLAYS</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="map"></i> OVERLAYS</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="overlay-cities"><span>Cities & Labels</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="overlay-roads"><span>Interstates & Roads</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="overlay-cwa"><span>NWS CWA Boundaries</span></div>
@@ -363,12 +363,13 @@
 
                 <!-- ANALYSIS TOOLS -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="ruler"></i> ANALYSIS TOOLS</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="ruler"></i> ANALYSIS TOOLS</h2>
                     <div class="product-item" role="button" tabindex="0" id="tool-measure"><span>Distance / Bearing</span> <span class="badge blue">TOOL</span></div>
                     <div class="product-item" role="button" tabindex="0" id="tool-range-rings"><span>Range Rings (site)</span> <span class="badge blue">TOOL</span></div>
                     <div class="product-item" role="button" tabindex="0" id="tool-storm-eta"><span>Storm Motion &amp; ETA</span> <span class="badge orange">TOOL</span></div>
                     <div class="sub-category">Procedures (saved display bundles)</div>
                     <div class="product-item" role="button" tabindex="0" id="proc-save"><span>Save Current Display…</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="share-view" title="Copies a link that opens this exact display — site, layers, view — for a colleague"><span>Copy Link to This Display</span> <span class="badge blue">SHARE</span></div>
                     <div id="proc-list" class="proc-list"></div>
                     <div class="sub-category">Settings backup</div>
                     <div class="product-item" role="button" tabindex="0" id="settings-export"><span>Export Settings to File…</span></div>
@@ -377,14 +378,14 @@
 
                 <!-- MODEL GUIDANCE -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="trending-up"></i> MODEL GUIDANCE</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="trending-up"></i> MODEL GUIDANCE</h2>
                     <div class="product-item" role="button" tabindex="0" id="btn-model-compare"><span>Model Comparison</span> <span class="badge green">GFS/EC/CMC</span></div>
                     <div class="product-item" role="button" tabindex="0" id="btn-mos"><span>MOS Guidance</span> <span class="badge blue">MDL</span></div>
                 </div>
 
                 <!-- NWS TEXT PRODUCTS -->
                 <div class="category-group">
-                    <div class="category-label"><i data-lucide="file-text"></i> NWS PRODUCTS</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="file-text"></i> NWS PRODUCTS</h2>
                     <div class="product-item" role="button" tabindex="0" id="btn-text-products"><span>Text Browser</span></div>
                     <div class="product-item" role="button" tabindex="0" id="btn-meteogram"><span>Forecast Meteogram</span></div>
                 </div>
@@ -408,12 +409,13 @@
                 <div class="hud-item"><span class="hud-label">LAT:</span><span id="val-lat" class="hud-value">--.----</span></div>
                 <div class="hud-item"><span id="val-lon" class="hud-value">--.----</span></div>
                 <div class="hud-item"><span class="hud-label">TIME (Z):</span><span id="val-time" class="hud-value">--:--:--</span></div>
+                <div class="hud-item" title="Your local time — every product and advisory is issued in Z"><span class="hud-label">LOCAL:</span><span id="val-local-time" class="hud-value" style="color:#c9d1d9;">--:--</span></div>
                 <div id="hud-sampler-readout" class="hud-item" style="display:none; background:rgba(0, 229, 255, 0.1); padding:2px 10px; border:1px solid #00ffff; border-radius:3px; font-weight:bold; margin-left:15px;">
                     <span class="hud-label" style="color:#00ffff;">DATA SAMPLER:</span><span id="val-sampler" class="hud-value" style="color:#ffff00; font-size:11px;">Move mouse over radar...</span>
                 </div>
                 <div class="hud-item" style="margin-left:auto;">
                     <span class="hud-label">SITE:</span>
-                    <select id="radar-site-select">
+                    <select id="radar-site-select" aria-label="Radar site">
                         <option value="nexrad-n0q-900913">National Mosaic</option>
                         <optgroup label="Southern Region">
                             <option value="ABX">ABX - Albuquerque NM</option>
@@ -605,8 +607,8 @@
                     <button class="btn-icon" id="step-prev-btn" title="Step Back (1 Frame)" style="display:none;"><i data-lucide="chevron-left"></i></button>
                     <button class="btn-icon" id="step-next-btn" title="Step Forward (1 Frame)" style="display:none;"><i data-lucide="chevron-right"></i></button>
                     <div style="display:flex; flex-direction:column; gap:2px; margin-left:10px;">
-                        <span style="font-size:8px; color:var(--text-dim);">DURATION</span>
-                        <select id="loop-duration" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                        <span style="font-size:9px; color:var(--text-dim);">DURATION</span>
+                        <select id="loop-duration" aria-label="Loop duration" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
                             <option value="60">1 Hour</option>
                             <option value="180" selected>3 Hours</option>
                             <option value="360">6 Hours</option>
@@ -614,8 +616,8 @@
                         </select>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:2px;">
-                        <span style="font-size:8px; color:var(--text-dim);">STEP</span>
-                        <select id="loop-step" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                        <span style="font-size:9px; color:var(--text-dim);">STEP</span>
+                        <select id="loop-step" aria-label="Loop frame step" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
                             <option value="5" selected>5 Min</option>
                             <option value="10">10 Min</option>
                             <option value="30">30 Min</option>
@@ -623,23 +625,23 @@
                         </select>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:2px;">
-                        <span style="font-size:8px; color:var(--text-dim);">SPEED</span>
-                        <select id="loop-speed" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                        <span style="font-size:9px; color:var(--text-dim);">SPEED</span>
+                        <select id="loop-speed" aria-label="Loop speed" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
                             <option value="150">Fast</option>
                             <option value="400" selected>Med</option>
                             <option value="1000">Slow</option>
                         </select>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:2px;">
-                        <span style="font-size:8px; color:var(--text-dim);">MODE</span>
-                        <select id="loop-mode" title="Forward wraps to the oldest frame; Rock reverses at each end" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                        <span style="font-size:9px; color:var(--text-dim);">MODE</span>
+                        <select id="loop-mode" aria-label="Loop mode" title="Forward wraps to the oldest frame; Rock reverses at each end" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
                             <option value="forward" selected>Forward</option>
                             <option value="rock">Rock</option>
                         </select>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:2px;">
-                        <span style="font-size:8px; color:var(--text-dim);">DWELL</span>
-                        <select id="loop-dwell" title="Extra hold on the newest frame before the loop wraps" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                        <span style="font-size:9px; color:var(--text-dim);">DWELL</span>
+                        <select id="loop-dwell" aria-label="Loop dwell on newest frame" title="Extra hold on the newest frame before the loop wraps" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
                             <option value="0">Off</option>
                             <option value="700" selected>0.7 s</option>
                             <option value="1500">1.5 s</option>
@@ -653,6 +655,7 @@
                     <span id="val-layer-time" class="hud-value" style="color:var(--accent-cyan); font-weight:bold;">LIVE</span>
                 </div>
                 <div class="control-group">
+                    <button class="btn-icon" id="btn-shortcuts" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><i data-lucide="keyboard"></i></button>
                     <button class="btn-icon" id="btn-health" title="Data Health"><i data-lucide="activity"></i></button>
                     <button class="btn-icon" id="btn-debug" title="Toggle Log"><i data-lucide="bug"></i></button>
                 </div>
@@ -663,6 +666,17 @@
                 <div id="health-rows-container"></div>
             </div>
         </main>
+    </div>
+
+    <!-- Keyboard shortcut sheet (press ?) -->
+    <div id="shortcut-overlay" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="shortcut-title">
+        <div class="modal-panel shortcut-panel">
+            <div class="modal-header">
+                <span id="shortcut-title"><i data-lucide="keyboard"></i> KEYBOARD SHORTCUTS</span>
+                <button id="shortcut-close" class="btn-icon" title="Close (Esc)" aria-label="Close"><i data-lucide="x"></i></button>
+            </div>
+            <div id="shortcut-body" class="shortcut-body"></div>
+        </div>
     </div>
 
     <!-- Context Menu -->
@@ -713,8 +727,8 @@
             </div>
             <div class="modal-toolbar" style="gap:10px; padding:10px; background:#f5f5f5; border-bottom:1px solid #ddd;">
                 <div style="display:flex; flex-direction:column; gap:2px;">
-                    <span style="font-size:8px; color:#666;">STATION</span>
-                    <select id="sounding-station-select" style="padding:4px; font-size:11px; background:#fff; color:#333; border:1px solid #ccc;">
+                    <span style="font-size:10px; color:#7d8790;">STATION</span>
+                    <select id="sounding-station-select" aria-label="Sounding station" style="padding:4px; font-size:11px; background:#fff; color:#333; border:1px solid #ccc;">
                         <optgroup label="Southern Region">
                             <option value="JAN">JAN - Jackson MS</option>
                             <option value="BMX">BMX - Birmingham AL</option>
@@ -802,12 +816,12 @@
                     </select>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:2px;">
-                    <span style="font-size:8px; color:#666;">DATE (UTC)</span>
-                    <input type="date" id="sounding-date-input" style="padding:3px; font-size:11px;">
+                    <span style="font-size:10px; color:#7d8790;">DATE (UTC)</span>
+                    <input type="date" id="sounding-date-input" aria-label="Sounding date (UTC)" style="padding:3px; font-size:11px;">
                 </div>
                 <div style="display:flex; flex-direction:column; gap:2px;">
-                    <span style="font-size:8px; color:#666;">Z-TIME</span>
-                    <select id="sounding-time-select" style="padding:4px; font-size:11px;">
+                    <span style="font-size:10px; color:#7d8790;">Z-TIME</span>
+                    <select id="sounding-time-select" aria-label="Sounding time" style="padding:4px; font-size:11px;">
                         <option value="latest">LATEST</option>
                         <option value="00">00Z (Primary)</option>
                         <option value="06">06Z (Special)</option>
@@ -835,8 +849,8 @@
         </div>
         <div class="modal-toolbar" style="flex-wrap:wrap; gap:10px; padding:10px; background:#111; border-bottom:1px solid var(--border);">
             <div style="display:flex; flex-direction:column; gap:2px;">
-                <span style="font-size:8px; color:var(--text-dim);">LOCATION (WFO)</span>
-                <select id="text-wfo-select" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:4px;">
+                <span style="font-size:10px; color:var(--text-dim);">LOCATION (WFO)</span>
+                <select id="text-wfo-select" aria-label="Forecast office" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:4px;">
                     <optgroup label="National Centers">
                         <option value="NHC">NHC - National Hurricane Center (Miami, FL)</option>
                         <option value="SPC">SPC - Storm Prediction Center (Norman, OK)</option>
@@ -971,8 +985,8 @@
                 </select>
             </div>
             <div style="display:flex; flex-direction:column; gap:2px;">
-                <span style="font-size:8px; color:var(--text-dim);">PRODUCT TYPE</span>
-                <select id="text-product-select" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:4px;">
+                <span style="font-size:10px; color:var(--text-dim);">PRODUCT TYPE</span>
+                <select id="text-product-select" aria-label="Text product type" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:4px;">
                     <optgroup label="Forecasts & Discussions">
                         <option value="AFD">Area Forecast Discussion (AFD)</option>
                         <option value="ZFP">Zone Forecast Product (ZFP)</option>
@@ -1027,8 +1041,8 @@
                 </select>
             </div>
             <div style="display:flex; flex-direction:column; gap:2px;">
-                <span style="font-size:8px; color:var(--text-dim);">VERSION / HISTORY</span>
-                <select id="text-version-select" style="min-width:180px; background:#000; color:#fff; border:1px solid var(--border); font-size:10px; padding:4px;">
+                <span style="font-size:10px; color:var(--text-dim);">VERSION / HISTORY</span>
+                <select id="text-version-select" aria-label="Product version" style="min-width:180px; background:#000; color:#fff; border:1px solid var(--border); font-size:10px; padding:4px;">
                     <option value="">-- Select Product First --</option>
                 </select>
             </div>
@@ -1050,17 +1064,17 @@
             </span>
         </div>
         <div class="modal-toolbar" style="gap:8px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;">
-            <input id="model-place" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:140px;" />
+            <input id="model-place" aria-label="Place for model comparison" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:140px;" />
             <button id="model-go" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Go</button>
             <button id="model-refresh" class="btn-primary" style="height:28px; padding:0 12px; font-weight:700; background:#1a2733;">Map Center</button>
-            <select id="model-var" title="Field" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+            <select id="model-var" aria-label="Model comparison field" title="Field" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
                 <option value="temperature_2m" selected>Temperature</option>
                 <option value="dewpoint_2m">Dewpoint</option>
                 <option value="wind_speed_10m">Wind</option>
                 <option value="precipitation">Precip</option>
                 <option value="pressure_msl">MSLP</option>
             </select>
-            <select id="model-days" title="Forecast range" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+            <select id="model-days" aria-label="Model comparison forecast range" title="Forecast range" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
                 <option value="3">3 days</option>
                 <option value="5">5 days</option>
                 <option value="7" selected>7 days</option>
@@ -1068,7 +1082,7 @@
             <span id="model-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
         </div>
         <div class="floating-panel-body" id="model-body" style="padding:10px;">
-            <div style="color:#6b7a88; font-size:12px; padding:20px; line-height:1.5;">Hit <b style="color:#cdd6df;">Map Center</b> to compare GFS, ECMWF IFS, CMC GEM, ICON and ECMWF AIFS at the centre of the active panel.</div>
+            <div style="color:#7d8790; font-size:12px; padding:20px; line-height:1.5;">Hit <b style="color:#cdd6df;">Map Center</b> to compare GFS, ECMWF IFS, CMC GEM, ICON and ECMWF AIFS at the centre of the active panel.</div>
         </div>
     </div>
 
@@ -1079,10 +1093,10 @@
             <button id="close-mos-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
         </div>
         <div class="modal-toolbar" style="gap:8px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;">
-            <input id="mos-station" type="text" value="KJAN" maxlength="4" placeholder="ICAO" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:70px; text-transform:uppercase;" />
+            <input id="mos-station" aria-label="MOS station (ICAO)" type="text" value="KJAN" maxlength="4" placeholder="ICAO" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:70px; text-transform:uppercase;" />
             <button id="mos-go" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Go</button>
             <button id="mos-nearest" class="btn-primary" style="height:28px; padding:0 12px; font-weight:700; background:#1a2733;">Nearest</button>
-            <select id="mos-model" title="Guidance model" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+            <select id="mos-model" aria-label="MOS guidance model" title="Guidance model" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
                 <option value="GFS" selected>GFS MOS (MAV)</option>
                 <option value="MEX">GFS Extended (MEX)</option>
                 <option value="LAV">LAMP (hourly)</option>
@@ -1093,7 +1107,7 @@
             <span id="mos-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
         </div>
         <div class="floating-panel-body" id="mos-body" style="padding:10px;">
-            <div style="color:#6b7a88; font-size:12px; padding:20px; line-height:1.5;">Station guidance from MDL's MOS bulletins.</div>
+            <div style="color:#7d8790; font-size:12px; padding:20px; line-height:1.5;">Station guidance from MDL's MOS bulletins.</div>
         </div>
     </div>
 
@@ -1103,10 +1117,10 @@
             <button id="close-meteogram-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
         </div>
         <div class="modal-toolbar" style="gap:8px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;">
-            <input id="meteogram-place" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:150px;" />
+            <input id="meteogram-place" aria-label="Place for meteogram" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:150px;" />
             <button id="meteogram-go" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Go</button>
             <button id="meteogram-refresh" class="btn-primary" style="height:28px; padding:0 12px; font-weight:700; background:#1a2733;">Map Center</button>
-            <select id="meteogram-hours" title="Forecast range" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+            <select id="meteogram-hours" aria-label="Meteogram forecast range" title="Forecast range" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
                 <option value="12">12 h</option>
                 <option value="24">24 h</option>
                 <option value="36">36 h</option>
@@ -1118,7 +1132,7 @@
             <span id="meteogram-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
         </div>
         <div class="floating-panel-body" id="meteogram-body" style="padding:10px;">
-            <div style="color:#6b7a88; font-size:12px; padding:20px; line-height:1.5;">Hit <b style="color:#cdd6df;">Load @ Map Center</b> to pull the NWS hourly forecast for the center of the active pane.</div>
+            <div style="color:#7d8790; font-size:12px; padding:20px; line-height:1.5;">Hit <b style="color:#cdd6df;">Load @ Map Center</b> to pull the NWS hourly forecast for the center of the active pane.</div>
         </div>
     </div>
 
@@ -1133,7 +1147,7 @@
         </div>
         <div id="vad-meta" style="font-size:10px; color:#8b97a3; padding:6px 12px; border-bottom:1px solid var(--border);">Select a radar SITE, then open this panel.</div>
         <div class="floating-panel-body" id="vad-body" style="padding:8px; overflow:auto;">
-            <div style="color:#6b7a88; font-size:12px; padding:20px;">Loading VAD wind profile…</div>
+            <div style="color:#7d8790; font-size:12px; padding:20px;">Loading VAD wind profile…</div>
         </div>
     </div>
 
@@ -1142,21 +1156,21 @@
         <div class="floating-panel-header" id="skewt-drag">
             <span><i data-lucide="git-commit"></i> INTERACTIVE SKEW-T</span>
             <div style="display:flex; gap:8px; align-items:center;">
-                <select id="skewt-source" title="Observed sounding or model forecast sounding" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;">
+                <select id="skewt-source" aria-label="Sounding source" title="Observed sounding or model forecast sounding" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;">
                     <option value="raob" selected>RAOB — observed</option>
                     <option value="gfs_hrrr">HRRR — 3 km forecast</option>
                     <option value="gfs_seamless">GFS — global forecast</option>
                 </select>
-                <select id="skewt-station" title="Upper-air (RAOB) site — balloon launches only" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
-                <input id="skewt-place" type="text" placeholder="KMEM, 39501, Gulfport MS" title="Forecast soundings work anywhere — any airport id, ZIP, city, or lat,lon. Blank uses the active pane's centre." style="display:none; width:150px; background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;">
-                <select id="skewt-time" title="Sounding time" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <select id="skewt-station" aria-label="Upper-air site" title="Upper-air (RAOB) site — balloon launches only" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <input id="skewt-place" aria-label="Place for forecast sounding" type="text" placeholder="KMEM, 39501, Gulfport MS" title="Forecast soundings work anywhere — any airport id, ZIP, city, or lat,lon. Blank uses the active pane's centre." style="display:none; width:150px; background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;">
+                <select id="skewt-time" aria-label="Sounding time" title="Sounding time" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
                 <button id="skewt-refresh" class="btn-primary" style="height:24px; padding:0 10px; font-weight:700; font-size:10px;">Load</button>
                 <button id="close-skewt-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
             </div>
         </div>
         <div id="skewt-meta" style="font-size:10px; color:#8b97a3; padding:6px 12px; border-bottom:1px solid var(--border);">Pick a site and click Load. RAOB defaults to the balloon site nearest the active pane; HRRR/GFS forecast soundings work at any point — type an airport id, ZIP, city or lat,lon.</div>
         <div class="floating-panel-body" id="skewt-body" style="padding:6px; overflow:auto; display:flex; gap:6px;">
-            <div style="color:#6b7a88; font-size:12px; padding:20px;">Loading sounding…</div>
+            <div style="color:#7d8790; font-size:12px; padding:20px;">Loading sounding…</div>
         </div>
     </div>
 
@@ -1165,8 +1179,8 @@
         <div class="floating-panel-header" id="spcmeso-drag">
             <span><i data-lucide="activity"></i> SPC MESOANALYSIS</span>
             <div style="display:flex; gap:8px; align-items:center;">
-                <select id="spcmeso-sector" title="Sector — shared by every pane" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
-                <select id="spcmeso-layout" title="Number of panes — each shows its own parameter over the same sector" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;">
+                <select id="spcmeso-sector" aria-label="SPC mesoanalysis sector" title="Sector — shared by every pane" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;"></select>
+                <select id="spcmeso-layout" aria-label="SPC mesoanalysis pane count" title="Number of panes — each shows its own parameter over the same sector" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:10px; padding:4px;">
                     <option value="1">1 pane</option>
                     <option value="2">2 panes</option>
                     <option value="4">4 panes</option>
@@ -1237,7 +1251,7 @@
         <div class="guide-panel">
             <div class="guide-header">
                 <span class="guide-title"><i data-lucide="book-open"></i> FX-NET NEXTGEN &mdash; USER GUIDE</span>
-                <input id="guide-search" type="text" placeholder="Search the guide&hellip; (e.g. SRM, preset, loop, tilt)" autocomplete="off">
+                <input id="guide-search" aria-label="Search the user guide" type="text" placeholder="Search the guide&hellip; (e.g. SRM, preset, loop, tilt)" autocomplete="off">
                 <button id="guide-close" class="btn-icon" title="Close (Esc)"><i data-lucide="x"></i></button>
             </div>
             <div class="guide-body">
@@ -1247,6 +1261,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=276"></script>
+    <script src="app.js?v=277"></script>
 </body>
 </html>
