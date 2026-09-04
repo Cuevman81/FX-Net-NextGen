@@ -1110,7 +1110,9 @@ function initMap(paneId) {
         },
         center: savedView ? [savedView[0], savedView[1]] : [-90.18, 32.30],
         zoom: savedView ? savedView[2] : 6,
-        preserveDrawingBuffer: true
+        // MapLibre 5 takes WebGL context options here (was a top-level option
+        // through 3.x); the buffer is kept so pane screenshots/exports work.
+        canvasContextAttributes: { preserveDrawingBuffer: true }
     });
 
     // Suppress harmless MapLibre tile errors
@@ -1414,7 +1416,7 @@ function setupMapLayers(map, paneId) {
             visibility: 'none',
             'text-field': ['get', 'wfo'],
             'text-size': 11,
-            'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+            'text-font': ['Noto Sans Bold'],   // the glyph server carries Noto only; 'Open Sans' 404'd silently
             'text-allow-overlap': false,
             'text-ignore-placement': false,
             'text-padding': 4
@@ -2107,7 +2109,7 @@ function setupMapLayers(map, paneId) {
                 ''
             ],
             'text-size': 12,
-            'text-font': ['Open Sans Bold'],
+            'text-font': ['Noto Sans Bold'],
             'text-allow-overlap': true,
             'text-ignore-placement': true
         },
@@ -12996,7 +12998,7 @@ function updateRadarLegend(paneId) {
     const anyRadar = siteRadarLayers.some(l => {
         try { return m.getLayoutProperty(l, 'visibility') === 'visible'; } catch { return false; }
     });
-    const mosaicVis = (() => { try { return m.getLayoutProperty(mosaicLayer, 'visibility') === 'visible'; } catch { return false; } })();
+    const mosaicVis = isLayerVisible(m, mosaicLayer);   // guarded: probing a missing layer fires a map 'error' event
 
     // Check MRMS layers
     const mrmsEchotopsVis = isLayerVisible(m, 'mrms-echotops-layer');
@@ -14628,6 +14630,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Sep 4, 2026', items: [
+        '<b>MapLibre GL upgraded from 3.6.2 to 5.24.0</b> — the last open item from the audit that was worth doing. The pin was from early 2024; two major lines have shipped since, with the raster and worker performance work this app leans on hardest, tile-loading fixes, and years of bug and security fixes. Only one call in the app changed (<code>preserveDrawingBuffer</code> moved into <code>canvasContextAttributes</code>); nothing else the app uses was touched by the 4.0 or 5.0 breaking changes.',
+        'Verified on the new build before it shipped: base map, site radar, GOES infrared, GeoColor from GIBS, a Level III dual-pol product (the data-URL image source that once broke under the CSP), METAR icons, warning polygons, the SPC outlook, fronts, lightning, CWA labels, river gauges and tropical guidance all drew; popups and the sync cursor work; a second pane came up; and an 18-frame satellite + radar + Level III loop preloaded across both panes and rolled with zero MapLibre error events.',
+        'Two things the new build surfaced, both fixed: the CWA labels and one other label layer asked the glyph server for <b>Open Sans</b>, which it has never carried — on 3.6.2 those requests failed silently, so the labels drew with whatever fallback the browser found. They now use the Noto Sans the rest of the app uses. And the radar legend probed the national mosaic layer before it existed, which MapLibre reports as an error event on every pane refresh; it now checks first.',
+        'Not done, on purpose: splitting the script into modules. The audit rated it a maintainability nicety, not a fault. The section banners and the test loader already give the navigation it would buy, and an ES-module split re-scopes hundreds of shared variables in a 17,000-line global-scope file with 26 unit tests as the only net. Cold-load parse time is not a felt problem on a workstation kept open all shift. MapLibre 6, released this week, is ESM-only and would need the same loading change — it can wait for the same reason.'
+    ]},
     { date: 'Sep 2, 2026 (update 3)', items: [
         '<b>The rest of the audit, built.</b> The Aug 30 review left eighteen open items; everything that could be done without rewriting the app is in this release. What is still deliberately parked: splitting the 17,000-line script into modules and the MapLibre 4/5 upgrade — both are multi-day changes that need their own test pass, not a Tuesday afternoon.',
         '<b>A product that fails now says so on its row.</b> Click a product and the row takes an amber stripe while it loads. If its handler logs a failure, the stripe turns red with a ✕, the reason becomes the row\'s tooltip, and a toast appears bottom-right — no more digging through the diagnostic log to learn why the map stayed empty. Turning the product off clears it.',
