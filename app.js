@@ -665,8 +665,36 @@ function snapToNowCoastTime(date) {
     return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-function nationalRadarUrl() {
-    return 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q/{z}/{x}/{y}.png';
+// National mosaic: NCEP's MRMS quality-controlled base reflectivity (1 km,
+// 2-minute cadence, ~2 h of history on the WMS time dimension) in place of
+// IEM's n0q composite (1 km, 5-minute). It comes from the same GeoServer and
+// palette as the site products, so the legend and data sampler written for
+// sr_bref read the mosaic correctly too — under n0q's own palette they never
+// did. The 5-minute ts window mirrors siteRadarUrlBase so a zoom pulls from
+// one cache bucket. `isoTime` selects a historical frame for the loop.
+function nationalRadarUrl(isoTime) {
+    const tsWindow = Math.floor(Date.now() / 300000);
+    let url = `https://opengeo.ncep.noaa.gov/geoserver/conus/ows?service=wms&version=1.3.0&request=GetMap&layers=conus_bref_qcd&crs=EPSG:3857&bbox={bbox-epsg-3857}&width=512&height=512&format=image/png&transparent=true&tiled=false&ts=${tsWindow}`;
+    if (isoTime) url += `&time=${encodeURIComponent(isoTime)}`;
+    return url;
+}
+// Frame times MRMS actually holds (newest last), from the layer's own
+// capabilities document — the same trick /api/gibs-times does for GOES, but
+// this server is CORS-open so no proxy is needed. Cached a minute.
+let _mrmsTimesCache = { t: 0, times: [] };
+async function fetchMrmsTimes() {
+    if (Date.now() - _mrmsTimesCache.t < 60000 && _mrmsTimesCache.times.length) return _mrmsTimesCache.times;
+    try {
+        const res = await fetch('https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows?service=wms&version=1.3.0&request=GetCapabilities');
+        const xml = await res.text();
+        const m = /<Dimension name="time"[^>]*>([^<]+)<\/Dimension>/.exec(xml);
+        const times = m ? m[1].split(',').map(x => x.trim()).filter(x => /^\d{4}-\d\d-\d\dT/.test(x)) : [];
+        _mrmsTimesCache = { t: Date.now(), times };
+        return times;
+    } catch (e) {
+        addLiveLog(`LOOP: MRMS time list unavailable (${e.message}) — national frames fall back to the IEM archive`, '#ffb300');
+        return [];
+    }
 }
 
 // Latest GOES-East frame time per nowCOAST category layer, parsed from the
@@ -1181,11 +1209,13 @@ function initMap(paneId) {
                             const pLabel = periodLabels[paneMrmsQpe[paneId]] || 'QPE';
                             if (valSamplerEl) valSamplerEl.innerText = `MRMS ${pLabel} QPE: ${readout}`;
                         } else {
-                            const prod = paneRadarProducts[paneId] || 'sr_bref';
+                            const mosaic = isLayerVisible(map, 'radar-layer');
+                            const prod = mosaic ? 'sr_bref' : (paneRadarProducts[paneId] || 'sr_bref');
                             const readout = decodeRadarPixel(data[0], data[1], data[2], prod);
                             const prodLabels = { 'sr_bref': 'BREF', 'sr_bvel': 'BVEL', 'bdhc': 'BDHC', 'bdsa': 'STP', 'boha': 'OHA' };
                             const prodLabel = prodLabels[prod] || prod.toUpperCase();
-                            if (valSamplerEl) valSamplerEl.innerText = `${paneRadarSites[paneId] || 'DGX'} ${prodLabel}: ${readout}`;
+                            const who = mosaic ? 'MRMS' : (paneRadarSites[paneId] || 'DGX');
+                            if (valSamplerEl) valSamplerEl.innerText = `${who} ${prodLabel}: ${readout}`;
                         }
                     }
                 } catch (_) {}
@@ -1646,7 +1676,7 @@ function setupMapLayers(map, paneId) {
     map.addSource('radar', {
         type: 'raster',
         tiles: [nationalRadarUrl()],
-        tileSize: 256
+        tileSize: 512
     });
     map.addLayer({ id: 'radar-layer', type: 'raster', source: 'radar', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.9, 'raster-resampling': 'linear', 'raster-fade-duration': 150 } });
 
@@ -8771,7 +8801,25 @@ async function startAnimation() {
 
     // ─── Radar frames (National or Site-Specific) ───
     if (showRad) {
-        if (activeRadarNational) {
+        // MRMS holds ~2 h of 2-minute frames on its time dimension; a longer
+        // national loop has to come from the IEM archive (5-min, IEM's own
+        // palette), so the two never mix inside one loop.
+        const mrmsTimes = (activeRadarNational && durationMin <= 120) ? await fetchMrmsTimes() : [];
+        if (activeRadarNational && mrmsTimes.length) {
+            const step = Math.max(stepMin, 2);
+            let want = Math.min(Math.floor(durationMin / step) || 1, 24);
+            const stride = Math.max(1, Math.round(step / 2));
+            const cutoff = now.getTime() - durationMin * 60000;
+            const usable = mrmsTimes.filter(t => +new Date(t) >= cutoff);
+            const picked = [];
+            for (let i = usable.length - 1; i >= 0 && picked.length < want; i -= stride) picked.unshift(usable[i]);
+            picked.forEach(iso => radFrames.push({
+                tileUrl: nationalRadarUrl(iso), time: new Date(iso),
+                label: `RAD ${iso.substring(11, 16)}Z`
+            }));
+            addLiveLog(`LOOP: national frames from MRMS — ${picked.length} × ${step}-min, quality-controlled`, '#33c27a');
+        } else if (activeRadarNational) {
+            if (durationMin > 120) addLiveLog('LOOP: national loops over 2 h come from the IEM archive (5-min); pick 2 Hours or less for MRMS 2-minute frames', '#ffb300');
             if (durationMin <= 55) {
                 // Use IEM pre-rendered frames (fast)
                 const iemFrames = RADAR_ANIM_LAYERS.filter(f => f.offsetMin <= durationMin);
@@ -9370,7 +9418,7 @@ function getPaneLegend(paneId) {
         // SRM carries the subtracted storm-motion vector — show it like AWIPS.
         const sm = (l3m.product === 'N0S' && l3m.storm_spd > 0)
             ? ` · SM ${Math.round(l3m.storm_dir)}°/${Math.round(l3m.storm_spd)}kt` : '';
-        rows.push({ label: `L3 ${l3m.name || paneL3[paneId].product} · ${paneL3[paneId].station}${l3suffix}${sm}`, color: '#33c27a' });
+        rows.push({ label: `${l3m.source === 'Level II' ? 'L2' : 'L3'} ${l3m.name || paneL3[paneId].product} · ${paneL3[paneId].station}${l3suffix}${sm}`, color: '#33c27a' });
     }
     // Hazards
     add(isLayerVisible(map, 'spc-day1-fill'), 'SPC DAY 1 OUTLOOK', '#ff4d4d', 'spcOutlook');
@@ -10397,7 +10445,12 @@ function productItemActiveOn(pid, item) {
     let isActive = false;
     if (layer === 'airnow-aqi') isActive = isLayerVisible(map, 'airnow-aqi-layer');
     else if (layer === 'metars') isActive = isLayerVisible(map, 'metars-temp');
-    else if (layer === 'radar-l3') isActive = isLayerVisible(map, 'radar-l3-layer') && paneL3[pid] && paneL3[pid].product.charAt(2) === (item.getAttribute('data-l3') || '').charAt(2);
+    else if (layer === 'radar-l3') {
+        const want = item.getAttribute('data-l3') || '';
+        const have = (paneL3[pid] && paneL3[pid].product) || '';
+        // Same moment (3rd char) and same source family (N = Level III, L = Level II).
+        isActive = isLayerVisible(map, 'radar-l3-layer') && !!have && have.charAt(2) === want.charAt(2) && have.charAt(0) === want.charAt(0);
+    }
     else if (layer === 'storm-attr') isActive = isLayerVisible(map, 'storm-attr-cell');
     else if (layer === 'nodd-meso') isActive = isLayerVisible(map, 'meso-circ');
     else if (layer === 'radar-ref') isActive = isLayerVisible(map, 'radar-layer') || isLayerVisible(map, 'site-bref-layer');
@@ -12744,7 +12797,8 @@ function createRadarLegend(paneId) {
 async function loadL3Radar(paneId, station, product) {
     const map = maps[paneId];
     if (!map) return;
-    addLiveLog(`L3 NODD: Loading ${station} ${product}...`, '#33c27a');
+    const srcTag = product.startsWith('L') ? 'L2' : 'L3 NODD';
+    addLiveLog(`${srcTag}: Loading ${station} ${product}...`, '#33c27a');
     try {
         // Cache-buster so every poll truly re-lists the NODD bucket and lands on
         // the newest volume scan (endpoint sets max-age=30; this defeats any stale
@@ -12763,9 +12817,9 @@ async function loadL3Radar(paneId, station, product) {
         paneL3[paneId] = { station, product, meta: data.meta };
         updateHealth('radarL3');
         if (paneId === activePaneId) { refreshTimestampLabel(); updateL3TiltControl(); }
-        addLiveLog(`L3 NODD: ${station} ${data.meta.name} @ ${data.meta.time} (el ${data.meta.elevation}°)`, '#00ff88');
+        addLiveLog(`${srcTag}: ${station} ${data.meta.name} @ ${data.meta.time} (el ${data.meta.elevation}°${data.meta.azimuth_deg ? `, ${data.meta.azimuth_deg}° az` : ''})`, '#00ff88');
     } catch (e) {
-        addLiveLog(`L3 NODD ERROR: ${e.message}`, '#ff3333');
+        addLiveLog(`${srcTag} ERROR: ${e.message}`, '#ff3333');
     }
 }
 
@@ -13041,7 +13095,7 @@ function updateRadarLegend(paneId) {
     if (!m) { legend.classList.remove('visible'); return; }
 
     const siteRadarLayers = ['site-bref-layer', 'site-bvel-layer', 'site-bdhc-layer', 'site-bdsa-layer', 'site-boha-layer'];
-    const mosaicLayer = 'nexrad-layer';
+    const mosaicLayer = 'radar-layer';
     const anyRadar = siteRadarLayers.some(l => {
         try { return m.getLayoutProperty(l, 'visibility') === 'visible'; } catch { return false; }
     });
@@ -13088,7 +13142,7 @@ function updateRadarLegend(paneId) {
         if (!activeProd) { legend.classList.remove('visible'); return; }
 
         if (activeProd === 'sr_bref') {
-            html = buildBarLegend('BASE REFLECTIVITY (dBZ)', NWS_REFLECTIVITY_SCALE.map(s => ({
+            html = buildBarLegend(mosaicVis ? 'MRMS REFLECTIVITY (dBZ)' : 'BASE REFLECTIVITY (dBZ)', NWS_REFLECTIVITY_SCALE.map(s => ({
                 color: `rgb(${s.r},${s.g},${s.b})`,
                 label: `${s.dbz}`
             })));
@@ -13807,7 +13861,7 @@ function startAutoRefresh() {
         updateHealth('radar');
     }, 60 * 1000);
 
-    // National mosaic — IEM n0q updates ~every 2 min, so refresh at that cadence.
+    // National mosaic — MRMS publishes every 2 min, so refresh at that cadence.
     setInterval(() => {
         if (isPlaying) return;
         if (!activeRadarNational) return;
@@ -14678,6 +14732,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Sep 4, 2026 (update 3)', items: [
+        '<b>Super-resolution CC and ZDR from Level II.</b> Two new rows under NODD radar — <b>Correlation Coeff (CC) · SR</b> and <b>Differential Refl (ZDR) · SR</b> — decode the raw Level II volume instead of the Level III product. Same 0.25 km gates, but 0.5° azimuths instead of 1.0°: twice the angular detail, which is what shows a debris signature or a ZDR arc as a shape rather than a smudge. The tilt control works on them (0.5°, 0.9°, 1.3°, 1.8°) and they loop like the other NODD products. The volume is read straight from NOAA\'s public archive: the 0.5° cut is the first 1.4 MB of a 9 MB file, so the lowest tilt renders in under two seconds; higher tilts read the whole volume and take about four. KDP stays Level III on purpose — Level II carries raw differential phase, and the RPG\'s filtered KDP is the better product. One honest difference: Level III clips ZDR at +7.9 dB, Level II does not, so the very high ZDR of birds and insects (up to +20 dB) shows in the palette\'s top bucket instead of being flattened into the one below.',
+        '<b>The national mosaic is now MRMS.</b> NCEP\'s quality-controlled base reflectivity replaces the IEM composite: same 1 km, but every 2 minutes instead of 5, with ground clutter and non-meteorological echo removed. It uses the same palette as the site products — which means the legend and the Data Sampler, both written for that palette, now read the mosaic correctly. (The mosaic had never shown a legend at all: the legend code looked for a layer that did not exist.)',
+        '<b>National loops at 2-minute cadence.</b> With the mosaic on, a loop of up to 2 hours takes its frames from MRMS\'s own frame list — real times, no guessing — and a new <b>2 Hours</b> duration is there to make the most of it. Longer national loops still come from the IEM archive, because MRMS only keeps about two hours and the two palettes should never mix inside one loop; the log says which source a loop used.',
+        'Also: the Level III and Level II rows for the same moment no longer light each other up, and the log names the source (L2 or L3) on every load.'
+    ]},
     { date: 'Sep 4, 2026 (update 2)', items: [
         '<b>Loops cut clean now.</b> Reported as "choppy", and the cause was the opposite of what it looked like: MapLibre cross-fades every paint change over 300 ms unless told otherwise, so each frame flip spent most of a 400 ms hold half-blended with the frame before it — never quite sharp, and at <b>Fast</b> a frame could not finish resolving before the next one started, which is why Fast was quietly clamped to 300 ms. Every loop (satellite, national and site radar, Level III) now flips with no transition at all, the way AWIPS steps frames, and Fast really is 150 ms.',
         '<b>BLEND</b> is a new control beside DWELL for anyone who prefers a dissolve: <b>Off</b> (clean cut, the default), <b>Soft</b> (120 ms) or <b>Smooth</b> (220 ms). A blend never exceeds 60% of the hold, so a frame is always fully resolved before the next one arrives, and it can be changed while a loop is running.',

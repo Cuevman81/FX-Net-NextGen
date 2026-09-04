@@ -602,6 +602,8 @@ def build_srm(station, product, offset=0):
 def build_radar(station, product, offset=0):
     if not _STATION_RE.match(station):
         raise ValueError('invalid station')
+    if _L2_RE.match(product):
+        return build_l2(station, product, offset)   # callers that route here directly (server.py)
     if product not in CAL and product not in V16:
         raise ValueError(f'unsupported product {product}')
     # High-res storm-relative velocity, derived from base velocity. The native
@@ -642,6 +644,215 @@ def build_radar(station, product, offset=0):
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Level II super-resolution dual-pol — products L?C (CC from RHO) and L?X (ZDR)
+# ═══════════════════════════════════════════════════════════════════════════════
+# The Level III dual-pol products above are 0.25 km × 1.0°. The Level II volume
+# the RPG built them from carries the same moments at 0.25 km × 0.5° in its
+# surveillance cuts, and each cut is a contiguous run of bz2 LDM records near
+# the front of the file: the 0.5° cut is the first ~1.4 MB of an ~9 MB volume.
+# So: list the public archive bucket, Range-fetch only as far as the wanted cut,
+# decode the Message 31 radials, bin them onto a regular 0.5° grid and hand the
+# result to the same renderer the Level III products use. Tilt letters follow
+# the Level III convention (0/A/1/B = 0.5/0.9/1.3/1.8°) so the client's tilt
+# control works unchanged. Not offered from Level II: velocity (NCEP's sr_bvel
+# is already super-res) and KDP (Level II holds raw differential phase; the
+# RPG's filtered KDP in N0K is the better product).
+L2_BUCKET = 'https://unidata-nexrad-level2.s3.amazonaws.com'
+_L2_RE = re.compile(r'^L[0A1B][CX]$')
+L2_TILT_DEG = {'0': 0.5, 'A': 0.9, '1': 1.3, 'B': 1.8}
+L2_MOMENT = {'C': ('RHO', 'N0C', 'Correlation Coefficient'),
+             'X': ('ZDR', 'N0X', 'Differential Reflectivity')}
+_L2_P_SITES = {'abc', 'acg', 'aec', 'ahg', 'aih', 'akc', 'apd', 'gua', 'hki', 'hkm', 'hmo', 'hwa'}
+_L2_STEPS = (2_500_000, 5_000_000, 9_000_000, 14_000_000)   # cumulative bytes fetched until the cut is complete
+_S3NS = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
+
+
+def _l2_station4(station):
+    s = station.lower()
+    if len(s) == 4:
+        return s.upper()
+    if s in ('jua', 'sju'):
+        return 'TJUA'
+    return ('P' if s in _L2_P_SITES else 'K') + s.upper()
+
+
+def _l2_keys(st4, offset):
+    """Volume keys in chronological order: today's, plus yesterday's when the
+    offset reaches past today's scans. Skips the MDM sidecar objects."""
+    now = datetime.now(timezone.utc)
+    keys = []
+    for day_off in (0, 1):
+        d = now - timedelta(days=day_off)
+        url = f"{L2_BUCKET}/?prefix={d:%Y/%m/%d}/{st4}/&max-keys=1000"
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'FXNet-Proxy/1.0'})
+            xml = urllib.request.urlopen(req, timeout=15).read()
+            ks = [c.find('s3:Key', _S3NS).text for c in ET.fromstring(xml).findall('s3:Contents', _S3NS)]
+            keys = sorted(k for k in ks if k.endswith('_V06')) + keys
+        except Exception:
+            continue
+        if len(keys) > offset:
+            break
+    return keys
+
+
+def _l2_fetch_more(url, data, upto):
+    """Extend `data` with bytes [len(data), upto) of the object. Returns
+    (data, total_size)."""
+    if upto <= len(data):
+        return data, None
+    req = urllib.request.Request(url, headers={'User-Agent': 'FXNet-Proxy/1.0',
+                                               'Range': f'bytes={len(data)}-{upto - 1}'})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        chunk = r.read()
+        total = r.headers.get('Content-Range', '').rpartition('/')[2]
+    return data + chunk, (int(total) if total.isdigit() else None)
+
+
+def _l2_scan(data, want_el, moment):
+    """Walk the LDM records and gather the first surveillance cut within 0.3°
+    of want_el that carries `moment`. Returns (cut, complete, vol, ended):
+    cut = dict(el, radials=[(az, values, first_gate_m, gate_m)], time),
+    complete = a later cut began (so this one is whole), ended = the file's
+    last record was inside the bytes we have."""
+    pos = 24                                   # 24-byte volume header
+    cuts, order, vol, ended = {}, [], {}, False
+    while pos + 4 <= len(data):
+        size = struct.unpack_from('>i', data, pos)[0]
+        pos += 4
+        last = size < 0
+        size = abs(size)
+        if pos + size > len(data):
+            break                              # record cut off by the Range cap
+        try:
+            raw = bz2.decompress(data[pos:pos + size])
+        except Exception:
+            break
+        pos += size
+        p = 0
+        while p + 28 <= len(raw):
+            msize = struct.unpack_from('>H', raw, p + 12)[0]
+            mtype = raw[p + 15]
+            if mtype != 31:
+                p += 2432                      # every other message type is a fixed frame
+                continue
+            h = p + 28                         # Message 31 header
+            ms, jdate = struct.unpack_from('>IH', raw, h + 4)
+            az = struct.unpack_from('>f', raw, h + 12)[0]
+            elnum = raw[h + 22]
+            el = struct.unpack_from('>f', raw, h + 24)[0]
+            nblocks = struct.unpack_from('>H', raw, h + 30)[0]
+            blocks = {}
+            for i in range(min(nblocks, 10)):
+                off = struct.unpack_from('>I', raw, h + 32 + 4 * i)[0]
+                if off:
+                    blocks[raw[h + off + 1:h + off + 4].decode('ascii', 'replace')] = h + off
+            if 'VOL' in blocks and not vol:
+                b = blocks['VOL']
+                vol = dict(lat=struct.unpack_from('>f', raw, b + 8)[0],
+                           lon=struct.unpack_from('>f', raw, b + 12)[0],
+                           vcp=struct.unpack_from('>H', raw, b + 40)[0])
+            cut = cuts.get(elnum)
+            if cut is None:
+                cut = cuts[elnum] = dict(el=el, radials=[], has=False, time=(jdate, ms))
+                order.append(elnum)
+            if moment in blocks:
+                b = blocks[moment]
+                ngates, r0, gw = struct.unpack_from('>HHH', raw, b + 8)
+                wsize = raw[b + 19]
+                scale, offset = struct.unpack_from('>ff', raw, b + 20)
+                if wsize == 16:
+                    codes = np.frombuffer(raw, '>u2', ngates, b + 28).astype(np.float32)
+                else:
+                    codes = np.frombuffer(raw, np.uint8, ngates, b + 28).astype(np.float32)
+                phys = (codes - offset) / scale
+                phys[codes < 2] = np.nan           # 0 = below threshold, 1 = range folded
+                cut['has'] = True
+                cut['radials'].append((az, phys, r0, gw, el))
+            p += (msize * 2 + 12) if msize else 2432
+        if last:
+            ended = True
+            break
+    # The header angle of a cut's first radial is taken while the antenna is
+    # still settling (0.4° for the 0.5° cut is typical), so judge each cut by
+    # the median angle of its radials and take the closest one within 0.35°.
+    best = None
+    for i, elnum in enumerate(order):
+        c = cuts[elnum]
+        if not c['has'] or len(c['radials']) < 100:
+            continue
+        med = float(np.median([r[4] for r in c['radials']]))
+        d = abs(med - want_el)
+        if d <= 0.35 and (best is None or d < best[0]):
+            best = (d, i, c, med)
+    if best is None:
+        return None, False, vol, ended
+    _d, i, c, med = best
+    c['el'] = round(med, 2)
+    return c, (i + 1 < len(order)), vol, ended
+
+
+def build_l2(station, product, offset=0):
+    if not _STATION_RE.match(station):
+        raise ValueError('invalid station')
+    tilt, mom = product[1], product[2]
+    moment, base, name = L2_MOMENT[mom]
+    want_el = L2_TILT_DEG[tilt]
+    st4 = _l2_station4(station)
+    keys = _l2_keys(st4, offset)
+    if len(keys) <= offset:
+        raise ValueError(f'no recent Level II volume for {st4}' + (f' (scan -{offset})' if offset else ''))
+    key = keys[-1 - offset]
+    url = f"{L2_BUCKET}/{key}"
+    data, total, cut, complete, vol, ended = b'', None, None, False, {}, False
+    for upto in _L2_STEPS:
+        if total is not None and len(data) >= total:
+            break
+        data, t = _l2_fetch_more(url, data, upto if total is None else min(upto, total))
+        total = t or total
+        cut, complete, vol, ended = _l2_scan(data, want_el, moment)
+        if cut and (complete or ended):
+            break
+        if ended:
+            break
+    if not cut or not vol:
+        raise ValueError(f'{name} at {want_el}° is not in this volume (VCP {vol.get("vcp", "?")})')
+    rads = cut['radials']
+    widths = [r[3] for r in rads]
+    gw_m = max(set(widths), key=widths.count)      # gate spacing (m), 250 for these moments
+    gate_km = gw_m / 1000.0
+    pad = int(round(rads[0][2] / gw_m))            # gates between the radar and the first sample
+    ngates = max(len(r[1]) for r in rads)
+    nrad = 720
+    grid = np.full((nrad, pad + ngates), np.nan, np.float32)
+    for az, phys, _r0, _gw, _el in rads:
+        slot = int(az * 2.0 + 0.5) % nrad          # nearest 0.5° slot
+        grid[slot, pad:pad + len(phys)] = phys
+    # A dropped radial would leave a wedge; borrow the neighbour instead.
+    for s in np.flatnonzero(np.all(np.isnan(grid), axis=1)):
+        grid[s] = grid[(s - 1) % nrad]
+    num_bins = pad + ngates
+    jdate, ms = cut['time']
+    t = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(days=jdate - 1, milliseconds=int(ms))
+    dec = dict(lat=vol['lat'], lon=vol['lon'], el=round(float(cut['el']), 2), num_bins=num_bins, num_rad=nrad,
+               gate_km=gate_km, max_range=num_bins * gate_km, az=np.arange(0, 360, 0.5, dtype=np.float32),
+               data=grid, name=name, units=CAL[base]['units'], time=t.strftime('%Y-%m-%d %H:%M:%SZ'))
+    png, coords = render(dec, base)
+    meta = {
+        'station': station, 'product': product, 'name': name + ' (super-res)', 'units': dec['units'],
+        'elevation': dec['el'], 'time': dec['time'], 'max_range_km': round(dec['max_range'], 1), 'key': key,
+        'hires': True, 'azimuth_deg': 0.5, 'gate_km': gate_km, 'source': 'Level II',
+        'vcp': vol.get('vcp'), 'radials': len(rads), 'bytes_read': len(data),
+    }
+    return {
+        'success': True,
+        'image': 'data:image/png;base64,' + base64.b64encode(png).decode(),
+        'coordinates': coords,
+        'meta': meta,
+    }
+
+
 class handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         # Uptime monitors probe with HEAD by default. Answer with headers only —
@@ -672,6 +883,8 @@ class handler(BaseHTTPRequestHandler):
                 result = build_vad(station)
             elif product in ('NMD', 'MESO'):
                 result = build_meso(station)
+            elif _L2_RE.match(product):
+                result = build_l2(station, product, offset)
             else:
                 result = build_radar(station, product, offset)
             body = json.dumps(result).encode()

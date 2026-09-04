@@ -103,6 +103,9 @@
                     <div class="product-item" role="button" tabindex="0" data-layer="radar-l3" data-l3="N0C"><span>Correlation Coeff (CC)</span> <span class="badge green">NODD</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="radar-l3" data-l3="N0X"><span>Differential Refl (ZDR)</span> <span class="badge green">NODD</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="radar-l3" data-l3="N0K"><span>Specific Diff Phase (KDP)</span> <span class="badge green">NODD</span></div>
+                    <div class="sub-category">Level II · super-res dual-pol (0.5° azimuths)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="radar-l3" data-l3="L0C" title="Decoded from the Level II volume: 0.25 km × 0.5° — twice the azimuth resolution of the Level III product"><span>Correlation Coeff (CC) · SR</span> <span class="badge green">L2</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="radar-l3" data-l3="L0X" title="Decoded from the Level II volume: 0.25 km × 0.5° — twice the azimuth resolution of the Level III product"><span>Differential Refl (ZDR) · SR</span> <span class="badge green">L2</span></div>
                     <div id="l3-tilt-control" class="l3-tilt-row" style="display:none; align-items:center; justify-content:space-between; padding:4px 10px; gap:6px;">
                         <span style="font-size:10px; color:#8b97a3;">Elevation tilt</span>
                         <div style="display:flex; align-items:center; gap:6px;">
@@ -610,6 +613,7 @@
                         <span style="font-size:9px; color:var(--text-dim);">DURATION</span>
                         <select id="loop-duration" aria-label="Loop duration" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
                             <option value="60">1 Hour</option>
+                            <option value="120">2 Hours</option>
                             <option value="180" selected>3 Hours</option>
                             <option value="360">6 Hours</option>
                             <option value="720">12 Hours</option>
@@ -1269,6 +1273,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=279"></script>
+    <script src="app.js?v=280"></script>
 </body>
 </html>
