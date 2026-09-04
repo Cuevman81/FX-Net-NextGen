@@ -648,6 +648,14 @@
                             <option value="3000">3 s</option>
                         </select>
                     </div>
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                        <span style="font-size:9px; color:var(--text-dim);">BLEND</span>
+                        <select id="loop-blend" aria-label="Frame blend" title="Off cuts clean between frames like AWIPS; Soft and Smooth dissolve" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:9px; padding:2px;">
+                            <option value="0" selected>Off</option>
+                            <option value="120">Soft</option>
+                            <option value="220">Smooth</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="control-group">
                     <div class="timeline"><div class="timeline-progress"></div></div>
@@ -1261,6 +1269,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=278"></script>
+    <script src="app.js?v=279"></script>
 </body>
 </html>

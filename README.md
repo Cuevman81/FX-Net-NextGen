@@ -40,6 +40,7 @@ In the late 1990s and 2000s, NOAA’s Forecast Systems Laboratory (FSL) engineer
 - **Per-Pane Legend & Data Health**: A live legend stack timestamps every active product (imagery valid time or last fetch), and a collapsible Data Health monitor groups every feed by category with red/amber/green status dots.
 
 - **Shareable displays** — *Copy Link to This Display* puts a link on the clipboard that opens your exact display (site, layers, view, every visible pane) on a colleague's screen. Nothing is stored server-side; the bundle lives in the URL fragment.
+- **Loops cut clean** — frame flips carry no paint transition (MapLibre's default 300 ms cross-fade is off), parked frames cost the GPU nothing, ticks are clock-scheduled, and an optional BLEND dissolve is there for those who want it.
 - **Every floating panel maximizes** (⤢ or double-click its title), a product that fails to load says so on its own row, and the header shows local time beside Z.
 
 ### 🚨 Real-Time Weather Alerts & Vector Watches

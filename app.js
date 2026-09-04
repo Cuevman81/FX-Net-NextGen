@@ -120,6 +120,7 @@ const activeTabMapEntries = () => Object.entries(maps).filter(([id]) => tabOfPan
 let isPlaying = false;
 let isPaused = false;
 let animationTimer = null;
+let loopNextAt = 0;          // clock-based loop scheduling (advanceLoopTick)
 let animationFrameIndex = 0;
 let animationFrames = [];
 let animSatFrames = [];
@@ -8629,6 +8630,39 @@ function rebuildWfoFilter() {
 // stream frame valid at or before it. Both lists must be sorted oldest-first.
 // A master time earlier than the stream's first frame clamps to frame 0 rather
 // than rendering nothing, so a pane never goes blank at the head of the loop.
+// ── Frame blend ──
+// MapLibre cross-fades every paint change over 300 ms unless told otherwise, so
+// each frame flip used to spend most of a 400 ms hold half-blended with the
+// last one — the mushy, never-quite-sharp look — and at Fast a frame could not
+// resolve at all before the next one started. Frames now cut clean by default.
+// BLEND re-introduces a short, deliberate dissolve for anyone who prefers it,
+// capped at 60% of the hold so every frame is fully resolved before the next.
+function loopBlendMs() {
+    const sel = parseInt(document.getElementById('loop-blend')?.value ?? '0') || 0;
+    const speedMs = parseInt(document.getElementById('loop-speed')?.value) || 400;
+    return Math.min(sel, Math.round(Math.max(speedMs, 100) * 0.6));
+}
+function loopBlendTransition() { return { duration: loopBlendMs(), delay: 0 }; }
+// Clean cut: the outgoing frame lingers 60 ms so a tile still uploading can't
+// leave a hole. Blend: the fade-out is the overlap, so both frames move at once.
+function loopHideDelayMs() { return loopBlendMs() > 0 ? 0 : 60; }
+function applyLoopBlend() {
+    const t = loopBlendTransition();
+    Object.values(maps).forEach(m => {
+        let style;
+        try { style = m && m.getStyle(); } catch (_) { return; }
+        (style && style.layers || []).forEach(l => {
+            if (/^anim-(sat|rad|l3)-lyr-/.test(l.id)) {
+                try { m.setPaintProperty(l.id, 'raster-opacity-transition', t); } catch (_) {}
+            }
+        });
+    });
+}
+function initLoopBlend() {
+    document.getElementById('loop-blend')?.addEventListener('change', applyLoopBlend);
+    document.getElementById('loop-speed')?.addEventListener('change', applyLoopBlend);
+}
+
 function buildTimeIndex(masterTimes, frameTimes) {
     const table = [];
     let j = 0;
@@ -8661,7 +8695,7 @@ async function startAnimation() {
     const durationMin = parseInt(document.getElementById('loop-duration').value) || 60;
     const stepMin = parseInt(document.getElementById('loop-step').value) || 5;
     let speedMs = parseInt(document.getElementById('loop-speed').value) || 400;
-    const holdMs = Math.max(speedMs, 300);
+    const holdMs = Math.max(speedMs, 100);
     const playBtn = document.getElementById('play-btn');
     if (playBtn) playBtn.innerHTML = '<i data-lucide="pause"></i>';
     try { lucide.createIcons(); } catch (_) {}
@@ -8888,7 +8922,8 @@ async function startAnimation() {
                     map.addLayer({ id: lyrId, type: 'raster', source: srcId,
                         layout: { visibility: 'visible' },
                         paint: {
-                            'raster-opacity': 0.01,
+                            'raster-opacity': 0,
+                            'raster-opacity-transition': loopBlendTransition(),
                             'raster-resampling': 'nearest',
                             'raster-fade-duration': 0
                         }
@@ -8910,7 +8945,8 @@ async function startAnimation() {
                     map.addLayer({ id: lyrId, type: 'raster', source: srcId,
                         layout: { visibility: 'visible' },
                         paint: {
-                            'raster-opacity': 0.01,
+                            'raster-opacity': 0,
+                            'raster-opacity-transition': loopBlendTransition(),
                             'raster-resampling': 'nearest',
                             'raster-fade-duration': 0
                         }
@@ -8940,7 +8976,8 @@ async function startAnimation() {
                     map.addLayer({ id: lyrId, type: 'raster', source: srcId,
                         layout: { visibility: 'visible' },
                         paint: {
-                            'raster-opacity': 0.01,
+                            'raster-opacity': 0,
+                            'raster-opacity-transition': loopBlendTransition(),
                             'raster-resampling': 'nearest',
                             'raster-fade-duration': 0
                         }
@@ -8993,6 +9030,7 @@ async function startAnimation() {
             animationTimer = setTimeout(waitForAllPanes, 300);
         }
     };
+    loopNextAt = 0;
     animationTimer = setTimeout(waitForAllPanes, 800);
 }
 
@@ -9019,9 +9057,15 @@ function advanceLoopTick() {
     animationFrameIndex = Math.max(0, Math.min(animationFrameIndex, last));
 
     const speedMs = parseInt(document.getElementById('loop-speed').value) || 400;
-    const holdMs = Math.max(speedMs, 300);
+    const holdMs = Math.max(speedMs, 100);
     const dwellMs = parseInt(document.getElementById('loop-dwell')?.value ?? '0') || 0;
-    animationTimer = setTimeout(advanceLoopTick, atNewest ? holdMs + dwellMs : holdMs);
+    // Schedule against the clock rather than "hold after this tick finished":
+    // the paint calls above cost a few milliseconds each, and on a 4- or 8-pane
+    // display those milliseconds accumulated into a visibly uneven cadence.
+    const wantMs = atNewest ? holdMs + dwellMs : holdMs;
+    const nowT = performance.now();
+    loopNextAt = (loopNextAt > 0 && nowT - loopNextAt < wantMs) ? loopNextAt + wantMs : nowT + wantMs;
+    animationTimer = setTimeout(advanceLoopTick, Math.max(0, loopNextAt - nowT));
 }
 
 function renderCurrentFrame() {
@@ -9031,8 +9075,12 @@ function renderCurrentFrame() {
     if (animationFrameIndex < 0) animationFrameIndex = totalFrames - 1;
     if (animationFrameIndex >= totalFrames) animationFrameIndex = 0;
 
-    // Toggle satellite frame opacity with 60ms retention buffer to eliminate black-out flicker
-    // Non-active frames stay at 0.01 (not 0) to keep MapLibre loading their tiles
+    // Parked frames sit at opacity 0: MapLibre skips drawing them (drawRaster
+    // returns early at 0) but keeps their tiles loaded, since "hidden" is a
+    // visibility/zoom test, not an opacity one. They used to sit at 0.01, which
+    // meant every render drew every parked frame — 50+ raster layers per pane.
+    // The outgoing frame lingers briefly (loopHideDelayMs) so a tile that is
+    // still uploading can never leave a black hole.
     if (animSatFrames.length > 0) {
         const si = animSatIndex[animationFrameIndex] ?? Math.min(animationFrameIndex, animSatFrames.length - 1);
         if (si !== animLastSi) {
@@ -9044,16 +9092,15 @@ function renderCurrentFrame() {
                 if (prevSi >= 0 && prevSi !== si) {
                     setTimeout(() => {
                         if (m && m.getLayer(`anim-sat-lyr-${prevSi}`)) {
-                            m.setPaintProperty(`anim-sat-lyr-${prevSi}`, 'raster-opacity', 0.01);
+                            m.setPaintProperty(`anim-sat-lyr-${prevSi}`, 'raster-opacity', 0);
                         }
-                    }, 60);
+                    }, loopHideDelayMs());
                 }
             });
             animLastSi = si;
         }
     }
 
-    // Toggle radar frame opacity with 60ms retention buffer to eliminate black-out flicker
     if (animRadFrames.length > 0) {
         const ri = animRadIndex[animationFrameIndex] ?? Math.min(animationFrameIndex, animRadFrames.length - 1);
         if (ri !== animLastRi) {
@@ -9065,9 +9112,9 @@ function renderCurrentFrame() {
                 if (prevRi >= 0 && prevRi !== ri) {
                     setTimeout(() => {
                         if (m && m.getLayer(`anim-rad-lyr-${prevRi}`)) {
-                            m.setPaintProperty(`anim-rad-lyr-${prevRi}`, 'raster-opacity', 0.01);
+                            m.setPaintProperty(`anim-rad-lyr-${prevRi}`, 'raster-opacity', 0);
                         }
-                    }, 60);
+                    }, loopHideDelayMs());
                 }
             });
             animLastRi = ri;
@@ -9093,9 +9140,9 @@ function renderCurrentFrame() {
             if (prevIdx >= 0) {
                 setTimeout(() => {
                     if (m && m.getLayer(`anim-l3-lyr-${prevIdx}`)) {
-                        m.setPaintProperty(`anim-l3-lyr-${prevIdx}`, 'raster-opacity', 0.01);
+                        m.setPaintProperty(`anim-l3-lyr-${prevIdx}`, 'raster-opacity', 0);
                     }
-                }, 60);
+                }, loopHideDelayMs());
             }
             animL3Last[pid] = idx;
         });
@@ -14491,6 +14538,7 @@ function initPlayButton() {
     if (nextBtn) nextBtn.addEventListener('click', stepNextFrame);
 
     initLoopKeys();
+    initLoopBlend();
 }
 
 // AWIPS D2D is driven from the keyboard during an event — you step frames
@@ -14630,6 +14678,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Sep 4, 2026 (update 2)', items: [
+        '<b>Loops cut clean now.</b> Reported as "choppy", and the cause was the opposite of what it looked like: MapLibre cross-fades every paint change over 300 ms unless told otherwise, so each frame flip spent most of a 400 ms hold half-blended with the frame before it — never quite sharp, and at <b>Fast</b> a frame could not finish resolving before the next one started, which is why Fast was quietly clamped to 300 ms. Every loop (satellite, national and site radar, Level III) now flips with no transition at all, the way AWIPS steps frames, and Fast really is 150 ms.',
+        '<b>BLEND</b> is a new control beside DWELL for anyone who prefers a dissolve: <b>Off</b> (clean cut, the default), <b>Soft</b> (120 ms) or <b>Smooth</b> (220 ms). A blend never exceeds 60% of the hold, so a frame is always fully resolved before the next one arrives, and it can be changed while a loop is running.',
+        'Two things underneath that also help the cadence. Parked frames used to sit at 1% opacity so their tiles stayed loaded — which meant every render drew every parked frame, fifty-odd raster layers per pane doing nothing visible. They now sit at 0, which MapLibre skips outright while still keeping their tiles resident (checked against the library source). And the tick is scheduled against the clock rather than "hold after this tick finished", so the few milliseconds each flip costs no longer accumulate into an uneven rhythm on a 4- or 8-pane display.',
+        'What cannot be smoothed: the data cadence. GOES imagery from GIBS arrives every 10 minutes, NEXRAD every 4–6, so a 5-minute step is already at the source. Anything smoother than that would be invented motion, and the app will not do it.'
+    ]},
     { date: 'Sep 4, 2026', items: [
         '<b>MapLibre GL upgraded from 3.6.2 to 5.24.0</b> — the last open item from the audit that was worth doing. The pin was from early 2024; two major lines have shipped since, with the raster and worker performance work this app leans on hardest, tile-loading fixes, and years of bug and security fixes. Only one call in the app changed (<code>preserveDrawingBuffer</code> moved into <code>canvasContextAttributes</code>); nothing else the app uses was touched by the 4.0 or 5.0 breaking changes.',
         'Verified on the new build before it shipped: base map, site radar, GOES infrared, GeoColor from GIBS, a Level III dual-pol product (the data-URL image source that once broke under the CSP), METAR icons, warning polygons, the SPC outlook, fronts, lightning, CWA labels, river gauges and tropical guidance all drew; popups and the sync cursor work; a second pane came up; and an 18-frame satellite + radar + Level III loop preloaded across both panes and rolled with zero MapLibre error events.',
