@@ -115,13 +115,13 @@ The whole tropical section follows **one active storm**: picking a system in eit
 ## 🚀 Cloud Deployment (Vercel)
 This project is configured for instant cloud hosting on **Vercel** with no managed backend:
 - **Edge Rewrites (`vercel.json`)**: Bypass strict CORS on government servers by proxying NOAA/NWS/Aviation Weather Center endpoints at the global edge.
-- **Serverless Python (`api/`)** — ten lightweight, dependency-light functions:
+- **Serverless Python (`api/`)** — nine lightweight, dependency-light functions:
   - `radar-l3.py` — decodes NEXRAD Level III (NODD) dual-pol, storm-relative velocity, storm tracks & VAD to georeferenced PNGs/GeoJSON (stdlib + numpy/Pillow only; no MetPy).
   - `adeck.py` — the tropical workhorse. Proxies ATCF decks and NHC indexes that send no CORS headers: a-deck model guidance (`?id=`), the run-to-run official forecast history (`?fcst=`), best track (`?btk=`), SHIPS (`?ships=`), CIRA RI guidance (`?rip=`), the active-storm index with AWIPS bins (`?nhc=`/`?list=`), and the NHC advisory-graphics KMZ fetch-and-unzip backstop (`?gis=`).
   - `raob.py` — fetches the high-resolution BUFR radiosonde profile (University of Wyoming) with a decoded-RAOB fallback for the interactive Skew-T.
   - `spc-fire-wx.py`, `wpc-ero.py`, `wpc-mpd.py` — convert SPC/WPC KMZ products to GeoJSON on the fly (stdlib KML parser with XXE guards).
   - `probsevere.py` — locates and serves the newest CIMSS ProbSevere storm-object GeoJSON.
-  - `river-gauges.py`, `drought-monitor.py`, `gibs-times.py` — hydrology, drought GeoJSON, and live satellite frame-time discovery.
+  - `drought-monitor.py`, `gibs-times.py` — drought GeoJSON and live satellite frame-time discovery.
 - **Edge-proxied feeds** — SIGMET/AIRMET, G-AIRMET, PIREP, TAF, CWA, METAR, NDBC, WPC isobars/fronts, and the NHC Tropical Weather Outlooks are pass-through `vercel.json` rewrites rather than functions, adding the CORS headers those government servers omit while staying under Vercel Hobby's 12-function ceiling.
 
 ### 🔒 Hardening

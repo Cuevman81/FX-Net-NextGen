@@ -1,10 +1,6 @@
 {
   "version": 2,
   "functions": {
-    "api/river-gauges.py": {
-      "maxDuration": 60,
-      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
-    },
     "api/drought-monitor.py": {
       "maxDuration": 30,
       "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
