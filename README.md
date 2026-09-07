@@ -115,13 +115,14 @@ The whole tropical section follows **one active storm**: picking a system in eit
 ## 🚀 Cloud Deployment (Vercel)
 This project is configured for instant cloud hosting on **Vercel** with no managed backend:
 - **Edge Rewrites (`vercel.json`)**: Bypass strict CORS on government servers by proxying NOAA/NWS/Aviation Weather Center endpoints at the global edge.
-- **Serverless Python (`api/`)** — nine lightweight, dependency-light functions:
-  - `radar-l3.py` — decodes NEXRAD Level III (NODD) dual-pol, storm-relative velocity, storm tracks & VAD to georeferenced PNGs/GeoJSON (stdlib + numpy/Pillow only; no MetPy).
-  - `adeck.py` — the tropical workhorse. Proxies ATCF decks and NHC indexes that send no CORS headers: a-deck model guidance (`?id=`), the run-to-run official forecast history (`?fcst=`), best track (`?btk=`), SHIPS (`?ships=`), CIRA RI guidance (`?rip=`), the active-storm index with AWIPS bins (`?nhc=`/`?list=`), and the NHC advisory-graphics KMZ fetch-and-unzip backstop (`?gis=`).
-  - `raob.py` — fetches the high-resolution BUFR radiosonde profile (University of Wyoming) with a decoded-RAOB fallback for the interactive Skew-T.
-  - `spc-fire-wx.py`, `wpc-ero.py`, `wpc-mpd.py` — convert SPC/WPC KMZ products to GeoJSON on the fly (stdlib KML parser with XXE guards).
-  - `probsevere.py` — locates and serves the newest CIMSS ProbSevere storm-object GeoJSON.
-  - `drought-monitor.py`, `gibs-times.py` — drought GeoJSON and live satellite frame-time discovery.
+- **Serverless Python (`api/`)** — two function bundles, not one per feed. Vercel builds a separate bundle for every file in `api/` and its Python runtime installs the root `requirements.txt` into all of them with no tree-shaking, so eight stdlib-only feeds were each carrying ~45 MB of numpy and Pillow they never imported. Everything except the radar decoder now routes through a single entrypoint:
+  - `proxy.py` — the only entrypoint for the eight dependency-free feeds. `vercel.json` rewrites each public path to `/api/proxy?__fn=<feed>`, so the URLs the frontend calls are unchanged, and the feed modules beside it (`_adeck.py`, `_raob.py`, …) keep their own parsing, caching and error handling. A leading underscore is how Vercel is told a file in `api/` is a helper rather than a route. Feeds are imported lazily, so a cold start loads only the one being asked for.
+  - `radar-l3.py` — the one function that genuinely needs numpy and Pillow, so it stays in its own bundle with its own 2 GB memory ceiling. Decodes NEXRAD Level III (NODD) dual-pol, storm-relative velocity, storm tracks & VAD to georeferenced PNGs/GeoJSON (stdlib + numpy/Pillow only; no MetPy).
+  - `_adeck.py` — the tropical workhorse. Proxies ATCF decks and NHC indexes that send no CORS headers: a-deck model guidance (`?id=`), the run-to-run official forecast history (`?fcst=`), best track (`?btk=`), SHIPS (`?ships=`), CIRA RI guidance (`?rip=`), the active-storm index with AWIPS bins (`?nhc=`/`?list=`), and the NHC advisory-graphics KMZ fetch-and-unzip backstop (`?gis=`).
+  - `_raob.py` — fetches the high-resolution BUFR radiosonde profile (University of Wyoming) with a decoded-RAOB fallback for the interactive Skew-T.
+  - `_spc_fire_wx.py`, `_wpc_ero.py`, `_wpc_mpd.py` — convert SPC/WPC KMZ products to GeoJSON on the fly (stdlib KML parser with XXE guards).
+  - `_probsevere.py` — locates and serves the newest CIMSS ProbSevere storm-object GeoJSON.
+  - `_drought_monitor.py`, `_gibs_times.py` — drought GeoJSON and live satellite frame-time discovery. USDM ships ~268k points at 14 decimal places (28 MB); the function rounds to 4 (~11 m, well under a pixel at the zooms this is drawn at), drops the three properties the client never reads, and returns ~5 MB.
 - **Edge-proxied feeds** — SIGMET/AIRMET, G-AIRMET, PIREP, TAF, CWA, METAR, NDBC, WPC isobars/fronts, and the NHC Tropical Weather Outlooks are pass-through `vercel.json` rewrites rather than functions, adding the CORS headers those government servers omit while staying under Vercel Hobby's 12-function ceiling.
 
 ### 🔒 Hardening

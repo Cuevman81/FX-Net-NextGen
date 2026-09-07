@@ -123,7 +123,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 ts = q.get('ts', [''])[0]
                 if not station or not ts:
                     raise ValueError('station and ts are required')
-                raob = load_api('raob.py', 'raob')
+                raob = load_api('_raob.py', 'raob')
                 result = raob.get_raob(wmo, station, ts)
                 self._send_json(result, 200 if result.get('success') else 404)
             except Exception as e:
@@ -132,7 +132,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         elif path == '/api/probsevere':
             # Reuse the Vercel function (newest-file discovery + property trim).
             try:
-                ps = load_api('probsevere.py', 'probsevere')
+                ps = load_api('_probsevere.py', 'probsevere')
                 self._send_json(ps.latest_probsevere())
             except Exception as e:
                 self._send_json({'type': 'FeatureCollection', 'features': [], 'error': str(e)}, 502)
@@ -163,7 +163,10 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                             data = response.read()
                     else:
                         raise he
-                self._send(200, 'application/json', data)
+                # Reshape exactly as the deployed function does, so local and
+                # prod serve the same ~5 MB payload rather than the raw 28 MB.
+                dm_mod = load_api('_drought_monitor.py', 'drought_monitor')
+                self._send(200, 'application/json', dm_mod.slim_usdm(data))
             except Exception as e:
                 self._send_json({'error': str(e)}, 500)
 
@@ -172,7 +175,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 qs = parse_qs(urlparse(self.path).query)
                 day = qs.get('day', ['1'])[0]
-                ero_mod = load_api('wpc-ero.py', 'wpc_ero')
+                ero_mod = load_api('_wpc_ero.py', 'wpc_ero')
                 if day not in ero_mod.ERO_KMZ:
                     day = '1'
                 self._send_json(ero_mod.kmz_to_geojson(day))
@@ -184,7 +187,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 qs = parse_qs(urlparse(self.path).query)
                 day = qs.get('day', ['1'])[0]
-                fw_mod = load_api('spc-fire-wx.py', 'spc_fire_wx')
+                fw_mod = load_api('_spc_fire_wx.py', 'spc_fire_wx')
                 if day not in fw_mod.FIREWX_KMZ:
                     day = '1'
                 self._send_json(fw_mod.kmz_to_geojson(day))
@@ -221,7 +224,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
                 layer = qs.get('layer', ['GOES-East_ABI_GeoColor'])[0]
                 tms = qs.get('tms', ['GoogleMapsCompatible_Level7'])[0]
                 n = max(1, min(int(qs.get('n', ['30'])[0]), 60))
-                gt = load_api('gibs-times.py', 'gibs_times')
+                gt = load_api('_gibs_times.py', 'gibs_times')
                 self._send_json({'times': gt.recent_times(layer, tms, n)})
             except Exception as e:
                 self._send_json({'error': str(e), 'times': []}, 500)
@@ -230,7 +233,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             # ATCF a-deck model guidance (spaghetti), via the Vercel proxy module.
             try:
                 qs = parse_qs(urlparse(self.path).query)
-                ad = load_api('adeck.py', 'adeck')
+                ad = load_api('_adeck.py', 'adeck')
                 if qs.get('list', [''])[0]:
                     self._send_json({'storms': ad.list_storms()})
                 elif qs.get('nhc', [''])[0]:
@@ -254,7 +257,7 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         elif path == '/api/wpc-mpd':
             # WPC Mesoscale Precipitation Discussions, via the Vercel converter.
             try:
-                mpd_mod = load_api('wpc-mpd.py', 'wpc_mpd')
+                mpd_mod = load_api('_wpc_mpd.py', 'wpc_mpd')
                 self._send_json(mpd_mod.fetch_active_mpds())
             except Exception as e:
                 self._send_json({'error': str(e)}, 500)

@@ -1,39 +1,13 @@
 {
   "version": 2,
   "functions": {
-    "api/drought-monitor.py": {
-      "maxDuration": 30,
-      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
-    },
-    "api/wpc-ero.py": {
-      "maxDuration": 30,
-      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
-    },
-    "api/wpc-mpd.py": {
-      "maxDuration": 30,
+    "api/proxy.py": {
+      "maxDuration": 45,
       "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     },
     "api/radar-l3.py": {
       "maxDuration": 30,
       "memory": 2048,
-      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
-    },
-    "api/gibs-times.py": {
-      "maxDuration": 20,
-      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
-    },
-    "api/probsevere.py": {
-      "maxDuration": 20,
-      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
-    },
-    "api/raob.py": {
-      "maxDuration": 25,
-      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
-    },
-    "api/adeck.py": {
-      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
-    },
-    "api/spc-fire-wx.py": {
       "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     }
   },
@@ -85,6 +59,38 @@
     {
       "source": "/api/ndbc",
       "destination": "https://www.ndbc.noaa.gov/data/latest_obs/latest_obs.txt"
+    },
+    {
+      "source": "/api/adeck",
+      "destination": "/api/proxy?__fn=adeck"
+    },
+    {
+      "source": "/api/drought-monitor",
+      "destination": "/api/proxy?__fn=drought-monitor"
+    },
+    {
+      "source": "/api/gibs-times",
+      "destination": "/api/proxy?__fn=gibs-times"
+    },
+    {
+      "source": "/api/probsevere",
+      "destination": "/api/proxy?__fn=probsevere"
+    },
+    {
+      "source": "/api/raob",
+      "destination": "/api/proxy?__fn=raob"
+    },
+    {
+      "source": "/api/spc-fire-wx",
+      "destination": "/api/proxy?__fn=spc-fire-wx"
+    },
+    {
+      "source": "/api/wpc-ero",
+      "destination": "/api/proxy?__fn=wpc-ero"
+    },
+    {
+      "source": "/api/wpc-mpd",
+      "destination": "/api/proxy?__fn=wpc-mpd"
     }
   ],
   "headers": [
