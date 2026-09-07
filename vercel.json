@@ -2,29 +2,43 @@
   "version": 2,
   "functions": {
     "api/river-gauges.py": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     },
     "api/drought-monitor.py": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     },
     "api/wpc-ero.py": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     },
     "api/wpc-mpd.py": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     },
     "api/radar-l3.py": {
       "maxDuration": 30,
-      "memory": 2048
+      "memory": 2048,
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     },
     "api/gibs-times.py": {
-      "maxDuration": 20
+      "maxDuration": 20,
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     },
     "api/probsevere.py": {
-      "maxDuration": 20
+      "maxDuration": 20,
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     },
     "api/raob.py": {
-      "maxDuration": 25
+      "maxDuration": 25,
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
+    },
+    "api/adeck.py": {
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
+    },
+    "api/spc-fire-wx.py": {
+      "excludeFiles": "{app.js,boot.js,diagnostics.js,index.html,style.css,favicon.svg,vendor/**,docs/**,tests/**,__pycache__/**,server.py,README.md}"
     }
   },
   "rewrites": [
