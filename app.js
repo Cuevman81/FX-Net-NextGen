@@ -12014,7 +12014,8 @@ function modelLastPoint() {
 
 // ─── MOS guidance (IEM parses the MDL bulletins into JSON) ───
 // GFS MOS is NOT being retired. NAM MOS (MET) goes away with NAM itself on
-// 2026-10-06 12 UTC alongside SREF/HREF/HiresW, replaced by RRFS/REFS; MDL
+// 2026-10-14 12 UTC (SCN 26-47, updated 2026-09-09; it has slipped twice) alongside
+// SREF/HREF/HiresW, replaced by RRFS/REFS; MDL
 // points NAM MOS users at GFS MOS or NBM, and LAMP temporarily switches to a
 // GFS MOS input. The panel says so rather than silently serving a dying product.
 // `cycleHrs` is the BULLETIN issuance interval, verified by walking IEM's archive
@@ -12042,7 +12043,8 @@ const MOS_MODELS = [
       rows: ['tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p06', 'q06', 't06_1', 'cig', 'vis', 'pra', 'psn', 'pzr', 'ppl', 's06'] },
     { id: 'NBE', label: 'NBM Ext',  sub: 'National Blend · 12-hourly, extended', cycleHrs: 12, nbm: true,
       rows: ['n_x', 'tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p12', 'q12', 't12_1', 's12'] },
-    { id: 'NAM', label: 'NAM MOS',  sub: 'MET · retires 2026-10-06 12 UTC with NAM', cycleHrs: 6, retiring: true,
+    { id: 'NAM', label: 'NAM MOS',  sub: 'MET · retires 2026-10-14 12 UTC with NAM', cycleHrs: 6, retiring: true,
+      retires: Date.UTC(2026, 9, 14, 12),
       rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p06', 'p12', 'q06', 'q12', 't06_1', 't12_1', 'cig', 'vis', 'obv'] }
 ];
 
@@ -12157,7 +12159,7 @@ function renderMosTable(station, def, rows) {
             ${def.hrrr ? '<br><span style="color:#5b6773;">There is no standalone HRRR MOS. LAMP <b style="color:#8b97a3;">is</b> the HRRR-based '
                 + 'station guidance — MDL statistically melds HRRR into the ceiling, visibility and conditional CIG/VIS elements. '
                 + 'LP1/LC1 and CP1/CC1 run to 25 h; the rest go further.</span>' : ''}
-            ${def.retiring ? '<br><span style="color:#ffb300;">NAM MOS ends 2026-10-06 12 UTC with NAM, SREF, HREF and HiresW. MDL directs users to GFS MOS or NBM.</span>' : ''}
+            ${def.retiring ? '<br><span style="color:#ffb300;">NAM MOS ends 2026-10-14 12 UTC with NAM, SREF, HREF and HiresW, and leaves this menu then. MDL directs users to GFS MOS or NBM.</span>' : ''}
         </div>
         <div style="overflow-x:auto;">
         <table class="mos-table"><thead>
@@ -12185,6 +12187,11 @@ function initMosPanel() {
     if (!panel) return;
     const stationInput = document.getElementById('mos-station');
     const modelSel = document.getElementById('mos-model');
+    // A retired bulletin leaves the menu at its cut-off, so its last, frozen
+    // issuance can never be shown as if it were current guidance.
+    MOS_MODELS.filter(m => m.retires && Date.now() >= m.retires).forEach(m => {
+        modelSel?.querySelector(`option[value="${m.id}"]`)?.remove();
+    });
     const run = () => loadMos(stationInput?.value, modelSel?.value);
     const openBtn = document.getElementById('btn-mos');
     if (openBtn) openBtn.addEventListener('click', () => {
@@ -14740,6 +14747,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Sep 22, 2026 (update 3)', items: [
+        '<b>NAM MOS retires on Oct 14, not Oct 6.</b> NWS moved the retirement of NAM, SREF, HREF, HiresW and NAM MOS again, to <b>14 Oct 12 UTC</b> (Service Change Notice 26-47, updated Sep 9). The MOS panel, its menu and the User Guide now give that date. NAM MOS also removes itself from the menu at that moment, so it can never show its last, frozen bulletin as if it were current guidance.',
+        '<b>A correction to update 2.</b> The Pillow upgrade also closed <b>34 published security advisories</b> against the old version, several rated high. The audit\'s dependency check had wrongly reported none. None of them could be reached in this app: the radar function only writes PNG images and never opens an image or font file from outside, which is where these problems were.'
+    ]},
     { date: 'Sep 22, 2026 (update 2)', items: [
         '<b>The Great Lakes outline is back.</b> NOAA retired the map service the cyan outline of the Great Lakes was drawn from, so it had quietly stopped appearing. The outline of all five lakes and Lake St. Clair now ships with the app itself (Natural Earth, public domain, 80 KB), so it no longer depends on an outside server.',
         '<b>Dual-pol, SRM and Level II radar render about twice as fast.</b> The server\'s image library (Pillow) moved from 11.0 to 12.3, and the newer version compresses the finished PNG two to four times faster. The images are pixel-for-pixel identical; this was checked on six products. Some files come out up to about 12% larger, a few milliseconds more to download, against a few hundred milliseconds saved on every render.',
@@ -15264,7 +15275,7 @@ const USER_GUIDE = [
             <li>Hourly — LAMP</li>
             <li>Every 6 h (00/06/12/18Z) — GFS MOS, NBM Short, NAM MOS</li>
             <li>Every 12 h (00/12Z) — GFS Extended, NBM Extended</li>
-            <li><b>NAM MOS (MET)</b> — flagged <b>RETIRING</b>. It ends <b>2026-10-06 12 UTC</b> along with NAM, SREF, HREF and HiresW, replaced by RRFS/REFS. MDL directs users to GFS MOS or NBM.</li>
+            <li><b>NAM MOS (MET)</b> — flagged <b>RETIRING</b>. It ends <b>2026-10-14 12 UTC</b> along with NAM, SREF, HREF and HiresW, replaced by RRFS/REFS, and leaves the menu at that moment. MDL directs users to GFS MOS or NBM.</li>
         </ul>
         <p>On the question of AI MOS: there isn't one. MDL station guidance is still classical regression, and its modern successor is NBM — statistical blending, not machine learning. The AI in this section is the <b>model</b> (AIFS), not the MOS.</p>` },
 
