@@ -26,6 +26,51 @@ import math
 import numpy as np
 from PIL import Image
 import traceback
+import functools
+import threading
+import time
+
+# One clock for a whole request. Vercel stops this function at maxDuration
+# (30 s), but each urlopen timeout only bounds a single call, and one request
+# can chain several (Level II: two listings, then up to four range reads). So
+# every call draws on a shared network budget and gives up cleanly, with a
+# readable message, before the platform kills it and the browser gets
+# Vercel's own error page. 24 s leaves room to regrid and encode the PNG.
+_NET_BUDGET_S = 24
+_budget = threading.local()
+
+
+class SourceTooSlow(ValueError):
+    """The network budget ran out. A ValueError, so the handler returns the
+    message as a clean 400 instead of a generic 502."""
+
+
+def _budgeted(fn):
+    """Start the budget at a public entry point. Nested entry points
+    (build_radar -> build_l2) share the outer budget instead of resetting it."""
+    @functools.wraps(fn)
+    def wrapper(*a, **k):
+        outer = getattr(_budget, 'deadline', None) is None
+        if outer:
+            _budget.deadline = time.monotonic() + _NET_BUDGET_S
+        try:
+            return fn(*a, **k)
+        finally:
+            if outer:
+                _budget.deadline = None
+    return wrapper
+
+
+def _urlopen(req, cap):
+    """urlopen whose timeout never runs past the request's remaining budget."""
+    deadline = getattr(_budget, 'deadline', None)
+    timeout = cap
+    if deadline is not None:
+        left = deadline - time.monotonic()
+        if left <= 1:
+            raise SourceTooSlow('radar source is responding slowly - try again shortly')
+        timeout = min(cap, left)
+    return urllib.request.urlopen(req, timeout=timeout)
 
 L3_BUCKET = 'https://unidata-nexrad-level3.s3.amazonaws.com'
 _STATION_RE = re.compile(r'^[A-Z0-9]{3,4}$')   # guard against URL injection
@@ -120,11 +165,15 @@ def fetch_latest_key(station, product, offset=0):
         url = f"{L3_BUCKET}/?prefix={st3}_{product}_{d:%Y_%m_%d}_"
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'FXNet-Proxy/1.0'})
-            xml = urllib.request.urlopen(req, timeout=15).read()
+            xml = _urlopen(req, 15).read()
             ns = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
             keys = [c.find('s3:Key', ns).text for c in ET.fromstring(xml).findall('s3:Contents', ns)]
             all_keys = sorted(keys) + all_keys   # yesterday's sort before today's
+        except SourceTooSlow:
+            raise
         except Exception:
+            if day_off == 0:
+                raise   # today's listing failed: report it, don't quietly serve yesterday's scan
             continue
         if len(all_keys) > offset:
             break                                 # today already covers the offset
@@ -353,14 +402,15 @@ def _parse_nst_table(text):
     return cells
 
 
+@_budgeted
 def build_storm_attr(station):
     if not _STATION_RE.match(station):
         raise ValueError('invalid station')
     key = fetch_latest_key(station, 'NST')
     if not key:
         raise ValueError(f'no recent storm-track (NST) data for {station}')
-    raw = urllib.request.urlopen(
-        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), timeout=25).read()
+    raw = _urlopen(
+        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), 25).read()
     pdb, rlat, rlon, buf = _pdb_and_buf(raw)
     prod_time = _read_prod_time(raw, pdb)
 
@@ -443,14 +493,15 @@ def _parse_vad_table(text):
     return [out[a] for a in sorted(out)]
 
 
+@_budgeted
 def build_vad(station):
     if not _STATION_RE.match(station):
         raise ValueError('invalid station')
     key = fetch_latest_key(station, 'NVW')
     if not key:
         raise ValueError(f'no recent VAD wind profile (NVW) for {station}')
-    raw = urllib.request.urlopen(
-        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), timeout=25).read()
+    raw = _urlopen(
+        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), 25).read()
     pdb, rlat, rlon, buf = _pdb_and_buf(raw)
     prod_time = _read_prod_time(raw, pdb)
     text = ''
@@ -497,6 +548,7 @@ def _parse_md_table(text):
     return out
 
 
+@_budgeted
 def build_meso(station):
     """Mesocyclone Detection (NMD, product 141): each detected circulation as a
     GeoJSON point with strength rank, TVS flag, rotational velocity and depth —
@@ -506,8 +558,8 @@ def build_meso(station):
     key = fetch_latest_key(station, 'NMD')
     if not key:
         raise ValueError(f'no recent mesocyclone (NMD) data for {station}')
-    raw = urllib.request.urlopen(
-        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), timeout=25).read()
+    raw = _urlopen(
+        urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'}), 25).read()
     pdb, rlat, rlon, buf = _pdb_and_buf(raw)
     prod_time = _read_prod_time(raw, pdb)
 
@@ -562,7 +614,7 @@ def _fetch_key(station, product, offset=0):
     if not key:
         raise ValueError(f'no recent {product} data for {station}' + (f' (scan -{offset})' if offset else ''))
     req = urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'})
-    return urllib.request.urlopen(req, timeout=25).read(), key
+    return _urlopen(req, 25).read(), key
 
 
 def build_srm(station, product, offset=0):
@@ -577,6 +629,8 @@ def build_srm(station, product, offset=0):
             graw, gkey = _fetch_key(station, cand, offset)
             velprod = cand
             break
+        except SourceTooSlow:
+            raise
         except Exception:
             continue
     if graw is None:
@@ -599,6 +653,7 @@ def build_srm(station, product, offset=0):
     }
 
 
+@_budgeted
 def build_radar(station, product, offset=0):
     if not _STATION_RE.match(station):
         raise ValueError('invalid station')
@@ -612,6 +667,8 @@ def build_radar(station, product, offset=0):
     if _is_srm(product):
         try:
             return build_srm(station, product, offset)
+        except SourceTooSlow:
+            raise
         except Exception as e:
             if product != 'N0S' or offset:
                 raise ValueError(f'SRM tilt unavailable: {e}')
@@ -619,7 +676,7 @@ def build_radar(station, product, offset=0):
     if not key:
         raise ValueError(f'no recent {product} data for {station}')
     req = urllib.request.Request(f"{L3_BUCKET}/{key}", headers={'User-Agent': 'FXNet-Proxy/1.0'})
-    raw = urllib.request.urlopen(req, timeout=25).read()
+    raw = _urlopen(req, 25).read()
     if product in V16:
         dec = decode_l3_v16(raw, product)
         png, coords = render_v16(dec)
@@ -687,10 +744,14 @@ def _l2_keys(st4, offset):
         url = f"{L2_BUCKET}/?prefix={d:%Y/%m/%d}/{st4}/&max-keys=1000"
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'FXNet-Proxy/1.0'})
-            xml = urllib.request.urlopen(req, timeout=15).read()
+            xml = _urlopen(req, 15).read()
             ks = [c.find('s3:Key', _S3NS).text for c in ET.fromstring(xml).findall('s3:Contents', _S3NS)]
             keys = sorted(k for k in ks if k.endswith('_V06')) + keys
+        except SourceTooSlow:
+            raise
         except Exception:
+            if day_off == 0:
+                raise   # today's listing failed: report it, don't quietly serve yesterday's scan
             continue
         if len(keys) > offset:
             break
@@ -704,7 +765,7 @@ def _l2_fetch_more(url, data, upto):
         return data, None
     req = urllib.request.Request(url, headers={'User-Agent': 'FXNet-Proxy/1.0',
                                                'Range': f'bytes={len(data)}-{upto - 1}'})
-    with urllib.request.urlopen(req, timeout=25) as r:
+    with _urlopen(req, 25) as r:
         chunk = r.read()
         total = r.headers.get('Content-Range', '').rpartition('/')[2]
     return data + chunk, (int(total) if total.isdigit() else None)
@@ -793,6 +854,7 @@ def _l2_scan(data, want_el, moment):
     return c, (i + 1 < len(order)), vol, ended
 
 
+@_budgeted
 def build_l2(station, product, offset=0):
     if not _STATION_RE.match(station):
         raise ValueError('invalid station')

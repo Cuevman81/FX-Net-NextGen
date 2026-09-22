@@ -323,7 +323,9 @@ const HEALTH_THRESHOLDS = {
     // genuinely stalled analysis without crying wolf every cycle.
     wpcFronts:  { label: 'WPC Fronts/HL', thresholdMs: 5.5 * 60 * 60 * 1000 },
     wpcQpf:     { label: 'WPC QPF',       thresholdMs: 8 * 60 * 60 * 1000 },
-    radarL3:    { label: 'NODD Dual-Pol', thresholdMs: 15 * 60 * 1000 },
+    // Aged by scan time. Clear-air VCPs run ~10-min volumes and a Level II object only
+    // appears once its volume ends, so a healthy newest scan can be ~20 min old.
+    radarL3:    { label: 'NODD Dual-Pol', thresholdMs: 25 * 60 * 1000 },
     gibsSat:    { label: 'GIBS Satellite', thresholdMs: 60 * 60 * 1000 },
     wpcEro:     { label: 'WPC ERO',       thresholdMs: 12 * 60 * 60 * 1000 },
     // Stamped with the source's own advisory/ingest time, not our fetch time.
@@ -10251,7 +10253,7 @@ async function loadMeteogramAt(latNum, lonNum, presetLabel) {
     const lat = (+latNum).toFixed(4), lon = (+lonNum).toFixed(4);
 
     if (locEl) locEl.textContent = presetLabel ? `Resolving ${presetLabel}…` : 'Resolving location…';
-    body.innerHTML = `<div style="color:#7d8790;font-size:12px;padding:20px;">Fetching NWS hourly forecast for ${presetLabel || (lat + ', ' + lon)}…</div>`;
+    body.innerHTML = `<div style="color:#7d8790;font-size:12px;padding:20px;">Fetching NWS hourly forecast for ${esc(presetLabel || (lat + ', ' + lon))}…</div>`;
     try {
         const pRes = await fetch(`https://api.weather.gov/points/${lat},${lon}`, { headers: { 'Accept': 'application/geo+json' } });
         if (!pRes.ok) throw new Error(pRes.status === 404 ? 'NWS point forecasts cover the U.S. and territories only — pan the map over land in the U.S.' : `points ${pRes.status}`);
@@ -10321,7 +10323,7 @@ function renderMeteogram(body, allPeriods, placeName, genTime, hours) {
     svg.push(`<rect x="0" y="0" width="${W}" height="470" fill="#050505"/>`);
 
     // Title + legend
-    svg.push(`<text x="${mL}" y="18" fill="${C.lab}" font-size="12" font-weight="700">${placeName}</text>`);
+    svg.push(`<text x="${mL}" y="18" fill="${C.lab}" font-size="12" font-weight="700">${esc(placeName)}</text>`);
     svg.push(`<text x="${mL}" y="31" fill="${C.axis}" font-size="9">NWS hourly forecast · next ${N} h${genTime ? ' · issued ' + genTime.substring(11, 16) + 'Z' : ''}</text>`);
     const leg = [['Temp', C.temp], ['Dewpt', C.dew], ['PoP', C.pop], ['Wind', C.wind]];
     let lx = W - mR;
@@ -12815,7 +12817,10 @@ async function loadL3Radar(paneId, station, product) {
         }
         map.setLayoutProperty('radar-l3-layer', 'visibility', 'visible');
         paneL3[paneId] = { station, product, meta: data.meta };
-        updateHealth('radarL3');
+        // Age by the scan's own time, not the download: a stalled bucket must read STALE.
+        // meta.time is 'YYYY-MM-DD HH:MM:SSZ' - the space breaks Date.parse in Safari.
+        const scanMs = Date.parse(String(data.meta?.time || '').replace(' ', 'T'));
+        updateHealth('radarL3', Number.isFinite(scanMs) ? scanMs : undefined);
         if (paneId === activePaneId) { refreshTimestampLabel(); updateL3TiltControl(); }
         addLiveLog(`${srcTag}: ${station} ${data.meta.name} @ ${data.meta.time} (el ${data.meta.elevation}°${data.meta.azimuth_deg ? `, ${data.meta.azimuth_deg}° az` : ''})`, '#00ff88');
     } catch (e) {
@@ -17699,6 +17704,14 @@ function decodeShareState(str) {
         const json = new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
         const proc = JSON.parse(json);
         if (!proc || proc.v !== 2 || !proc.panes || typeof proc.panes !== 'object') return null;
+        // A share link is input from whoever sent it. Its layout is printed into a toast (innerHTML)
+        // and drives the pane grid, so only the layouts the grid actually has are accepted.
+        const n = Number(proc.layout);
+        proc.layout = [1, 2, 4, 8].includes(n) ? n : 1;
+        for (const [k, c] of Object.entries(proc.panes)) {
+            if (!c || typeof c !== 'object') { delete proc.panes[k]; continue; }
+            if ('overlays' in c && !Array.isArray(c.overlays)) c.overlays = [];
+        }
         return proc;
     } catch (_) { return null; }
 }
@@ -17733,7 +17746,7 @@ function applySharedViewFromHash() {
             clearInterval(wait);
             applyProcedure(proc);
             const n = proc.layout || 1;
-            fxToast(`<b>Shared display opened</b> — ${n} pane${n > 1 ? 's' : ''}, ${procLayerCount(proc)} products — applied to the active tab. Your saved procedures are untouched.`, 'info', 8000);
+            fxToast(`<b>Shared display opened</b> — ${esc(n)} pane${n > 1 ? 's' : ''}, ${procLayerCount(proc)} products — applied to the active tab. Your saved procedures are untouched.`, 'info', 8000);
         }
     }, 200);
 }

@@ -45,3 +45,25 @@ test('the hash parser finds v= at the start or after & and ignores everything el
     assert.equal(shareStateFromHash('#v='), null);
     assert.equal(shareStateFromHash('#av=' + enc), null);
 });
+
+test('a shared link cannot smuggle markup or a bogus layout into the page', () => {
+    // layout is printed into a toast via innerHTML and drives the pane grid (audit 2026-09-22 #1)
+    const evil = { v: 2, layout: '<a href="https://example.com/phish">Session expired</a>', panes: {} };
+    assert.equal(decodeShareState(encodeShareState(evil)).layout, 1);
+    for (const bad of [0, 3, 9999, -2, 2.5, null, [], {}]) {
+        assert.equal(decodeShareState(encodeShareState({ v: 2, layout: bad, panes: {} })).layout, 1,
+            `layout ${JSON.stringify(bad)}`);
+    }
+    for (const ok of [1, 2, 4, 8]) {
+        assert.equal(decodeShareState(encodeShareState({ v: 2, layout: ok, panes: {} })).layout, ok);
+    }
+    assert.equal(decodeShareState(encodeShareState({ v: 2, panes: {} })).layout, 1);   // missing = one pane
+});
+
+test('pane entries that are not objects are dropped, and overlays must be a list', () => {
+    const p = decodeShareState(encodeShareState({ v: 2, layout: 2, panes: {
+        1: null, 2: 'x', 3: { overlays: { length: '<img>' } }, 4: { overlays: [{ layer: 'spc-outlook' }] } } }));
+    assert.deepStrictEqual(Object.keys(p.panes), ['3', '4']);
+    assert.deepStrictEqual(p.panes[3].overlays, []);
+    assert.deepStrictEqual(p.panes[4].overlays, [{ layer: 'spc-outlook' }]);
+});

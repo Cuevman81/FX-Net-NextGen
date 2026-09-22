@@ -2,8 +2,9 @@ name: CI
 
 # Vercel builds straight from master and its deploy webhook has been missed
 # before, so this is the only gate between a commit and a blank page: a
-# syntax error in app.js or a bad api/*.py import fails the commit status
-# here first. Under a minute, no dependencies beyond Node and Python.
+# syntax error in app.js or a Python file, or a feed module that fails to
+# import, fails the commit status here first. Under a minute; the only
+# installs are the two packages in requirements.txt.
 on:
   push:
     branches: [master]
@@ -27,6 +28,23 @@ jobs:
 
       - name: Compile every Vercel function and the dev server
         run: python -m py_compile api/*.py server.py
+
+      # py_compile checks syntax only and never runs an import. proxy.py loads its
+      # feeds by name at runtime, so a misspelled FEEDS entry or a bad import inside
+      # a feed would pass the step above and 500 in production. Import them for real.
+      - name: Import the router, every feed it can reach, and radar-l3
+        run: |
+          pip install -r requirements.txt
+          python - <<'PY'
+          import importlib, importlib.util, sys
+          sys.path.insert(0, 'api')
+          import proxy
+          for mod in proxy.FEEDS.values():
+              importlib.import_module(mod)
+          spec = importlib.util.spec_from_file_location('radar_l3', 'api/radar-l3.py')
+          spec.loader.exec_module(importlib.util.module_from_spec(spec))
+          print('imported proxy +', len(proxy.FEEDS), 'feeds + radar-l3')
+          PY
 
       - name: Unit tests
         run: node --test tests/*.test.js
