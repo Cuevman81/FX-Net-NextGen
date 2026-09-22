@@ -8420,7 +8420,9 @@ async function checkNewWatches() {
 async function fetchGreatLakes() {
     if (greatLakesLoaded) return;
     try {
-        const res = await fetch('https://mapservices.weather.noaa.gov/vector/rest/services/basemaps/NWS_Base_Map/MapServer/3/query?where=1%3D1&outFields=*&f=geojson');
+        // Shipped with the app (Natural Earth 1:10m, public domain). The NOAA
+        // basemaps MapServer this used to query was retired and now returns 404.
+        const res = await fetch('vendor/great-lakes.json');
         if (!res.ok) return;
         const data = await res.json();
         greatLakesLoaded = true;
@@ -8883,7 +8885,7 @@ async function startAnimation() {
         await Promise.all(l3Panes.map(async ([pid]) => {
             const { station, product } = paneL3[pid];
             const results = await Promise.all(Array.from({ length: l3Want }, (_, off) =>
-                fetch(`/api/radar-l3?station=${station}&product=${product}&offset=${off}&_=${Date.now()}`)
+                fetch(`/api/radar-l3?station=${station}&product=${product}&offset=${off}`)
                     .then(r => r.json()).catch(() => null)));
             const seen = new Set();
             animL3Frames[pid] = results
@@ -12802,10 +12804,11 @@ async function loadL3Radar(paneId, station, product) {
     const srcTag = product.startsWith('L') ? 'L2' : 'L3 NODD';
     addLiveLog(`${srcTag}: Loading ${station} ${product}...`, '#33c27a');
     try {
-        // Cache-buster so every poll truly re-lists the NODD bucket and lands on
-        // the newest volume scan (endpoint sets max-age=30; this defeats any stale
-        // browser/edge copy on the 120s refresh).
-        const res = await fetch(`/api/radar-l3?station=${station}&product=${product}&_=${Date.now()}`);
+        // No cache-buster: the endpoint sets max-age=30, so the edge answers a
+        // repeat request (another pane, a reload, a product toggled back) in
+        // ~0.25s instead of re-rendering for ~3s. A poll can trail the newest
+        // scan by at most 30s, against a 4-10 min volume cadence.
+        const res = await fetch(`/api/radar-l3?station=${station}&product=${product}`);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'render failed');
         if (map.getSource('radar-l3')) {
@@ -14737,6 +14740,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Sep 22, 2026 (update 2)', items: [
+        '<b>The Great Lakes outline is back.</b> NOAA retired the map service the cyan outline of the Great Lakes was drawn from, so it had quietly stopped appearing. The outline of all five lakes and Lake St. Clair now ships with the app itself (Natural Earth, public domain, 80 KB), so it no longer depends on an outside server.',
+        '<b>Dual-pol, SRM and Level II radar render about twice as fast.</b> The server\'s image library (Pillow) moved from 11.0 to 12.3, and the newer version compresses the finished PNG two to four times faster. The images are pixel-for-pixel identical; this was checked on six products. Some files come out up to about 12% larger, a few milliseconds more to download, against a few hundred milliseconds saved on every render.',
+        '<b>Repeat radar requests come from the cache.</b> Each radar request used to carry a timestamp, which forced the server to decode and render the scan from scratch every time. Without it, the same request within 30 seconds (a second pane on the same radar, a page reload, or switching back to a product) is answered by the host\'s cache in about a quarter of a second instead of about three. The newest scan can now appear up to 30 seconds later than before, against 4 to 10 minutes between scans.'
+    ]},
     { date: 'Sep 22, 2026', items: [
         '<b>Fixes from a second full audit.</b> Five changes, none of them new features. Each one closes a gap the audit found, and each fix was tested before it shipped.',
         '<b>Shared display links are checked before they open.</b> A link from <b>Copy Link to This Display</b> carries its own settings, so whoever sends it chooses them. It can now only ask for a layout the grid actually has (1, 2, 4 or 8 panes) and for pane settings of the right shape; anything else opens as a single pane. Before, a hand-crafted link could put its own text, or a clickable link, inside the "Shared display opened" notice, or hide every pane. The page\'s script policy already stopped such a link from running code; now it cannot place anything on the page either.',
@@ -15923,7 +15931,7 @@ async function fetchStormAttr(paneId, station) {
     if (!map) return;
     addLiveLog(`STI: Loading ${station} storm tracks...`, '#ff2bd0');
     try {
-        const res = await fetch(`/api/radar-l3?station=${station}&product=NST&_=${Date.now()}`);
+        const res = await fetch(`/api/radar-l3?station=${station}&product=NST`);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'STI failed');
         const feats = [];
@@ -15954,7 +15962,7 @@ async function fetchMesoMarkers(paneId, station) {
     if (!map) return;
     addLiveLog(`MESO: Loading ${station} circulation detections...`, '#ff9e3b');
     try {
-        const res = await fetch(`/api/radar-l3?station=${station}&product=NMD&_=${Date.now()}`);
+        const res = await fetch(`/api/radar-l3?station=${station}&product=NMD`);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'NMD failed');
         const fc = data.geojson || { type: 'FeatureCollection', features: [] };
@@ -16092,7 +16100,7 @@ async function loadVad(station) {
     const body = document.getElementById('vad-body');
     if (meta) meta.textContent = `Fetching VAD wind profile for ${station}…`;
     try {
-        const res = await fetch(`/api/radar-l3?station=${station}&product=NVW&_=${Date.now()}`);
+        const res = await fetch(`/api/radar-l3?station=${station}&product=NVW`);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'VAD failed');
         const prof = data.profile || [];
