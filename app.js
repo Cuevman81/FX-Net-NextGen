@@ -2589,8 +2589,9 @@ function setupMapLayers(map, paneId) {
     // ─── Layer 7g2: National storm attribute table (IEM SCIT, all NEXRADs) ───
     // One CORS-open GeoJSON carries every radar's current cell table, so this is
     // a CONUS-wide hail/rotation census rather than the per-pane STI/MDA above.
-    // Cells are coloured on the severe-hail ladder (0.75" = NWS severe criteria,
-    // 2.00" = significant severe) and ringed white when a mesocyclone is flagged.
+    // Cells are coloured on the severe-hail ladder (HAIL_LADDER: 1.00" = NWS
+    // severe, 2.00" = SPC significant severe) and ringed white when a
+    // mesocyclone is flagged.
     map.addSource('nexrad-attr', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({
         id: 'natt-vector', type: 'line', source: 'nexrad-attr',
@@ -2604,16 +2605,10 @@ function setupMapLayers(map, paneId) {
         layout: { visibility: 'none' },
         paint: {
             'circle-radius': ['interpolate', ['linear'], ['get', 'max_size'],
-                0, 3, 0.75, 6, 1.0, 7.5, 2.0, 10, 3.0, 13],
-            'circle-color': ['step', ['get', 'max_size'],
-                'rgba(110,198,255,0.30)',
-                0.75, 'rgba(255,225,77,0.45)',
-                1.0, 'rgba(255,158,59,0.50)',
-                1.75, 'rgba(255,59,59,0.55)',
-                2.5, 'rgba(255,43,208,0.60)'],
+                0, 3, HAIL_SEVERE_IN, 7.5, HAIL_SIG_SEVERE_IN, 10, 3.0, 13],
+            'circle-color': hailStepExpr('fill'),
             'circle-stroke-color': ['case', ['>', ['get', 'meso_n'], 0], '#ffffff',
-                ['step', ['get', 'max_size'],
-                    '#6ec6ff', 0.75, '#ffe14d', 1.0, '#ff9e3b', 1.75, '#ff3b3b', 2.5, '#ff2bd0']],
+                hailStepExpr('line')],
             'circle-stroke-width': ['case', ['>', ['get', 'meso_n'], 0], 2.2, 1.3]
         }
     });
@@ -2627,11 +2622,11 @@ function setupMapLayers(map, paneId) {
         },
         paint: { 'text-color': '#ff2b2b', 'text-halo-color': '#000000', 'text-halo-width': 2 }
     });
-    // Labels stay off the weak cells so a 700-cell CONUS table remains readable.
+    // Labels stay off the sub-severe cells so a 700-cell CONUS table remains readable.
     map.addLayer({
         id: 'natt-label', type: 'symbol', source: 'nexrad-attr',
         filter: ['all', ['==', ['get', 'kind'], 'cell'],
-            ['any', ['>=', ['get', 'max_size'], 0.75], ['>', ['get', 'meso_n'], 0]]],
+            ['any', ['>=', ['get', 'max_size'], HAIL_SEVERE_IN], ['>', ['get', 'meso_n'], 0]]],
         layout: {
             visibility: 'none',
             'text-field': ['get', 'tag'],
@@ -4019,8 +4014,8 @@ function initFrontalPipIcons(map) {
         const p = e.features[0].properties || {};
         const row = (k, v) => `<div><span style="color:#888;">${k}:</span> ${v}</div>`;
         const size = Number(p.max_size) || 0;
-        const sizeColor = size >= 2.5 ? '#ff2bd0' : size >= 1.75 ? '#ff3b3b'
-            : size >= 1.0 ? '#ff9e3b' : size >= 0.75 ? '#ffe14d' : '#6ec6ff';
+        const tier = hailTier(size);
+        const sizeColor = tier.line;
         const flags = [];
         if (Number(p.meso_n) > 0) flags.push(`<span style="color:#ffffff;">MESO ${esc(p.meso_n)}</span>`);
         if (Number(p.tvs) === 1) flags.push('<span style="color:#ff2b2b;font-weight:bold;">TVS</span>');
@@ -4028,7 +4023,7 @@ function initFrontalPipIcons(map) {
             <div style="font-weight:bold;color:${sizeColor};font-size:13px;margin-bottom:2px;">Cell ${esc(p.storm_id)} · K${esc(p.nexrad)}</div>
             ${flags.length ? `<div style="margin-bottom:4px;font-size:10px;letter-spacing:0.5px;">${flags.join(' · ')}</div>` : ''}
             <div style="line-height:1.6;">
-                ${row('Max hail size', size > 0 ? `<b style="color:${sizeColor};">${size.toFixed(2)}"</b>` : 'none detected')}
+                ${row('Max hail size', size > 0 ? `<b style="color:${sizeColor};">${size.toFixed(2)}"</b> <span style="color:#aaa;">${tier.cls}</span>` : 'none detected')}
                 ${row('Prob of severe hail', p.posh != null ? esc(p.posh) + '%' : '—')}
                 ${row('Prob of hail', p.poh != null ? esc(p.poh) + '%' : '—')}
                 ${row('VIL', p.vil != null ? esc(p.vil) + ' kg/m²' : '—')}
@@ -7978,6 +7973,35 @@ const _polyOnly = fs => fs.filter(f => f.geometry &&
 const NEXRAD_ATTR_URL = 'https://mesonet.agron.iastate.edu/geojson/nexrad_attr.py';
 const _NATT_VECTOR_MIN_KT = 5;  // below this the reported direction is noise
 const _NATT_VECTOR_SECS = 30 * 60;
+
+// Hail-size ladder: the one place FX-Net's own hail classes and colours live
+// (the SCIT cell fill, ring, size, label filter and popup all read it). NWS
+// severe hail is 1.00" or larger (SCN 09-52, in effect 2010-01-05; it was
+// 0.75" before). SPC significant severe hail is 2.00" or larger. The 1.50"
+// and 1.75" (golf ball) steps only shade the severe band. Each tier runs from
+// its `min` up to the next tier's.
+const HAIL_SEVERE_IN = 1.0;
+const HAIL_SIG_SEVERE_IN = 2.0;
+const HAIL_LADDER = [
+    { min: 0,                  cls: 'sub-severe',         line: '#6ec6ff', fill: 'rgba(110,198,255,0.30)' },
+    { min: HAIL_SEVERE_IN,     cls: 'severe',             line: '#ffe14d', fill: 'rgba(255,225,77,0.45)' },
+    { min: 1.5,                cls: 'severe',             line: '#ff9e3b', fill: 'rgba(255,158,59,0.50)' },
+    { min: 1.75,               cls: 'severe',             line: '#ff3b3b', fill: 'rgba(255,59,59,0.55)' },
+    { min: HAIL_SIG_SEVERE_IN, cls: 'significant severe', line: '#ff2bd0', fill: 'rgba(255,43,208,0.60)' }
+];
+
+function hailTier(size) {
+    const s = Number(size) || 0;
+    let tier = HAIL_LADDER[0];
+    for (const t of HAIL_LADDER) if (s >= t.min) tier = t;
+    return tier;
+}
+
+// The same ladder as a MapLibre `step` expression on a feature's hail size.
+function hailStepExpr(key, prop = 'max_size') {
+    return ['step', ['get', prop], HAIL_LADDER[0][key],
+        ...HAIL_LADDER.slice(1).flatMap(t => [t.min, t[key]])];
+}
 
 function _nattPick(fs) {
     const out = [];
@@ -14747,6 +14771,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Sep 23, 2026', items: [
+        '<b>Storm Attributes (SCIT) hail colours now follow the official thresholds.</b> A cell turns yellow at <b>1.00"</b>, the size the National Weather Service has used for severe hail since 2010, and magenta at <b>2.00"</b>, which the Storm Prediction Center calls significant severe. This layer had used the old 0.75" severe size and 2.50" for significant severe. Between the two, orange starts at 1.50" and red at 1.75". Blue now means below severe, and a blue cell only gets a label if it carries a mesocyclone. Clicking a cell names its class next to the hail size.'
+    ]},
     { date: 'Sep 22, 2026 (update 3)', items: [
         '<b>NAM MOS retires on Oct 14, not Oct 6.</b> NWS moved the retirement of NAM, SREF, HREF, HiresW and NAM MOS again, to <b>14 Oct 12 UTC</b> (Service Change Notice 26-47, updated Sep 9). The MOS panel, its menu and the User Guide now give that date. NAM MOS also removes itself from the menu at that moment, so it can never show its last, frozen bulletin as if it were current guidance.',
         '<b>A correction to update 2.</b> The Pillow upgrade also closed <b>34 published security advisories</b> against the old version, several rated high. The audit\'s dependency check had wrongly reported none. None of them could be reached in this app: the radar function only writes PNG images and never opens an image or font file from outside, which is where these problems were.'
