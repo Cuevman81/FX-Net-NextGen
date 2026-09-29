@@ -8688,6 +8688,79 @@ function rebuildWfoFilter() {
 // stream frame valid at or before it. Both lists must be sorted oldest-first.
 // A master time earlier than the stream's first frame clamps to frame 0 rather
 // than rendering nothing, so a pane never goes blank at the head of the loop.
+// ── Loop frame tiles: fetched once, retried on failure, never refreshed ──
+// Loops went blank "after a couple of rounds", on and off (reported 2026-09-29).
+// Cause: MapLibre re-requests any tile whose Cache-Control has run out, and the
+// loop sources advertise short lives — NCEP radar and MRMS 120 s, nowCOAST 240 s,
+// IEM 300 s. Every frame of a loop loads together, so every frame expires
+// together: one pane of a 3-hour loop sent ~200 requests to NCEP every two
+// minutes for as long as it ran. When any of those re-requests failed — a slow
+// or throttled NOAA server — MapLibre marked the tile errored, stopped drawing
+// it, and never tried again (only a successful load re-arms the timer). Holes
+// only ever accumulated; one bad burst could blank a whole loop. Measured in
+// the app: after one 50%-failure burst, 576 of 1,153 frame tiles were errored
+// and all of them were still errored three minutes after the network healed.
+//
+// A frame is a fixed moment in time and cannot change, so re-requesting it is
+// all risk and no gain. Frame sources use the fxframe:// scheme instead of
+// https://, which routes their tiles through this loader. It returns the image
+// WITHOUT cacheControl/expires — MapLibre only schedules a re-request when a
+// response carries them — and it retries a failed request a couple of times
+// before giving up, so a momentary upstream hiccup during the initial load no
+// longer leaves a permanent hole either. Live layers are untouched and keep
+// refreshing on their servers' schedule.
+const LOOP_FRAME_SCHEME = 'fxframe';
+// Short on purpose: a tile waiting out a retry holds one of MapLibre's 16
+// parallel image slots, so long backoffs would stall every other tile load.
+const LOOP_FRAME_RETRY_MS = [1000, 3000];
+let loopFrameFailures = 0;   // tiles that failed every attempt, reported when a loop starts rolling
+function loopFrameUrl(url) {
+    return String(url).replace(/^https:\/\//i, `${LOOP_FRAME_SCHEME}://`);
+}
+function abortableDelay(ms, signal) {
+    return new Promise((resolve, reject) => {
+        const aborted = () => (signal && signal.reason) || new DOMException('Aborted', 'AbortError');
+        if (signal && signal.aborted) { reject(aborted()); return; }
+        const onAbort = () => { clearTimeout(timer); reject(aborted()); };
+        const timer = setTimeout(() => {
+            if (signal) signal.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    });
+}
+async function loadLoopFrameTile(params, abortController) {
+    const url = String(params.url).replace(new RegExp(`^${LOOP_FRAME_SCHEME}://`, 'i'), 'https://');
+    const signal = abortController ? abortController.signal : undefined;
+    let lastErr = null;
+    for (let attempt = 0; attempt <= LOOP_FRAME_RETRY_MS.length; attempt++) {
+        if (attempt) await abortableDelay(LOOP_FRAME_RETRY_MS[attempt - 1], signal);
+        try {
+            const res = await fetch(url, { signal });
+            const type = res.headers.get('content-type') || '';
+            if (res.ok && /^image\//i.test(type)) {
+                return { data: await res.arrayBuffer() };   // no cacheControl/expires: never re-requested
+            }
+            // A WMS reports a bad request as a 200 carrying an XML ServiceException;
+            // that is not an image and must not be handed to the decoder.
+            lastErr = new Error(`loop frame tile: HTTP ${res.status}${res.ok ? ` (${type || 'no content-type'})` : ''}`);
+            lastErr.status = res.status;
+            // Client errors will not fix themselves; timeouts and rate limits might.
+            if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) break;
+        } catch (e) {
+            if (signal && signal.aborted) throw e;   // MapLibre cancelled it (panned away / loop stopped)
+            lastErr = e;
+        }
+    }
+    loopFrameFailures++;
+    throw lastErr || new Error('loop frame tile: failed');
+}
+(function installLoopFrameProtocol() {
+    if (typeof maplibregl !== 'undefined' && typeof maplibregl.addProtocol === 'function') {
+        maplibregl.addProtocol(LOOP_FRAME_SCHEME, loadLoopFrameTile);
+    }
+})();
+
 // ── Frame blend ──
 // MapLibre cross-fades every paint change over 300 ms unless told otherwise, so
 // each frame flip used to spend most of a 400 ms hold half-blended with the
@@ -8734,6 +8807,7 @@ function buildTimeIndex(masterTimes, frameTimes) {
 async function startAnimation() {
     if (isPlaying) return;
     isPlaying = true;
+    loopFrameFailures = 0;
 
     const activeMap = maps[activePaneId];
     if (!activeMap) { stopAnimation(); return; }
@@ -8989,9 +9063,10 @@ async function startAnimation() {
                 const srcId = `anim-sat-src-${i}`;
                 const lyrId = `anim-sat-lyr-${i}`;
                 if (!map.getSource(srcId)) {
-                    const satUrl = hadGibsVisible
+                    // fxframe:// = fetched once and retried, never re-requested (loadLoopFrameTile)
+                    const satUrl = loopFrameUrl(hadGibsVisible
                         ? gibsTileUrl(gibsProd, satFrames[i].isoTime, paneBird)
-                        : nowCoastSatUrl(paneCh, satFrames[i].isoTime);
+                        : nowCoastSatUrl(paneCh, satFrames[i].isoTime));
                     const srcOpts = { type: 'raster', tiles: [satUrl], tileSize: 256 };
                     if (gp) srcOpts.maxzoom = gp.max;
                     map.addSource(srcId, srcOpts);
@@ -9048,7 +9123,7 @@ async function startAnimation() {
                         // Site-specific — use THIS PANE's site + product
                         radUrl = siteRadarAnimUrl(paneSite, paneProduct, radFrames[i].isoStr);
                     }
-                    map.addSource(srcId, { type: 'raster', tiles: [radUrl], tileSize: 512 });
+                    map.addSource(srcId, { type: 'raster', tiles: [loopFrameUrl(radUrl)], tileSize: 512 });
                     map.addLayer({ id: lyrId, type: 'raster', source: srcId,
                         layout: { visibility: 'visible' },
                         paint: {
@@ -9101,6 +9176,9 @@ async function startAnimation() {
             addLiveLog(allLoaded
                 ? `LOOP: all ${loopMaps.length} pane(s) loaded in ${secs}s — rolling`
                 : `LOOP: starting after ${secs}s (some frames still loading)`, '#00ff88');
+            if (loopFrameFailures) {
+                addLiveLog(`LOOP: ${loopFrameFailures} frame tile(s) still failed after retries — the imagery server is struggling; Stop and Play asks again`, '#ffb300');
+            }
             advanceLoopTick();
         } else {
             animationTimer = setTimeout(waitForAllPanes, 300);
@@ -14771,6 +14849,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Sep 29, 2026', items: [
+        '<b>Fixed: loops going blank after a few rounds.</b> Reported as satellite and radar loops that played fine, then turned blank, on and off over several days. The cause was not in the loop itself but in how the map refreshes tiles. The NOAA servers behind the loops say their images go stale after two to five minutes, and the map dutifully asked for every tile again when that time ran out — for every frame at once, so a single pane of a 3-hour radar loop sent around two hundred requests to NCEP every two minutes, for as long as it played. Whenever NCEP or nowCOAST was slow or overloaded and one of those repeat requests failed, the map gave up on that piece of that frame for good. The gaps only grew, and one bad minute on NOAA\'s side could empty a whole loop. That is why it came and went: it tracked the health of NOAA\'s servers, not anything on your screen.',
+        'A loop frame is a fixed moment in time — the 14:05Z scan will never change — so asking for it again gains nothing. Loop frames are now fetched <b>once</b> and kept for as long as the loop plays. If a request fails while the loop is loading, it is <b>retried twice</b> before giving up, so a momentary hiccup no longer leaves a permanent hole. If a server is struggling badly enough that tiles still fail, the log says so, and Stop then Play asks again. Live, non-looping layers are unchanged and keep refreshing on their usual schedule.',
+        'A side benefit: a running loop no longer sends a steady stream of repeat requests to NOAA, so looping costs those servers a fraction of what it did.'
+    ]},
     { date: 'Sep 23, 2026', items: [
         '<b>Storm Attributes (SCIT) hail colours now follow the official thresholds.</b> A cell turns yellow at <b>1.00"</b>, the size the National Weather Service has used for severe hail since 2010, and magenta at <b>2.00"</b>, which the Storm Prediction Center calls significant severe. This layer had used the old 0.75" severe size and 2.50" for significant severe. Between the two, orange starts at 1.50" and red at 1.75". Blue now means below severe, and a blue cell only gets a label if it carries a mesocyclone. Clicking a cell names its class next to the hail size.'
     ]},

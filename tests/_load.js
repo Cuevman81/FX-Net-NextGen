@@ -11,7 +11,7 @@ const vm = require('node:vm');
 const LINES = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8').split('\n');
 
 function locate(name) {
-    const re = new RegExp(`^(?:(?:function|const|let|var)\\s+${name}\\b|\\(function ${name}\\()`);
+    const re = new RegExp(`^(?:(?:(?:async\\s+)?function|const|let|var)\\s+${name}\\b|\\(function ${name}\\()`);
     const start = LINES.findIndex(l => re.test(l));
     if (start < 0) throw new Error(`tests/_load: "${name}" not found at top level of app.js`);
     let depth = 0;
