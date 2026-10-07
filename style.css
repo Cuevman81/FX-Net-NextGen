@@ -1872,3 +1872,47 @@ kbd.key { font-family: 'Roboto Mono', monospace; font-size: 10px; color: #fff; b
 /* The Skew-T is a fixed-width SVG (470 px by attribute); when its panel is
    maximised, let it grow to the window height and keep its aspect. */
 .floating-panel.maximized #skewt-body > svg[width="470"] { width: auto; height: calc(100vh - 150px); }
+
+/* Tropical · Selected Storm: the one storm selector everything below follows */
+.storm-select-block {
+    padding: 4px 12px 6px;
+}
+.storm-select-block select {
+    width: 100%;
+    background: #000;
+    color: var(--accent-cyan);
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px;
+}
+#nhcadv-info,
+#adeck-cycle-info {
+    margin-top: 3px;
+    font-size: 9px;
+    line-height: 1.4;
+    color: #8b97a3;
+}
+#storm-scope-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    font-size: 9px;
+    color: #8b97a3;
+}
+#storm-scope-row span { margin-right: auto; }
+#storm-scope-row button {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 2px;
+    color: #cfd6de;
+    font: inherit;
+    padding: 1px 6px;
+    cursor: pointer;
+}
+#storm-scope-row button.on {
+    border-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+}
+#storm-scope-row button:focus-visible { outline: 1px solid var(--accent-cyan); outline-offset: 1px; }

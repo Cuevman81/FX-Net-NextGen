@@ -14,7 +14,7 @@
     <script src="vendor/maplibre-gl.js?v=5.24.0"></script>
     <link href="vendor/maplibre-gl.css?v=5.24.0" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=123">
+    <link rel="stylesheet" href="style.css?v=124">
     <!-- Vercel Speed Insights + Web Analytics shim (external so CSP can forbid inline script; the client is vendored so script-src is self alone) -->
     <script type="module" src="boot.js?v=2"></script>
     <script defer src="/_vercel/insights/script.js"></script>
@@ -134,6 +134,14 @@
                 <!-- SATELLITE (GOES-EAST / GOES-WEST) -->
                 <div class="category-group">
                     <h2 class="category-label" tabindex="0"><i data-lucide="satellite"></i> Satellite (GOES)</h2>
+                    <div class="sub-category">Loopable · NASA GIBS (smooth)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="GeoColor"><span>GeoColor</span> <span class="badge green">GIBS</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="CleanIR"><span>Clean IR (Band 13)</span> <span class="badge green">GIBS</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="RedVis"><span>Red Visible</span> <span class="badge green">GIBS</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="AirMass"><span>Air Mass RGB</span> <span class="badge green">GIBS</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="Dust"><span>Dust RGB</span> <span class="badge green">GIBS</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="FireTemp"><span>Fire Temp RGB</span> <span class="badge green">GIBS</span></div>
+                    <div class="sub-category">Single Channels · by sector</div>
                     <div class="sector-row">
                         <label for="goes-sector-select">SECTOR</label>
                         <select id="goes-sector-select" aria-label="GOES sector">
@@ -174,13 +182,6 @@
                     <div class="product-item" role="button" tabindex="0" data-layer="goes-ch" data-channel="14"><span>Ch 14 — IR Window (11.2 µm)</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="goes-ch" data-channel="15"><span>Ch 15 — Dirty IR (12.3 µm)</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="goes-ch" data-channel="16"><span>Ch 16 — CO₂ (13.3 µm)</span></div>
-                    <div class="sub-category">Loopable · NASA GIBS (smooth)</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="GeoColor"><span>GeoColor</span> <span class="badge green">GIBS</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="CleanIR"><span>Clean IR (Band 13)</span> <span class="badge green">GIBS</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="RedVis"><span>Red Visible</span> <span class="badge green">GIBS</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="AirMass"><span>Air Mass RGB</span> <span class="badge green">GIBS</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="Dust"><span>Dust RGB</span> <span class="badge green">GIBS</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="gibs-sat" data-gibs="FireTemp"><span>Fire Temp RGB</span> <span class="badge green">GIBS</span></div>
                 </div>
 
                 <!-- LIGHTNING -->
@@ -189,9 +190,10 @@
                     <div class="product-item" role="button" tabindex="0" data-layer="lightning"><span>NLDN Strike Density</span> <span class="badge green">LIVE</span></div>
                 </div>
 
-                <!-- SPC PRODUCTS -->
+                <!-- SPC (SEVERE WEATHER) -->
                 <div class="category-group">
                     <h2 class="category-label" tabindex="0"><i data-lucide="shield-alert"></i> SPC PRODUCTS</h2>
+                    <div class="sub-category">Convective Outlooks</div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-outlook" data-day="1"><span>Day 1 Convective Outlook</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-outlook" data-day="2"><span>Day 2 Convective Outlook</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-outlook" data-day="3"><span>Day 3 Convective Outlook</span></div>
@@ -204,12 +206,127 @@
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-prob" data-day="2" data-hazard="torn"><span>Tornado Probability</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-prob" data-day="2" data-hazard="wind"><span>Wind Probability</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-prob" data-day="2" data-hazard="hail"><span>Hail Probability</span></div>
+                    <div class="sub-category">Live Severe</div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-md"><span>Mesoscale Discussions</span> <span class="badge red">LIVE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-lsr"><span>Local Storm Reports</span> <span class="badge orange">LIVE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="probsevere"><span>ProbSevere (CIMSS)</span> <span class="badge red">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="btn-soundings"><span>Skew-T Soundings (SPC img)</span></div>
+                </div>
+
+                <!-- SURFACE ANALYSIS -->
+                <div class="category-group">
+                    <h2 class="category-label" tabindex="0"><i data-lucide="thermometer"></i> SURFACE ANALYSIS</h2>
+                    <div class="sub-category">Observations</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="metars"><span>METAR Plotted Obs</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="ndbc"><span>NDBC Buoys (Marine Obs)</span> <span class="badge green">HOURLY</span></div>
+                    <div class="sub-category">WPC Analysis</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-fronts"><span>Fronts & Pressure Centers</span> <span class="badge blue">WPC</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-isobars"><span>Isobars (4mb WPC)</span> <span class="badge blue">WPC</span></div>
+                    <div class="sub-category">Objective Analysis (from METARs)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-isobars-2mb"><span>Isobars (2mb)</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-isotherms"><span>Isotherms (2°F)</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-isodrosotherms"><span>Isodrosotherms (2°F)</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-relh"><span>Rel Humidity (10%)</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-isotachs"><span>Isotachs (5kt)</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-apparent"><span>Apparent Temp (4°F)</span> <span class="badge green">LIVE</span></div>
+                </div>
+
+                <!-- UPPER AIR & SOUNDINGS -->
+                <div class="category-group">
+                    <h2 class="category-label" tabindex="0"><i data-lucide="cloud"></i> UPPER AIR &amp; SOUNDINGS</h2>
                     <div class="product-item" role="button" tabindex="0" id="btn-skewt"><span>Interactive Skew-T (RAOB)</span> <span class="badge green">NSHARP</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="btn-soundings"><span>Skew-T Soundings (SPC img)</span></div>
                     <div class="product-item" role="button" tabindex="0" id="btn-spcmeso"><span>SPC Mesoanalysis</span> <span class="badge orange">HOURLY</span></div>
+                </div>
+
+                <!-- PRECIP & FLOODING -->
+                <div class="category-group">
+                    <h2 class="category-label" tabindex="0"><i data-lucide="waves"></i> PRECIP &amp; FLOODING</h2>
+                    <div class="sub-category">QPF (Quantitative Precip Forecast)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="1"><span>24hr Day 1</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="2"><span>24hr Day 2</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="3"><span>24hr Day 3</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="9"><span>72hr Day 1-3</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="10"><span>120hr Day 1-5</span></div>
+                    <div class="sub-category">Excessive Rainfall (WPC ERO)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-ero" data-day="1"><span>ERO Day 1</span> <span class="badge blue">WPC</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-ero" data-day="2"><span>ERO Day 2</span> <span class="badge blue">WPC</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-ero" data-day="3"><span>ERO Day 3</span> <span class="badge blue">WPC</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-mpd"><span>Mesoscale Precip Discussions</span> <span class="badge blue">WPC</span></div>
+                    <div class="sub-category">Rivers</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="river-gauges" title="Click a gauge for its hydrograph and forecast"><span>River Gauges (Flood Status)</span> <span class="badge blue">LIVE</span></div>
+                </div>
+
+                <!-- TROPICAL — OVERVIEW (all systems) -->
+                <div class="category-group">
+                    <h2 class="category-label" tabindex="0"><i data-lucide="cloud-lightning"></i> TROPICAL · OVERVIEW</h2>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-storms"><span>Active Storms & Cones</span> <span class="badge red" id="nhc-storms-badge">LIVE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-outlook"><span>Tropical Outlook Areas</span> <span class="badge orange">NHC</span></div>
+                    <div class="sub-category">Tropical Weather Outlooks</div>
+                    <div class="product-item" role="button" tabindex="0" id="nhc-two-atl" data-layer="nhc-two-atl"><span>Atlantic TWO</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="nhc-two-epac" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
+                    <div class="sub-category">Ocean Heat</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="ocean-sst" data-sst="sst" title="Daily sea-surface temperature (NASA MUR, about 1 km, one day behind). Hurricanes need about 26.5°C (80°F) or warmer. Hover the map for the temperature under the cursor."><span>Sea-Surface Temperature</span> <span class="badge orange">SST</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="ocean-sst" data-sst="anom" title="How much warmer or cooler than normal the sea surface is for the date (NASA MUR anomaly)."><span>SST vs Normal (anomaly)</span> <span class="badge orange">SST</span></div>
+                    <div class="sub-category">Surge Risk (reference, not a forecast)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="1" title="Reference, not a forecast: the worst-case surge flooding from any Category 1 hurricane, from NHC's SLOSH maximum-of-maximums."><span>Surge Risk: Category 1</span> <span class="badge blue">REF</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="2" title="Reference, not a forecast: the worst-case surge flooding from any Category 2 hurricane."><span>Surge Risk: Category 2</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="3" title="Reference, not a forecast: the worst-case surge flooding from any Category 3 hurricane."><span>Surge Risk: Category 3</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="4" title="Reference, not a forecast: the worst-case surge flooding from any Category 4 hurricane."><span>Surge Risk: Category 4</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="5" title="Reference, not a forecast: the worst-case surge flooding from any Category 5 hurricane."><span>Surge Risk: Category 5</span></div>
+                </div>
+
+                <!-- TROPICAL — SELECTED STORM (everything below follows the selector) -->
+                <div class="category-group">
+                    <h2 class="category-label" tabindex="0"><i data-lucide="crosshair"></i> TROPICAL · SELECTED STORM</h2>
+                    <div class="storm-select-block">
+                        <select id="adeck-storm-select" aria-label="Selected storm">
+                            <option value="">Loading systems…</option>
+                        </select>
+                        <div id="nhcadv-info"></div>
+                        <div id="storm-scope-row" title="Wind field, arrival times and surge maps carry a storm id: show them for the selected storm only, or for every storm">
+                            <span>Wind &amp; surge layers:</span>
+                            <button type="button" data-scope="selected">This storm</button>
+                            <button type="button" data-scope="all">All storms</button>
+                        </div>
+                        <div id="adeck-cycle-info"></div>
+                    </div>
+                    <div class="sub-category">Official Advisories</div>
+                    <div class="product-item" role="button" tabindex="0" id="nhcadv-tcp"><span>Public Advisory</span> <span class="badge red">TCP</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="nhcadv-tcd"><span>Forecast Discussion</span> <span class="badge orange">TCD</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="nhcadv-tcm"><span>Forecast / Advisory</span> <span class="badge blue">TCM</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="nhcadv-pws"><span>Wind Speed Probabilities</span> <span class="badge blue">PWS</span></div>
+                    <div class="sub-category">Track</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-fcst-history"><span>Forecast History (run-to-run)</span> <span class="badge blue">TREND</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="early"><span>Early Cycle Track Guidance</span> <span class="badge blue">A-DECK</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="late"><span>Late Cycle Track Guidance</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="eps"><span>GEFS Ensemble Members (EPS)</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="ecmwf-ens" title="All 51 members of ECMWF's physics ensemble (IFS ENS), with its control and mean, straight from ECMWF open data. Runs to 15 days at 00Z/12Z, 6 days at 06Z/18Z."><span>ECMWF Ensemble Members (51)</span> <span class="badge blue">ECMWF</span></div>
+                    <div class="sub-category">Track · AI / ML Models (✦)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="ai-early"><span>Early Cycle AI Models</span> <span class="badge blue">AI</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="ai-late"><span>Late Cycle AI Models</span> <span class="badge orange">AI</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="aifs-ens" title="ECMWF's 51-member AI ensemble (AIFS ENS), with its control and mean, straight from ECMWF open data. Four runs a day, out to 15 days."><span>AIFS Ensemble (ECMWF AI, 51)</span> <span class="badge orange">AI</span></div>
+                    <div class="sub-category">Intensity</div>
+                    <div class="product-item" role="button" tabindex="0" id="adeck-int-early"><span>Early Cycle Intensity Guidance</span> <span class="badge blue">CHART</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="adeck-int-late"><span>Late Cycle Intensity Guidance</span> <span class="badge orange">EXP</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="nhc-trends"><span>Storm Trends (Obs History)</span> <span class="badge green">LIVE</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="nhc-ships"><span>Environment / RI (SHIPS)</span> <span class="badge blue">DIAG</span></div>
+                    <div class="sub-category">Wind Threat</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="34" title="Chance of sustained tropical-storm-force winds (39+ mph) at any time in the next 5 days. Click the map for the exact percentage at a spot. NHC issues one combined map for all storms, so this layer does not follow the storm selector."><span>TS Wind Chance (34 kt)</span> <span class="badge orange" title="One combined map for every active storm">ALL STORMS</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="50" title="Chance of sustained 50-kt (58+ mph) winds at any time in the next 5 days. NHC issues one combined map for all storms, so this layer does not follow the storm selector."><span>50-kt Wind Chance</span> <span class="badge orange" title="One combined map for every active storm">ALL STORMS</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="64" title="Chance of sustained hurricane-force winds (74+ mph) at any time in the next 5 days. NHC issues one combined map for all storms, so this layer does not follow the storm selector."><span>Hurricane Wind Chance (64 kt)</span> <span class="badge red" title="One combined map for every active storm">ALL STORMS</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-toa" data-toa="likely" title="When tropical-storm-force winds are most likely to begin. Times are local to the storm's advisory."><span>TS Wind Arrival: Most Likely</span> <span class="badge blue">TIME</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-toa" data-toa="earliest" title="The earliest time tropical-storm-force winds can reasonably be expected (about a 1-in-10 chance of sooner). The time to have preparations finished."><span>TS Wind Arrival: Earliest Reasonable</span> <span class="badge red">PREP</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-windfield" title="How far out 34-, 50- and 64-kt winds reach: shaded now, outlined at each forecast time."><span>Wind Field (now + forecast)</span> <span class="badge orange">RADII</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-swath" title="Everywhere 34-, 50- and 64-kt winds have reached so far over the storm's life."><span>Past Wind Swath</span></div>
+                    <div class="sub-category">Storm Surge &amp; Tides</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-surge-inun" title="NHC's map of how deep surge flooding could get above ground (a reasonable worst case, about 1-in-10 chance of higher). Issued only while storm surge watches or warnings are in effect."><span>Potential Storm Surge Flooding</span> <span class="badge red" id="nhc-surge-inun-badge">SURGE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-peak-surge" title="NHC's peak storm surge ranges along the coast. Issued only while storm surge watches or warnings are in effect."><span>Peak Storm Surge</span> <span class="badge red" id="nhc-peak-surge-badge">SURGE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="tide-gauges" title="NOAA tide gauges: how far the water is running above or below the normal (predicted) tide right now, with a ring where it is flooding. Click a gauge for its 2-day history, the coming tides and flood levels."><span>Tide Gauges: Water vs Normal Tide</span> <span class="badge green">LIVE</span></div>
+                    <div class="sub-category">Hurricane Hunters (Recon)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="recon-hdob"><span>Recon Flight Obs (live)</span> <span class="badge blue" id="recon-badge">RECON</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="recon-fixes"><span>Recon Center Fixes (map)</span> <span class="badge orange">FIX</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="recon-vdm"><span>Vortex Data Message</span> <span class="badge orange">FIX</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="recon-tcpod"><span>Recon Schedule (TCPOD)</span> <span class="badge blue">DAILY</span></div>
                 </div>
 
                 <!-- AVIATION -->
@@ -223,134 +340,14 @@
                     <div class="sub-category">Click a hazard area, PIREP, or TAF site for detail</div>
                 </div>
 
-                <!-- SURFACE ANALYSIS -->
+                <!-- FIRE, SMOKE & AIR QUALITY -->
                 <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="thermometer"></i> SURFACE ANALYSIS</h2>
-                    <div class="product-item" role="button" tabindex="0" data-layer="metars"><span>METAR Plotted Obs</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="ndbc"><span>NDBC Buoys (Marine Obs)</span> <span class="badge green">HOURLY</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-isobars"><span>Isobars (4mb WPC)</span> <span class="badge blue">WPC</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-isobars-2mb"><span>Isobars (2mb)</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-isotherms"><span>Isotherms (2°F)</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-isodrosotherms"><span>Isodrosotherms (2°F)</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-relh"><span>Rel Humidity (10%)</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-isotachs"><span>Isotachs (5kt)</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="sfc-apparent"><span>Apparent Temp (4°F)</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-fronts"><span>Fronts & Pressure Centers</span> <span class="badge blue">WPC</span></div>
-                    <div class="sub-category">QPF (Quantitative Precip Forecast)</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="1"><span>24hr Day 1</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="2"><span>24hr Day 2</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="3"><span>24hr Day 3</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="9"><span>72hr Day 1-3</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-qpf" data-qpf="10"><span>120hr Day 1-5</span></div>
-                    <div class="sub-category">Excessive Rainfall (WPC ERO)</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-ero" data-day="1"><span>ERO Day 1</span> <span class="badge blue">WPC</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-ero" data-day="2"><span>ERO Day 2</span> <span class="badge blue">WPC</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-ero" data-day="3"><span>ERO Day 3</span> <span class="badge blue">WPC</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="wpc-mpd"><span>Mesoscale Precip Discussions</span> <span class="badge blue">WPC</span></div>
-                    <div class="sub-category">Forecast Grids (NDFD)</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="ndfd-temp"><span>Surface Temperature (°F)</span> <span class="badge blue">NDFD</span></div>
-                </div>
-
-                <!-- NHC TROPICAL -->
-                <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="cloud-lightning"></i> NHC TROPICAL</h2>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-storms"><span>Active Storms & Cones</span> <span class="badge red" id="nhc-storms-badge">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-fcst-history"><span>Forecast History (run-to-run)</span> <span class="badge blue">TREND</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-outlook"><span>Tropical Outlook Areas</span> <span class="badge orange">NHC</span></div>
-                    <div class="sub-category">Wind Threat (all active storms)</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="34" title="Chance of sustained tropical-storm-force winds (39+ mph) at any time in the next 5 days. Click the map for the exact percentage at a spot."><span>Tropical-Storm Wind Chance (34 kt)</span> <span class="badge orange">PROB</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="50" title="Chance of sustained 50-kt (58+ mph) winds at any time in the next 5 days."><span>50-kt Wind Chance</span> <span class="badge orange">PROB</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="64" title="Chance of sustained hurricane-force winds (74+ mph) at any time in the next 5 days."><span>Hurricane Wind Chance (64 kt)</span> <span class="badge red">PROB</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-toa" data-toa="likely" title="When tropical-storm-force winds are most likely to begin. Times are local to the storm's advisory."><span>TS Wind Arrival: Most Likely</span> <span class="badge blue">TIME</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-toa" data-toa="earliest" title="The earliest time tropical-storm-force winds can reasonably be expected (about a 1-in-10 chance of sooner). The time to have preparations finished."><span>TS Wind Arrival: Earliest Reasonable</span> <span class="badge red">PREP</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-windfield" title="How far out 34-, 50- and 64-kt winds reach: shaded now, outlined at each forecast time."><span>Wind Field (now + forecast)</span> <span class="badge orange">RADII</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-swath" title="Everywhere 34-, 50- and 64-kt winds have reached so far over the storm's life."><span>Past Wind Swath</span></div>
-                    <div class="sub-category">Storm Surge (U.S. coast)</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="tide-gauges" title="NOAA tide gauges: how far the water is running above or below the normal (predicted) tide right now, with a ring where it is flooding. Click a gauge for its 2-day history, the coming tides and flood levels."><span>Tide Gauges: Water vs Normal Tide</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-surge-inun" title="NHC's map of how deep surge flooding could get above ground (a reasonable worst case, about 1-in-10 chance of higher). Issued only while storm surge watches or warnings are in effect."><span>Potential Storm Surge Flooding</span> <span class="badge red" id="nhc-surge-inun-badge">SURGE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-peak-surge" title="NHC's peak storm surge ranges along the coast. Issued only while storm surge watches or warnings are in effect."><span>Peak Storm Surge</span> <span class="badge red" id="nhc-peak-surge-badge">SURGE</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="1" title="Reference, not a forecast: the worst-case surge flooding from any Category 1 hurricane, from NHC's SLOSH maximum-of-maximums."><span>Surge Risk: Category 1</span> <span class="badge blue">REF</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="2" title="Reference, not a forecast: the worst-case surge flooding from any Category 2 hurricane."><span>Surge Risk: Category 2</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="3" title="Reference, not a forecast: the worst-case surge flooding from any Category 3 hurricane."><span>Surge Risk: Category 3</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="4" title="Reference, not a forecast: the worst-case surge flooding from any Category 4 hurricane."><span>Surge Risk: Category 4</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="5" title="Reference, not a forecast: the worst-case surge flooding from any Category 5 hurricane."><span>Surge Risk: Category 5</span></div>
-                    <div class="sub-category">Ocean Heat</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="ocean-sst" data-sst="sst" title="Daily sea-surface temperature (NASA MUR, about 1 km, one day behind). Hurricanes need about 26.5°C (80°F) or warmer. Hover the map for the temperature under the cursor."><span>Sea-Surface Temperature</span> <span class="badge orange">SST</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="ocean-sst" data-sst="anom" title="How much warmer or cooler than normal the sea surface is for the date (NASA MUR anomaly)."><span>SST vs Normal (anomaly)</span> <span class="badge orange">SST</span></div>
-                    <div class="sub-category">Tropical Discussions</div>
-                    <div class="product-item" role="button" tabindex="0" id="nhc-two-atl" data-layer="nhc-two-atl"><span>Atlantic TWO</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="nhc-two-epac" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
-                    <div class="sub-category">Official Advisories (per storm)</div>
-                    <div style="padding:3px 12px 5px;">
-                        <select id="nhcadv-storm-select" aria-label="Storm for NHC advisory" style="width:100%;background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;">
-                            <option value="">Loading systems…</option>
-                        </select>
-                        <div id="nhcadv-info" style="margin-top:3px;font-size:9px;line-height:1.4;color:#8b97a3;"></div>
-                    </div>
-                    <div class="product-item" role="button" tabindex="0" id="nhcadv-tcp"><span>Public Advisory</span> <span class="badge red">TCP</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="nhcadv-tcd"><span>Forecast Discussion</span> <span class="badge orange">TCD</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="nhcadv-tcm"><span>Forecast / Advisory</span> <span class="badge blue">TCM</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="nhcadv-pws"><span>Wind Speed Probabilities</span> <span class="badge blue">PWS</span></div>
-                    <div class="sub-category">Hurricane Hunters (Recon)</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="recon-hdob"><span>Recon Flight Obs (live)</span> <span class="badge blue" id="recon-badge">RECON</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="recon-fixes"><span>Recon Center Fixes (map)</span> <span class="badge orange">FIX</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="recon-tcpod"><span>Recon Schedule (TCPOD)</span> <span class="badge blue">DAILY</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="recon-vdm"><span>Vortex Data Message</span> <span class="badge orange">FIX</span></div>
-                    <div class="sub-category">Model Guidance (Spaghetti)</div>
-                    <div style="padding:3px 12px 5px;">
-                        <select id="adeck-storm-select" aria-label="Storm for model guidance" style="width:100%;background:#000;color:var(--accent-cyan);border:1px solid var(--border);font-size:10px;padding:3px;">
-                            <option value="">Loading systems…</option>
-                        </select>
-                        <div id="adeck-cycle-info" style="margin-top:3px;font-size:9px;line-height:1.4;color:#8b97a3;"></div>
-                    </div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="early"><span>Early Cycle Track Guidance</span> <span class="badge blue">A-DECK</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="late"><span>Late Cycle Track Guidance</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="eps"><span>GEFS Ensemble Members (EPS)</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="ecmwf-ens" title="All 51 members of ECMWF's physics ensemble (IFS ENS), with its control and mean, straight from ECMWF open data. Runs to 15 days at 00Z/12Z, 6 days at 06Z/18Z."><span>ECMWF Ensemble Members (51)</span> <span class="badge blue">ECMWF</span></div>
-                    <div class="sub-category">AI / ML Models (✦)</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="ai-early"><span>Early Cycle AI Models</span> <span class="badge blue">AI</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="ai-late"><span>Late Cycle AI Models</span> <span class="badge orange">AI</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="adeck" data-adeck="aifs-ens" title="ECMWF's 51-member AI ensemble (AIFS ENS), with its control and mean, straight from ECMWF open data. Four runs a day, out to 15 days."><span>AIFS Ensemble (ECMWF AI, 51)</span> <span class="badge orange">AI</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="adeck-int-early"><span>Early Cycle Intensity Guidance</span> <span class="badge blue">CHART</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="adeck-int-late"><span>Late Cycle Intensity Guidance</span> <span class="badge orange">EXP</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="nhc-trends"><span>Storm Trends (Obs History)</span> <span class="badge green">LIVE</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="nhc-ships"><span>Environment / RI (SHIPS)</span> <span class="badge blue">DIAG</span></div>
-                </div>
-
-                <!-- CPC CLIMATE OUTLOOKS -->
-                <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="sun"></i> CPC CLIMATE OUTLOOKS</h2>
-                    <div class="sub-category">Temperature</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="6-10"><span>6-10 Day Temp</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="8-14"><span>8-14 Day Temp</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="monthly"><span>Monthly Temp</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="seasonal"><span>Seasonal Temp</span></div>
-                    <div class="sub-category">Precipitation</div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-precip" data-period="6-10"><span>6-10 Day Precip</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-precip" data-period="8-14"><span>8-14 Day Precip</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-precip" data-period="monthly"><span>Monthly Precip</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-precip" data-period="seasonal"><span>Seasonal Precip</span></div>
-                </div>
-
-                <!-- RIVERS & HYDROLOGY -->
-                <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="waves"></i> RIVERS & HYDROLOGY</h2>
-                    <div class="product-item" role="button" tabindex="0" data-layer="river-gauges"><span>River Gauges (Flood Status)</span> <span class="badge blue">LIVE</span></div>
-                    <div class="sub-category">Click gauge for hydrograph &amp; forecast</div>
-                </div>
-
-                <!-- DROUGHT -->
-                <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="droplets"></i> DROUGHT</h2>
-                    <div class="product-item" role="button" tabindex="0" data-layer="drought-monitor"><span>US Drought Monitor</span> <span class="badge orange">USDM</span></div>
-                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-drought-outlook"><span>CPC Drought Outlook</span> <span class="badge blue">CPC</span></div>
-                </div>
-
-                <!-- FIRE & SMOKE -->
-                <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="flame"></i> FIRE & SMOKE</h2>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="flame"></i> FIRE, SMOKE &amp; AIR QUALITY</h2>
+                    <div class="sub-category">Fire &amp; Smoke</div>
                     <div class="product-item" role="button" tabindex="0" data-layer="firms-fires"><span>Active Fires (VIIRS/MODIS)</span> <span class="badge orange">NASA</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="hms-smoke"><span>HMS Smoke Plumes</span> <span class="badge orange">NOAA</span></div>
+                    <div class="sub-category">Air Quality</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="airnow-aqi"><span>AQI Monitors</span> <span class="badge green">LIVE</span></div>
                     <div class="sub-category">SPC Fire Weather Outlook</div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-firewx" data-day="1"><span>Day 1 Fire Wx Outlook</span> <span class="badge orange">SPC</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-firewx" data-day="2"><span>Day 2 Fire Wx Outlook</span> <span class="badge orange">SPC</span></div>
@@ -362,29 +359,42 @@
                     <div class="product-item" role="button" tabindex="0" data-layer="spc-firewx" data-day="8"><span>Day 8 Fire Wx Outlook</span> <span class="badge orange">SPC</span></div>
                 </div>
 
-                <!-- AIR QUALITY -->
+                <!-- CLIMATE & DROUGHT -->
                 <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="wind"></i> AIR QUALITY</h2>
-                    <div class="product-item" role="button" tabindex="0" data-layer="airnow-aqi"><span>AQI Monitors</span> <span class="badge green">LIVE</span></div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="sun"></i> CLIMATE &amp; DROUGHT</h2>
+                    <div class="sub-category">CPC Temperature Outlooks</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="6-10"><span>6-10 Day Temp</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="8-14"><span>8-14 Day Temp</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="monthly"><span>Monthly Temp</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-temp" data-period="seasonal"><span>Seasonal Temp</span></div>
+                    <div class="sub-category">CPC Precipitation Outlooks</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-precip" data-period="6-10"><span>6-10 Day Precip</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-precip" data-period="8-14"><span>8-14 Day Precip</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-precip" data-period="monthly"><span>Monthly Precip</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-precip" data-period="seasonal"><span>Seasonal Precip</span></div>
+                    <div class="sub-category">Drought</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="drought-monitor"><span>US Drought Monitor</span> <span class="badge orange">USDM</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="cpc-drought-outlook"><span>CPC Drought Outlook</span> <span class="badge blue">CPC</span></div>
                 </div>
 
-
-
-
-
-                <!-- SOLAR -->
+                <!-- FORECASTS, MODELS & TEXT -->
                 <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="sunrise"></i> SOLAR</h2>
-                    <div class="product-item" role="button" tabindex="0" data-layer="solar-terminator"><span>Day/Night Terminator</span> <span class="badge blue">LIVE</span></div>
-                    <div class="sub-category">Click map for local sun data</div>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="trending-up"></i> FORECASTS &amp; TEXT</h2>
+                    <div class="product-item" role="button" tabindex="0" id="btn-meteogram"><span>Forecast Meteogram</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="ndfd-temp"><span>Surface Temperature (°F)</span> <span class="badge blue">NDFD</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="btn-model-compare"><span>Model Comparison</span> <span class="badge green">GFS/EC/CMC</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="btn-mos"><span>MOS Guidance</span> <span class="badge blue">MDL</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="btn-text-products"><span>Text Browser</span></div>
                 </div>
 
-                <!-- OVERLAYS -->
+                <!-- MAP OVERLAYS -->
                 <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="map"></i> OVERLAYS</h2>
+                    <h2 class="category-label" tabindex="0"><i data-lucide="map"></i> MAP OVERLAYS</h2>
                     <div class="product-item" role="button" tabindex="0" data-layer="overlay-cities"><span>Cities & Labels</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="overlay-roads"><span>Interstates & Roads</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="overlay-cwa"><span>NWS CWA Boundaries</span></div>
+                    <div class="sub-category">Sun</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="solar-terminator" title="Click the map for local sunrise, sunset and twilight times"><span>Day/Night Terminator</span> <span class="badge blue">LIVE</span></div>
                 </div>
 
                 <!-- ANALYSIS TOOLS -->
@@ -400,20 +410,6 @@
                     <div class="sub-category">Settings backup</div>
                     <div class="product-item" role="button" tabindex="0" id="settings-export"><span>Export Settings to File…</span></div>
                     <div class="product-item" role="button" tabindex="0" id="settings-import"><span>Import Settings from File…</span></div>
-                </div>
-
-                <!-- MODEL GUIDANCE -->
-                <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="trending-up"></i> MODEL GUIDANCE</h2>
-                    <div class="product-item" role="button" tabindex="0" id="btn-model-compare"><span>Model Comparison</span> <span class="badge green">GFS/EC/CMC</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="btn-mos"><span>MOS Guidance</span> <span class="badge blue">MDL</span></div>
-                </div>
-
-                <!-- NWS TEXT PRODUCTS -->
-                <div class="category-group">
-                    <h2 class="category-label" tabindex="0"><i data-lucide="file-text"></i> NWS PRODUCTS</h2>
-                    <div class="product-item" role="button" tabindex="0" id="btn-text-products"><span>Text Browser</span></div>
-                    <div class="product-item" role="button" tabindex="0" id="btn-meteogram"><span>Forecast Meteogram</span></div>
                 </div>
             </div>
 
@@ -1308,6 +1304,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=296"></script>
+    <script src="app.js?v=297"></script>
 </body>
 </html>

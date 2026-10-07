@@ -46,7 +46,7 @@ test('arrows handle multi-part lines and skip anything with no direction', () =>
 });
 
 // ─── Storm surge ───
-function surgeHarness(script) {
+function surgeHarness(script, activeStorm = null) {
     const calls = [], tiles = [], logs = [], labels = [];
     let pendingCleared = 0;
     const badges = {};
@@ -55,13 +55,14 @@ function surgeHarness(script) {
         const body = script(url, calls.length);
         return { ok: true, json: async () => body };
     };
-    const source = { setTiles: t => tiles.push(t[0]) };
+    const source = { setTiles: t => tiles.push(t[0]), setData: () => {} };
     const ptsSource = { setData: d => labels.push(d.features) };
     const maps = { 'p1': { getSource: id => (id === 'nhc-peak-surge-pts' ? ptsSource : source) } };
-    const document = { getElementById: id => (badges[id] = badges[id] || { textContent: '', className: '', title: '' }) };
+    const document = { getElementById: id => (badges[id] = badges[id] || { textContent: '', className: '', title: '' }), querySelectorAll: () => [] };
     const api = load(['NHC_BASE', 'NHC_TROP_SVC', 'arcExportTiles', 'NHC_INUN_TILES', 'NHC_PEAK_SURGE_TILES',
+        'stormScope', 'nhcScoped', 'nhcSurgeStorms', 'nhcSurgeTiles', 'BLANK_TILE', 'inStormScope', 'scopedSurgeTiles', 'surgeBadgeState', 'applyStormScope',
         'nhcSurgeStamp', 'nhcLayerGeojson', 'NHC_SURGE', 'setSurgeBadge', 'refreshNhcSurge', 'setPeakSurgeLabels'], {
-        fetch, maps, document, cacheBust: u => `${u}&_cb=1`,
+        fetch, maps, document, cacheBust: u => `${u}&_cb=1`, activeStorm, updateTropLegend: () => {},
         addLiveLog: (msg, color) => logs.push([msg, color]),
         updateHealth: () => {}, _productPendingClear: () => { pendingCleared++; }
     });
@@ -119,4 +120,16 @@ test('peak surge brings its range labels, skipping unnamed points', async () => 
     assert.equal(h.labels.length, 1);
     assert.deepEqual(h.labels[0].map(f => f.properties.name), ['7-11 ft']);
     assert.match(h.logs.at(-1)[0], /Peak Storm Surge graphic loaded \(al092026_peaksurge\)/);
+});
+
+test('with a storm selected, a surge map issued for another storm stays off and says whose it is', async () => {
+    const h = surgeHarness(() => ({ features: [{ attributes: { name: 'ISAIAS_2026_adv04', idp_subset: 'al092026', idp_ingestdate: 9 } }] }), 'ep182026');
+    await h.refreshNhcSurge('inun', true);
+    assert.equal(h.tiles.at(-1), h.BLANK_TILE);
+    assert.equal(h.badges['nhc-surge-inun-badge'].textContent, 'AL09 ONLY');
+    assert.match(h.logs.at(-1)[0], /issued for AL09, not the selected storm/);
+    const own = surgeHarness(() => ({ features: [{ attributes: { name: 'ISAIAS_2026_adv04', idp_subset: 'al092026', idp_ingestdate: 9 } }] }), 'al092026');
+    await own.refreshNhcSurge('inun', false);
+    assert.match(own.tiles.at(-1), /show:24,28.*&_v=9$/);
+    assert.equal(own.badges['nhc-surge-inun-badge'].textContent, 'ISSUED');
 });

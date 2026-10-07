@@ -5912,6 +5912,84 @@ function nhcWspColorExpr() {
 const NHC_RADII_COLOR = ['match', ['to-number', ['get', 'radii'], 34], 64, '#ff2b2b', 50, '#ff9a1f', '#ffe14d'];
 const NHC_TWO_RISK_COLOR = { Low: '#ffff00', Medium: '#ff9900', High: '#ff0000' };
 
+// ─── Storm scope: the storm-specific impact layers follow the selected storm ───
+// Wind field, past swath, arrival times and both surge maps carry a storm id,
+// so by default they draw only for the storm picked in the selector; "All
+// storms" draws every system. NHC's wind-chance map is one combined product
+// with no storm id, so it always shows every storm.
+let stormScope = (() => { try { return localStorage.getItem('fxnet_storm_scope') === 'all' ? 'all' : 'selected'; } catch (_) { return 'selected'; } })();
+// The full feeds (drawn through inStormScope), the storm ids each surge
+// product is issued for, and the tile URL each surge source was last given.
+const nhcScoped = { wind: [], toa: [], peakPts: [] };
+const nhcSurgeStorms = { inun: [], peak: [] };
+const nhcSurgeTiles = { inun: null, peak: null };
+const BLANK_TILE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+// With no storm selected, or a feature that names none, everything shows.
+function inStormScope(sid, scope, active) {
+    return scope === 'all' || !active || !sid || String(sid).toLowerCase() === String(active).toLowerCase();
+}
+
+// Tile URL for a surge map under the scope. Peak surge filters server-side on
+// its storm field; the inundation image can't be filtered, so it shows only
+// when its storm is the selected one (NHC issues it for one U.S. threat at a time).
+function scopedSurgeTiles(kind, scope, active, storms, version) {
+    const v = version ? `&_v=${version}` : '';
+    if (kind === 'inun') {
+        if (scope === 'all' || !active || !storms.length || storms.includes(active)) return NHC_INUN_TILES + v;
+        return BLANK_TILE;
+    }
+    if (scope === 'all' || !active) return NHC_PEAK_SURGE_TILES + v;
+    const def = `idp_subset='${String(active).toLowerCase().replace(/[^a-z0-9]/g, '')}'`;
+    return `${NHC_PEAK_SURGE_TILES}&layerDefs=${encodeURIComponent(JSON.stringify({ 1: def, 2: def }))}${v}`;
+}
+
+// Badge for a surge product: issued (for this storm, or under All storms),
+// issued only for another storm, or not issued. A product that names no
+// storm counts as issued for whichever is selected.
+function surgeBadgeState(issued, storms, scope, active) {
+    if (!issued) return { text: 'NOT ISSUED', cls: 'gray', other: false };
+    if (scope === 'all' || !active || !storms.length || storms.includes(active)) return { text: 'ISSUED', cls: 'red', other: false };
+    return { text: `${storms.map(s => s.slice(0, 4).toUpperCase()).join('/')} ONLY`, cls: 'gray', other: true };
+}
+
+function applyStormScope() {
+    const keep = f => inStormScope(f.properties.sid, stormScope, activeStorm);
+    const set = (src, feats) => Object.values(maps).forEach(m => {
+        if (m.getSource && m.getSource(src)) m.getSource(src).setData({ type: 'FeatureCollection', features: feats.filter(keep) });
+    });
+    set('nhc-wind', nhcScoped.wind);
+    set('nhc-toa', nhcScoped.toa);
+    set('nhc-peak-surge-pts', nhcScoped.peakPts);
+    ['inun', 'peak'].forEach(kind => {
+        // Re-tile only when the URL changes (new product, storm or scope), so
+        // the 5-min poll doesn't reload an unchanged surge map.
+        if (nhcSurgeStamp[kind]) {
+            const tiles = scopedSurgeTiles(kind, stormScope, activeStorm, nhcSurgeStorms[kind], nhcSurgeStamp[kind].split('|')[2]);
+            if (tiles !== nhcSurgeTiles[kind]) {
+                nhcSurgeTiles[kind] = tiles;
+                Object.values(maps).forEach(m => { if (m.getSource && m.getSource(NHC_SURGE[kind].source)) m.getSource(NHC_SURGE[kind].source).setTiles([tiles]); });
+            }
+        } else nhcSurgeTiles[kind] = null;
+        setSurgeBadge(kind, !!nhcSurgeStamp[kind], nhcSurgeStorms[kind]);
+    });
+    document.querySelectorAll('#storm-scope-row [data-scope]').forEach(b => b.classList.toggle('on', b.dataset.scope === stormScope));
+    Object.keys(maps).forEach(pid => updateTropLegend(pid));
+}
+
+function setStormScope(scope) {
+    stormScope = scope === 'all' ? 'all' : 'selected';
+    try { localStorage.setItem('fxnet_storm_scope', stormScope); } catch (_) {}
+    applyStormScope();
+    addLiveLog(`TROPICAL: wind and surge layers now show ${stormScope === 'all' ? 'every storm' : `the selected storm only${activeStorm ? ` (${stormShortId(activeStorm)})` : ''}`}`, '#00e5ff');
+}
+
+// "none for AL91" when the scope hides every feature the feed has.
+function scopeEmptyNote(all, scope, active) {
+    if (scope === 'all' || !active || !all.length) return '';
+    return all.some(f => inStormScope(f.properties.sid, scope, active)) ? '' : `none for ${String(active).slice(0, 4).toUpperCase()} · other storms hidden`;
+}
+
 let paneWsp = {};          // paneId -> '34' | '50' | '64'
 let paneSurgeRisk = {};    // paneId -> '1'..'5'
 const nhcWspCache = {};    // threshold -> { data, at, synMs, ingestMs }
@@ -6032,9 +6110,9 @@ async function fetchNhcWind(announce) {
         });
         const feats = [...tag(swath, 'swath'), ...tag(fcst, 'fcst'), ...tag(now, 'now')]
             .sort((a, b) => a.properties.radii - b.properties.radii);
-        Object.values(maps).forEach(m => {
-            if (m.getSource('nhc-wind')) m.getSource('nhc-wind').setData({ type: 'FeatureCollection', features: feats });
-        });
+        feats.forEach(f => { f.properties.sid = String(f.properties.stormid || '').toLowerCase(); });
+        nhcScoped.wind = feats;
+        applyStormScope();
         updateHealth('nhcWindField', nhcIngestMs(now) || undefined);
         if (announce) {
             const storms = new Set(now.map(f => String(f.properties.stormid || '').toUpperCase()).filter(Boolean));
@@ -6051,12 +6129,13 @@ async function fetchNhcArrival(announce) {
         const [likely, earliest] = await Promise.all([19, 18].map(id => nhcLayerGeojson(NHC_BASE, id, '&geometryPrecision=3')));
         const tag = (fs, kind) => fs.map(f => ({
             type: 'Feature', geometry: f.geometry,
-            properties: { kind, label: String(f.properties.arrival_time || '').trim(), bin: f.properties.binnumber || '' }
+            // idp_source is "AL092026_004adv_most_likely_toa_34": the storm leads it.
+            properties: { kind, label: String(f.properties.arrival_time || '').trim(), bin: f.properties.binnumber || '',
+                sid: String(f.properties.idp_source || '').slice(0, 8).toLowerCase() }
         })).filter(f => f.properties.label);
         const feats = [...tag(likely, 'likely'), ...tag(earliest, 'earliest')];
-        Object.values(maps).forEach(m => {
-            if (m.getSource('nhc-toa')) m.getSource('nhc-toa').setData({ type: 'FeatureCollection', features: feats });
-        });
+        nhcScoped.toa = feats;
+        applyStormScope();
         updateHealth('nhcArrival', nhcIngestMs([...likely, ...earliest]) || undefined);
         if (announce) addLiveLog(feats.length
             ? `NHC: arrival times of tropical-storm-force winds loaded (${feats.length} contours). Times are the advisory's local time.`
@@ -6071,23 +6150,26 @@ const NHC_SURGE = {
     inun: {
         name: 'Potential Storm Surge Flooding map', source: 'nhc-surge-inun', tiles: NHC_INUN_TILES,
         layers: ['nhc-surge-inun-layer'], badge: 'nhc-surge-inun-badge',
-        probe: `${NHC_BASE}/23/query?where=1%3D1&outFields=name,binnumber,idp_ingestdate&returnGeometry=false&f=json`
+        probe: `${NHC_BASE}/23/query?where=1%3D1&outFields=name,binnumber,idp_subset,idp_ingestdate&returnGeometry=false&f=json`
     },
     peak: {
         name: 'Peak Storm Surge graphic', source: 'nhc-peak-surge', tiles: NHC_PEAK_SURGE_TILES,
         layers: ['nhc-peak-surge-layer', 'nhc-peak-surge-labels'], badge: 'nhc-peak-surge-badge',
-        probe: `${NHC_TROP_SVC}/NHC_PeakStormSurge/MapServer/2/query?where=1%3D1&outFields=idp_source,idp_ingestdate&returnGeometry=false&f=json`
+        probe: `${NHC_TROP_SVC}/NHC_PeakStormSurge/MapServer/2/query?where=1%3D1&outFields=idp_source,idp_subset,idp_ingestdate&returnGeometry=false&f=json`
     }
 };
 
-function setSurgeBadge(kind, issued) {
+function setSurgeBadge(kind, issued, storms) {
     const b = document.getElementById(NHC_SURGE[kind].badge);
     if (!b) return;
-    b.textContent = issued ? 'ISSUED' : 'NOT ISSUED';
-    b.className = `badge ${issued ? 'red' : 'gray'}`;
-    b.title = issued
-        ? `NHC's ${NHC_SURGE[kind].name} is in effect for a storm threatening the U.S. coast.`
-        : `No ${NHC_SURGE[kind].name} right now. NHC issues it only while storm surge watches or warnings are in effect for the U.S. coast; this badge turns red when it does.`;
+    const st = surgeBadgeState(issued, storms, stormScope, activeStorm);
+    b.textContent = st.text;
+    b.className = `badge ${st.cls}`;
+    const who = storms.map(s => s.slice(0, 4).toUpperCase()).join(' and ');
+    b.title = !issued
+        ? `No ${NHC_SURGE[kind].name} right now. NHC issues it only while storm surge watches or warnings are in effect for the U.S. coast; this badge turns red when it does.`
+        : st.other ? `NHC's ${NHC_SURGE[kind].name} is issued for ${who}, not the selected storm. Select ${who} (or choose All storms) to see it.`
+        : `NHC's ${NHC_SURGE[kind].name} is in effect${who ? ` for ${who}` : ''}.`;
 }
 
 // Checks whether the product exists and, when it changed, re-tiles every pane
@@ -6106,12 +6188,13 @@ async function refreshNhcSurge(kind, announce) {
         if (announce) addLiveLog(`SURGE ERROR: ${k.name} — ${e.message}`, '#ff3333');
         return;
     }
-    setSurgeBadge(kind, feats.length > 0);
+    nhcSurgeStorms[kind] = [...new Set(feats.map(f => String((f.attributes || {}).idp_subset || '').toLowerCase()).filter(Boolean))];
+    setSurgeBadge(kind, feats.length > 0, nhcSurgeStorms[kind]);
     if (!feats.length) {
         if (nhcSurgeStamp[kind]) {
             // It was issued and has now been withdrawn — drop the old tiles.
             Object.values(maps).forEach(m => { if (m.getSource(k.source)) m.getSource(k.source).setTiles([cacheBust(k.tiles)]); });
-            if (kind === 'peak') setPeakSurgeLabels([]);
+            if (kind === 'peak') { nhcScoped.peakPts = []; setPeakSurgeLabels([]); }
             nhcSurgeStamp[kind] = null;
         }
         if (announce) {
@@ -6127,15 +6210,20 @@ async function refreshNhcSurge(kind, announce) {
     const stamp = `${label}|${feats.length}|${ingest}`;
     if (stamp !== nhcSurgeStamp[kind]) {
         nhcSurgeStamp[kind] = stamp;
-        const tiles = `${k.tiles}&_v=${ingest}`;
-        Object.values(maps).forEach(m => { if (m.getSource(k.source)) m.getSource(k.source).setTiles([tiles]); });
         if (kind === 'peak') {
             const pts = await nhcLayerGeojson(`${NHC_TROP_SVC}/NHC_PeakStormSurge/MapServer`, 0).catch(() => []);
-            setPeakSurgeLabels(pts.filter(f => String(f.properties.name || '').trim()));
+            nhcScoped.peakPts = pts.filter(f => String(f.properties.name || '').trim());
+            nhcScoped.peakPts.forEach(f => { f.properties.sid = String(f.properties.idp_subset || '').toLowerCase(); });
         }
     }
+    applyStormScope();   // tiles and labels for the selected storm (or all)
     updateHealth('nhcSurge', ingest || undefined);
-    if (announce) addLiveLog(`SURGE: ${k.name} loaded (${label || 'current advisory'})`, '#00ff88');
+    if (announce) {
+        const other = surgeBadgeState(true, nhcSurgeStorms[kind], stormScope, activeStorm).other;
+        addLiveLog(other
+            ? `SURGE: ${k.name} is issued for ${nhcSurgeStorms[kind].map(s => s.slice(0, 4).toUpperCase()).join('/')}, not the selected storm. Select that storm or choose All storms to see it.`
+            : `SURGE: ${k.name} loaded (${label || 'current advisory'})`, other ? '#ffb300' : '#00ff88');
+    }
 }
 
 function setPeakSurgeLabels(features) {
@@ -6176,25 +6264,29 @@ function updateTropLegend(paneId) {
             `<div style="display:flex;width:200px;">${cells}</div><div style="display:flex;width:200px;">${ticks}</div>` +
             `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">percent${c && c.synMs ? ` · ${nhcSynLabel(c.synMs)} cycle` : ''}</div>`);
     }
+    const note = t => t ? `<div style="font-size:8px;color:#ffb347;margin-top:2px;">${t}</div>` : '';
     const toaL = isLayerVisible(m, 'nhc-toa-likely-line'), toaE = isLayerVisible(m, 'nhc-toa-earliest-line');
     if (toaL || toaE) {
-        sections.push(head('TS-force wind arrival') +
+        sections.push(head('TS-force wind arrival') + note(scopeEmptyNote(nhcScoped.toa, stormScope, activeStorm)) +
             (toaL ? row('', 'Most likely', 'border-top:2px solid #ffd166;height:0;') : '') +
             (toaE ? row('', 'Earliest reasonable', 'border-top:2px dashed #ff5c5c;height:0;') : '') +
             `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">advisory's local time</div>`);
     }
     const wf = isLayerVisible(m, 'nhc-windfield-fill'), sw = isLayerVisible(m, 'nhc-swath-fill');
     if (wf || sw) {
-        sections.push(head(wf && sw ? 'Wind field · past swath' : wf ? 'Wind field' : 'Past wind swath') +
+        sections.push(head(wf && sw ? 'Wind field · past swath' : wf ? 'Wind field' : 'Past wind swath') + note(scopeEmptyNote(nhcScoped.wind, stormScope, activeStorm)) +
             row('#ffe14d', '34 kt+ (39 mph)') + row('#ff9a1f', '50 kt+ (58 mph)') + row('#ff2b2b', '64 kt+ (74 mph)') +
             (wf ? `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">shaded now · dashed at forecast times</div>` : ''));
     }
+    const surgeNote = kind => {
+        const st = surgeBadgeState(!!nhcSurgeStamp[kind], nhcSurgeStorms[kind], stormScope, activeStorm);
+        return !nhcSurgeStamp[kind] ? `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">not issued right now</div>`
+            : st.other ? note(`issued for ${st.text.replace(' ONLY', '')} only · not the selected storm`) : '';
+    };
     if (isLayerVisible(m, 'nhc-surge-inun-layer'))
-        sections.push(head('Surge flooding above ground') + SURGE_DEPTH_KEY.inun.map(([c, l]) => row(c, l)).join('') +
-            (nhcSurgeStamp.inun ? '' : `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">not issued right now</div>`));
+        sections.push(head('Surge flooding above ground') + SURGE_DEPTH_KEY.inun.map(([c, l]) => row(c, l)).join('') + surgeNote('inun'));
     if (isLayerVisible(m, 'nhc-peak-surge-layer'))
-        sections.push(head('Peak storm surge') + SURGE_DEPTH_KEY.peak.map(([c, l]) => row(c, l)).join('') +
-            (nhcSurgeStamp.peak ? '' : `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">not issued right now</div>`));
+        sections.push(head('Peak storm surge') + SURGE_DEPTH_KEY.peak.map(([c, l]) => row(c, l)).join('') + surgeNote('peak'));
     if (isLayerVisible(m, 'surge-risk-layer') && paneSurgeRisk[pid])
         sections.push(head(`Surge risk · Cat ${paneSurgeRisk[pid]} worst case`) + SURGE_DEPTH_KEY.risk.map(([c, l]) => row(c, l)).join('') +
             `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">reference map, not a forecast</div>`);
@@ -7003,6 +7095,10 @@ async function openNhcAdv(type, announce = true) {
 function initNhcAdv() {
     const sel = document.getElementById('nhcadv-storm-select');
     if (sel) sel.addEventListener('change', () => setActiveStorm(sel.value));
+    document.querySelectorAll('#storm-scope-row [data-scope]').forEach(b => {
+        b.classList.toggle('on', b.dataset.scope === stormScope);
+        b.addEventListener('click', () => setStormScope(b.dataset.scope));
+    });
     Object.keys(NHC_ADV_PRODUCTS).forEach(type =>
         document.getElementById('nhcadv-' + type)?.addEventListener('click', () => openNhcAdv(type, true)));
     document.getElementById('nhcadv-close')?.addEventListener('click', () => {
@@ -7739,6 +7835,7 @@ function rebuildStormMenus() {
     renderRecon(false);
     // A restored workspace can switch the fixes on before the storm list exists.
     if (activeStorm !== reconFixSid && Object.values(maps).some(m => isLayerVisible(m, 'recon-fix-pts'))) fetchReconFixes(false);
+    applyStormScope();
 }
 
 // The single writer for the shared selection. Mirrors it into the legacy
@@ -7754,6 +7851,7 @@ function setActiveStorm(id) {
     updateNhcAdvInfo();
     if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(true);
     if (Object.values(maps).some(m => isLayerVisible(m, 'recon-fix-pts'))) fetchReconFixes(false);
+    applyStormScope();
     const ip = document.getElementById('intensity-panel');
     if (ip && ip.style.display === 'block' && ip.dataset.mode) openIntensityChart(ip.dataset.mode);
     const tp = document.getElementById('trends-panel');
@@ -11996,6 +12094,14 @@ function initCollapsibleGroups() {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem('fxnet_collapsed_groups') || '{}'); } catch (e) { }
     const persist = () => { try { localStorage.setItem('fxnet_collapsed_groups', JSON.stringify(saved)); } catch (e) { } };
+    // Groups renamed or split in the Oct 2026 menu reorganization inherit the
+    // open/closed choice the user made on the old group.
+    const RENAMED = {
+        'TROPICAL · OVERVIEW': 'NHC TROPICAL', 'TROPICAL · SELECTED STORM': 'NHC TROPICAL',
+        'PRECIP & FLOODING': 'RIVERS & HYDROLOGY', 'CLIMATE & DROUGHT': 'CPC CLIMATE OUTLOOKS',
+        'FIRE, SMOKE & AIR QUALITY': 'FIRE & SMOKE', 'FORECASTS & TEXT': 'MODEL GUIDANCE', 'MAP OVERLAYS': 'OVERLAYS'
+    };
+    Object.entries(RENAMED).forEach(([now, was]) => { if (!(now in saved) && was in saved) saved[now] = saved[was]; });
     const groups = [...document.querySelectorAll('.product-browser .category-group')];
     groups.forEach(group => {
         const label = group.querySelector('.category-label');
@@ -12041,17 +12147,22 @@ function initProductFilter() {
 
     const groups = Array.from(browser.querySelectorAll('.category-group')).map(g => {
         const label = (g.querySelector('.category-label')?.textContent || '').trim();
-        return {
-            el: g,
-            cat: label.toLowerCase(),
-            items: Array.from(g.querySelectorAll(':scope > .product-item')).map(el => ({
+        // Each item also matches on the sub-heading above it, so "qpf" finds
+        // the QPF items whose own labels are just "24hr Day 1".
+        let heading = '';
+        const items = [];
+        Array.from(g.children).forEach(el => {
+            if (el.classList.contains('sub-category')) heading = (el.textContent || '').trim().toLowerCase();
+            else if (el.classList.contains('product-item')) items.push({
                 el,
                 // The label span; the trailing badge (LIVE/NODD/…) is a sibling
                 // and is deliberately not part of the match text.
                 span: el.querySelector('span'),
                 text: (el.querySelector('span')?.textContent || '').trim(),
-            })),
-        };
+                heading,
+            });
+        });
+        return { el: g, cat: label.toLowerCase(), items };
     });
 
     // Cache the original label markup so highlighting can be undone cleanly.
@@ -12081,7 +12192,7 @@ function initProductFilter() {
             const catMatch = g.cat.includes(query);
             let hits = 0;
             g.items.forEach(it => {
-                const hit = catMatch || it.text.toLowerCase().includes(query);
+                const hit = catMatch || it.text.toLowerCase().includes(query) || it.heading.includes(query);
                 it.el.classList.toggle('filter-miss', !hit);
                 clearHighlight(it);
                 if (hit) {
@@ -16906,6 +17017,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 10)', items: [
+        '<b>Wind and surge layers follow the selected storm.</b> The tropical menu is now two groups. <b>TROPICAL · OVERVIEW</b> covers every system: cones, outlook areas and texts, ocean heat, and the surge-risk reference maps. <b>TROPICAL · SELECTED STORM</b> opens with one storm selector, and everything under it follows that storm: advisories, forecast history, track and intensity guidance, Storm Trends, SHIPS, the <b>wind field, past swath, TS-wind arrival times, surge flooding and peak surge</b>, and recon. A <i>This storm / All storms</i> switch under the selector picks whether those wind and surge layers draw just the selected storm (the default) or every system. A surge map issued for another storm shows a gray badge naming it (<i>AL09 ONLY</i>). NHC\'s wind-chance maps can\'t be split by storm, since NHC issues one combined map, so they are badged <b>ALL STORMS</b>.',
+        '<b>Menu reorganized.</b> Groups now run in a forecaster\'s working order. Changes: SPC sorts its outlooks, probabilities and live products under their own headings. Surface Analysis is just observations and analyses. Soundings and SPC Mesoanalysis have a new <b>UPPER AIR &amp; SOUNDINGS</b> group. WPC QPF, excessive rainfall and MPDs joined river gauges in <b>PRECIP &amp; FLOODING</b>. Fire, smoke and air quality are one group. CPC outlooks and drought are <b>CLIMATE &amp; DROUGHT</b>. Meteogram, NDFD, model comparison, MOS and the text browser are <b>FORECASTS &amp; TEXT</b>. The day/night terminator moved to <b>MAP OVERLAYS</b>. Satellite lists the smooth-looping GIBS imagery first. Every product works as before, and saved displays and shared links are unaffected. Renamed groups keep the open/closed state you had. The filter box now also matches the heading a product sits under, so <i>qpf</i> finds the WPC rainfall forecasts.'
+    ]},
     { date: 'Oct 7, 2026 (update 9)', items: [
         '<b>Recon center fixes on the map.</b> New toggle under NHC Tropical → Hurricane Hunters: <b>Recon Center Fixes (map)</b>. Every center fix from the last 72 hours for the selected storm plots as a magenta dot labeled with its time and pressure (e.g. <i>16:47Z 997mb</i>), joined in time order. That line is the center\'s actual observed path between NHC\'s 6-hourly best-track points. The newest fix is larger, ringed in white. Click any fix for the aircraft and mission, the minimum pressure, the max flight-level wind, the flight level, the eye report when there is one, the exact center, and the change since the previous fix, e.g. <i>Since the 14:56Z fix (1.9 h): −5 mb · moved E at 6 kt</i>. The on-map key gives the newest fix and the center\'s recent motion. Refreshes every 5 minutes while shown, and pairs well with Recon Flight Obs to see the plane\'s pattern around the center.'
     ]},
@@ -17351,7 +17466,8 @@ const USER_GUIDE = [
     { id: 'start', title: 'Getting Started', html: `
         <p>FX-Net NextGen is a browser-based forecaster workstation: an interactive map (or several) with live NWS/NOAA data layered on top. Everything is driven from the <b>product sidebar</b> on the left — click a product to turn it on, click it again to turn it off.</p>
         <h3>Finding a product</h3>
-        <p>The <b>filter box</b> at the top of the sidebar searches all products by name or category — type “vel” for velocity products, “trop” for everything tropical. Matching groups open automatically regardless of whether they were collapsed, and the matched text is highlighted. Clear the box (or press <b>Esc</b> in it) to return to the full tree.</p>
+        <p>The <b>filter box</b> at the top of the sidebar searches all products by name, the heading they sit under, or the group name. Type “vel” for velocity products, “qpf” for WPC rainfall forecasts, or “trop” for everything tropical. Matching groups open automatically regardless of whether they were collapsed, and the matched text is highlighted. Clear the box (or press <b>Esc</b> in it) to return to the full tree.</p>
+        <p>The groups run roughly in the order a forecaster works: <b>warnings</b>, then <b>radar, MRMS, satellite and lightning</b>, then <b>SPC</b> severe products, <b>surface</b> and <b>upper air</b>, <b>precip &amp; flooding</b> (WPC QPF and excessive rainfall plus river gauges), the two <b>tropical</b> groups, <b>aviation</b>, <b>fire, smoke &amp; air quality</b>, <b>climate &amp; drought</b>, <b>forecasts &amp; text</b> (meteogram, NDFD, model comparison, MOS, text browser), <b>map overlays</b>, and the <b>analysis tools</b>.</p>
         <h3>Panels (panes)</h3>
         <ul>
             <li>The layout buttons in the bottom toolbar switch between <b>1, 2, 4, and 8 panel</b> displays.</li>
@@ -17497,11 +17613,12 @@ const USER_GUIDE = [
                 The storm’s <b>past track</b> is drawn too, as on NHC’s own cone graphic: dotted while it was a disturbance or low, solid once it became a tropical cyclone, with dots colored by intensity. Click a dot for the time, strength and pressure.</li>
             <li><b>Forecast History (run-to-run)</b> — for the active storm, the storm’s actual traveled path (best-track, fix dots colored by intensity) with every past advisory’s official forecast track overlaid. Each run has its own color, from violet (oldest) through green, with the newest in bold white, and is labeled with its synoptic time (<i>06Z Wed</i>). The on-map key lists the runs with their age: hover one to isolate it, click to pin it, or <b>▶ play runs</b> to step through them. Click a track or point for its run, valid time, intensity and where the newest run has the storm at that time. <b>Trend</b> (12h–120h) marks where each run put the center at one valid time, the newest run’s +48 h for example, joined oldest to newest. The key gives the wind each run had then and the move from one run to the next; the move includes speed changes as well as track shifts. <i>Show last 4 / 8 / all</i> trims a long-lived storm. Forecast tracks accumulate one per full advisory (sparse for a new storm, richer over time); the actual path reaches back to the invest stage.</li>
             <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details. A disturbance that already exists is marked with an <b>X</b> colored by its 2-day chance (yellow low, orange medium, red high), and when NHC gives one, an arrow shows where it is expected to develop. An area with no X is where formation is expected later.</li>
-            <li><b>Tropical Discussions</b> open the full NHC text products.</li>
+            <li><b>Tropical Weather Outlooks</b> (text) open the full NHC outlook discussions.</li>
         </ul>
-        <p><b>One active storm.</b> The two storm dropdowns (here and under Model Guidance) are the same selection — pick a system in either and everything below follows it: advisories, recon, spaghetti tracks, intensity, Storm Trends, and SHIPS. Both lists show every active system, numbered storms and invests, in both oceans.</p>
+        <p><b>Two tropical groups.</b> <b>TROPICAL · OVERVIEW</b> holds what covers every system at once: Active Storms &amp; Cones, the outlook areas and texts, Ocean Heat, and the Surge Risk reference maps. <b>TROPICAL · SELECTED STORM</b> starts with the storm selector, and <b>everything in that group follows it</b>: advisories, forecast history, track and intensity guidance, Storm Trends, SHIPS, the wind and surge layers, and recon. The list shows every active system, numbered storms and invests, in both oceans.</p>
+        <p><b>This storm / All storms.</b> Under the selector, <i>Wind &amp; surge layers</i> sets what the wind field, past swath, arrival times and both surge maps draw. <b>This storm</b> (the default) shows only the selected system, so a second storm’s wind field or an invest’s nothing doesn’t clutter the map; <b>All storms</b> draws every system. The choice is remembered. When the selected storm has none of a product, the key says so (<i>none for AL91 · other storms hidden</i>). A surge map issued for a different storm shows a gray badge naming that storm (<i>AL09 ONLY</i>). The wind-chance maps are the exception: NHC issues one combined map for all storms, so they show every storm either way, and their badge reads <b>ALL STORMS</b>.</p>
         <h3>Wind Threat</h3>
-        <p>NHC’s land-impact wind products, for every active storm at once. Each has its own key in the top-right corner of the pane.</p>
+        <p>NHC’s land-impact wind products. Each has its own key in the top-right corner of the pane.</p>
         <ul>
             <li><b>Tropical-Storm / 50-kt / Hurricane Wind Chance</b> — the chance of sustained winds of 34 kt (39 mph), 50 kt (58 mph) or 64 kt (74 mph) at any time in the next 5 days. Each pane can show its own threshold. <b>Click anywhere</b> on the shading for all three chances at that spot, read live from NOAA rather than off the drawn shapes. These are the same numbers as the Wind Speed Probabilities text, but for any location, not just the listed cities.</li>
             <li><b>TS Wind Arrival</b> — when tropical-storm-force winds are expected to begin. <b>Most Likely</b> is the best estimate. <b>Earliest Reasonable</b> is the time there is only about a 1-in-10 chance of them arriving sooner, which is the time to have preparations finished. Times are in the time zone NHC’s advisory uses (CDT for most Gulf storms).</li>
@@ -17520,10 +17637,11 @@ const USER_GUIDE = [
         <h3>Tide Gauges</h3>
         <p><b>Tide Gauges: Water vs Normal Tide</b> plots every NOAA coastal tide gauge. The fill colour is how far the water is running above (yellow → red → purple) or below (blue) the <i>predicted</i> tide right now: that difference is the storm surge or wind setup. A coloured <b>ring</b> means the gauge has reached a flood level now: orange minor, red moderate, purple major. Grey means the gauge has no recent reading. Zoom in for the departure in feet, and further for station names.</p>
         <p><b>Click a gauge</b> for its chart. The cyan line is what was observed over the last 48 hours; the dashed line is the predicted (astronomical) tide, 48 hours back and 48 ahead. Horizontal lines mark the flood levels. Heights are feet above <b>MHHW</b>, the average of each day’s higher high tide, which is the level NWS flood thresholds are set from. Where NWS has no thresholds, NOAA’s derived minor level is used and labelled so. Magenta diamonds are NOAA’s operational forecast model peak (tide plus surge) where one runs. It can run high or low, so compare it with the observed gap. Esc or × closes the chart.</p>
+        <p><b>Tide Gauges</b> and <b>Ocean Heat</b> cover every gauge and all water regardless of the selected storm. Tide Gauges sits with the surge products; Ocean Heat is under TROPICAL · OVERVIEW.</p>
         <h3>Ocean Heat</h3>
         <p><b>Sea-Surface Temperature</b> is NASA’s daily ~1 km analysis (MUR), about a day behind; the key shows the date. <b>SST vs Normal</b> is the same field as a departure from normal for the date, which makes warm eddies and the Loop Current stand out. Hover over water to read the value in the top bar; for SST it turns orange-red at 26.5°C (80°F), roughly what a hurricane needs. The value comes from NASA’s colour table, so it is accurate to the 0.15°C class the map is drawn with.</p>
         <h3>Official Advisories (per storm)</h3>
-        <p>Read NHC’s authoritative text for any active storm. Pick a system from the dropdown — every active Atlantic and Pacific storm is listed with its current advisory number and age — then open a product:</p>
+        <p>Read NHC’s authoritative text for the selected storm. The line under the selector gives its current advisory number and age. Open a product:</p>
         <ul>
             <li><b>Public Advisory</b> (TCP) — the plain-language advisory: location, intensity, movement, and the watches/warnings in effect.</li>
             <li><b>Forecast Discussion</b> (TCD) — the forecaster’s reasoning behind the track and intensity forecast.</li>
@@ -17540,7 +17658,7 @@ const USER_GUIDE = [
             <li><b>Vortex Data Message</b> — the crew’s center-fix report from inside the storm: fix position, minimum pressure, max winds, and eye character.</li>
         </ul>
         <h3>Model Guidance (Spaghetti)</h3>
-        <p>Live ATCF a-deck model tracks drawn directly on the map for any active system — invests included. Pick the system from the dropdown (populated automatically from NHC), then choose a view:</p>
+        <p>Live ATCF a-deck model tracks drawn directly on the map for the selected system, invests included. Choose a view under <b>Track</b> or <b>Track · AI / ML Models</b>; the charts are under <b>Intensity</b>:</p>
         <ul>
             <li><b>Early Cycle Track Guidance</b> — the interpolated aids available at advisory time: GFS (AVNI), ECMWF (EMXI), UKMET, Canadian, HAFS-A/B, COAMPS-TC, Google DeepMind, ensemble means, beta-advection trackers, and the TVCN / HCCA consensus (wide cyan / green). The NHC Official forecast plots in white when the system is a numbered cyclone.</li>
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
@@ -17564,6 +17682,7 @@ const USER_GUIDE = [
         </ul>` },
 
     { id: 'firewx', title: 'Lightning, Fire, Smoke, Air Quality & Solar', html: `
+        <p>Lightning has its own group near radar. Fires, smoke, AQI and the SPC Fire Weather Outlooks share <b>FIRE, SMOKE &amp; AIR QUALITY</b>; the day/night terminator is under <b>MAP OVERLAYS → Sun</b>.</p>
         <ul>
             <li><b>Lightning</b> — NLDN strike density mosaic.</li>
             <li><b>SPC Fire Weather Outlooks</b> (Day 1–8), <b>HMS Smoke</b> plumes, and <b>FIRMS</b> satellite-detected fire points.</li>
