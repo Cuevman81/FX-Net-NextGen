@@ -3276,6 +3276,44 @@ function initFrontalPipIcons(map) {
         paint: { 'text-color': '#7fff9e', 'text-halo-color': '#000', 'text-halo-width': 1.5 }
     });
 
+    // Recon vortex (center) fixes for the active storm — see reconFixFeatures.
+    map.addSource('recon-fixes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'recon-fix-line', type: 'line', source: 'recon-fixes',
+        filter: ['==', ['get', 'kind'], 'path'],
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#ff4dd2', 'line-width': 1.6, 'line-opacity': 0.75 }
+    });
+    map.addLayer({
+        id: 'recon-fix-pts', type: 'circle', source: 'recon-fixes',
+        filter: ['==', ['get', 'kind'], 'fix'],
+        layout: { visibility: 'none', 'circle-sort-key': ['-', 0, ['get', 'sort']] },
+        paint: {
+            'circle-radius': ['case', ['==', ['get', 'newest'], 1], 6.5, 4.5],
+            'circle-color': '#ff4dd2',
+            'circle-opacity': ['case', ['==', ['get', 'old'], 1], 0.5, 1],
+            'circle-stroke-width': ['case', ['==', ['get', 'newest'], 1], 2.2, 1],
+            'circle-stroke-color': ['case', ['==', ['get', 'newest'], 1], '#ffffff', '#1a0014']
+        }
+    });
+    map.addLayer({
+        id: 'recon-fix-labels', type: 'symbol', source: 'recon-fixes',
+        filter: ['==', ['get', 'kind'], 'fix'],
+        layout: {
+            visibility: 'none',
+            'text-field': ['get', 'lbl'], 'text-font': ['Noto Sans Bold'],
+            'text-size': ['case', ['==', ['get', 'newest'], 1], 11, 9.5],
+            // Try right, then left, below, above, so close fixes all keep a label.
+            'text-variable-anchor': ['left', 'right', 'top', 'bottom'], 'text-radial-offset': 0.9,
+            'symbol-sort-key': ['get', 'sort'],
+            'text-allow-overlap': false
+        },
+        paint: {
+            'text-color': ['case', ['==', ['get', 'newest'], 1], '#ffffff', '#ff9de6'],
+            'text-halo-color': '#000', 'text-halo-width': 1.5
+        }
+    });
+
     // ─── Layer 7f3: Model track guidance spaghetti (ATCF a-deck) ───
     // One colored LineString per model tech; points carry forecast intensity.
     map.addSource('adeck', {
@@ -3948,13 +3986,23 @@ function initFrontalPipIcons(map) {
     map.on('mouseenter', 'recon-hdob-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'recon-hdob-pts', () => { map.getCanvas().style.cursor = ''; });
 
+    // Recon center fix click → the fix report and change since the previous fix
+    map.on('click', 'recon-fix-pts', e => {
+        const f = e.features && e.features[0];
+        if (!f) return;
+        const html = reconFixPopupHtml(reconFixes, +f.properties.i, Date.now());
+        if (html) new maplibregl.Popup({ maxWidth: '330px' }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    map.on('mouseenter', 'recon-fix-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'recon-fix-pts', () => { map.getCanvas().style.cursor = ''; });
+
     // Model guidance click → which run each track is from. Spaghetti lines are
     // 1-3 px wide, so the hit test uses a small box; a forecast point gets its
     // position and intensity, a bare line lists every aid under the click.
     map.on('click', e => {
         if (!isLayerVisible(map, 'adeck-lines')) return;
         // Leave clicks on the storm's own points and other popups alone.
-        const own = ['nhc-track-pts', 'nhc-past-pts', 'recon-hdob-pts', 'tide-gauges-pts', 'nhc-fcst-pts', 'nhc-fcst-trend-pts'].filter(l => map.getLayer(l));
+        const own = ['nhc-track-pts', 'nhc-past-pts', 'recon-hdob-pts', 'recon-fix-pts', 'tide-gauges-pts', 'nhc-fcst-pts', 'nhc-fcst-trend-pts'].filter(l => map.getLayer(l));
         if (own.length && map.queryRenderedFeatures(e.point, { layers: own }).length) return;
         const r = 6, box = [[e.point.x - r, e.point.y - r], [e.point.x + r, e.point.y + r]];
         const hits = map.queryRenderedFeatures(box, { layers: ['adeck-pts', 'adeck-lines'] });
@@ -4001,7 +4049,7 @@ function initFrontalPipIcons(map) {
     // then; a bare line lists the runs under the click.
     map.on('click', e => {
         if (!isLayerVisible(map, 'nhc-fcst-lines')) return;
-        const own = ['nhc-track-pts', 'nhc-past-pts', 'recon-hdob-pts', 'tide-gauges-pts'].filter(l => map.getLayer(l));
+        const own = ['nhc-track-pts', 'nhc-past-pts', 'recon-hdob-pts', 'recon-fix-pts', 'tide-gauges-pts'].filter(l => map.getLayer(l));
         if (own.length && map.queryRenderedFeatures(e.point, { layers: own }).length) return;
         const r = 6, box = [[e.point.x - r, e.point.y - r], [e.point.x + r, e.point.y + r]];
         const hits = map.queryRenderedFeatures(box, { layers: ['nhc-fcst-trend-pts', 'nhc-fcst-pts', 'nhc-fcst-lines'] });
@@ -6173,6 +6221,7 @@ function updateTropLegend(paneId) {
     }
 
     if (isLayerVisible(m, 'nhc-fcst-lines') && fcstHist.sid) sections.push(fcstHistoryLegendHtml(fcstHist, head));
+    if (isLayerVisible(m, 'recon-fix-pts')) sections.push(reconFixLegendHtml(reconFixes, head, Date.now()));
 
     if (!sections.length) { legend.style.display = 'none'; return; }
     legend.innerHTML = sections.join('<div style="border-top:1px solid rgba(255,255,255,0.12);margin:5px 0 4px;"></div>');
@@ -7688,6 +7737,8 @@ function rebuildStormMenus() {
     nhcAdvSel = activeStorm;
     updateNhcAdvInfo();
     renderRecon(false);
+    // A restored workspace can switch the fixes on before the storm list exists.
+    if (activeStorm !== reconFixSid && Object.values(maps).some(m => isLayerVisible(m, 'recon-fix-pts'))) fetchReconFixes(false);
 }
 
 // The single writer for the shared selection. Mirrors it into the legacy
@@ -7702,6 +7753,7 @@ function setActiveStorm(id) {
     if (selB && selB.value !== (activeStorm || '')) selB.value = activeStorm || '';
     updateNhcAdvInfo();
     if (Object.values(maps).some(m => isLayerVisible(m, 'adeck-lines'))) fetchAdeck(true);
+    if (Object.values(maps).some(m => isLayerVisible(m, 'recon-fix-pts'))) fetchReconFixes(false);
     const ip = document.getElementById('intensity-panel');
     if (ip && ip.style.display === 'block' && ip.dataset.mode) openIntensityChart(ip.dataset.mode);
     const tp = document.getElementById('trends-panel');
@@ -7824,12 +7876,16 @@ function fcstMiles(a, b) {
 function fcstShiftText(a, b) {
     const mi = fcstMiles(a, b);
     if (mi < 10) return 'same spot';
+    return `${Math.round(mi / 5) * 5} mi ${compass16(a, b)}`;
+}
+
+// 16-point compass direction from a to b ("NNE").
+function compass16(a, b) {
     const rad = Math.PI / 180;
     const y = Math.sin((b.lon - a.lon) * rad) * Math.cos(b.lat * rad);
     const x = Math.cos(a.lat * rad) * Math.sin(b.lat * rad) - Math.sin(a.lat * rad) * Math.cos(b.lat * rad) * Math.cos((b.lon - a.lon) * rad);
     const brg = (Math.atan2(y, x) / rad + 360) % 360;
-    const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
-    return `${Math.round(mi / 5) * 5} mi ${dirs[Math.round(brg / 22.5) % 16]}`;
+    return ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(brg / 22.5) % 16];
 }
 
 // Runs to draw: the newest `show` of them (0 = all).
@@ -8094,7 +8150,10 @@ function parseVdm(text) {
     const mslp = text.match(/^D\.\s*(?:EXTRAP\s+)?(\d{3,4})\s*mb/mi);
     const flw = text.match(/MAX FL WIND\s+(\d+)\s*KT/i);
     const pos = text.match(/^B\.\s*([\d.]+)\s*deg\s*([NS])\s+([\d.]+)\s*deg\s*([EW])/mi);
-    const ac = text.match(/^U\.\s*(\S+)/m);
+    const ac = text.match(/^U\.\s*(\S+)\s*(\S*)/m);
+    const lvl = text.match(/^C\.\s*(\d+)\s*mb\s+(\d+)\s*m/mi);
+    const field = k => { const f = text.match(new RegExp(`^${k}\\.\\s*(.+?)\\s*$`, 'm')); return f && !/^NA$/i.test(f[1]) ? f[1] : ''; };
+    const extrap = /^D\.\s*EXTRAP/mi.test(text);
     return {
         id: id[1].toUpperCase(),
         ms: d.getTime(),
@@ -8102,7 +8161,11 @@ function parseVdm(text) {
         flWind: flw ? +flw[1] : null,
         lat: pos ? +pos[1] * (pos[2].toUpperCase() === 'S' ? -1 : 1) : null,
         lon: pos ? +pos[3] * (pos[4].toUpperCase() === 'W' ? -1 : 1) : null,
-        aircraft: ac ? ac[1] : ''
+        aircraft: ac ? ac[1] : '',
+        mission: ac ? ac[2] : '',
+        level: lvl ? `${lvl[1]} mb ${lvl[2]} m` : '',
+        eye: [field('F'), field('G')].filter(Boolean).join(' · '),
+        extrap
     };
 }
 
@@ -8134,6 +8197,119 @@ function latestReconHtml(vdms, best, nowMs) {
     if (!parts.length) return '';
     return `<span style="color:#ff4dd2;">LATEST RECON</span> <span style="color:#fff;">${hhmm(v.ms)}</span>` +
         `${v.aircraft ? ` ${esc(v.aircraft)}` : ''} (${ago < 60 ? `${ago} min` : `${(ago / 60).toFixed(1)} h`} ago): ` + parts.join(' · ');
+}
+
+// ─── Recon center fixes on the map ───
+// Each vortex fix for the active storm as a magenta dot labeled time and
+// pressure, joined in time order: the center's observed path between NHC's
+// 6-hourly best-track points. Click a fix for the full report and the change
+// since the previous one. Refreshed every 5 min while shown.
+let reconFixes = [];   // active storm's fixes, oldest first
+let reconFixSid = null;   // storm those fixes belong to
+
+// Fixes for one storm from raw VDM products: newest 72 h, one per fix time
+// (a corrected resend replaces the original), oldest first.
+function stormVdms(prods, stormAtcf, nowMs) {
+    const by = {};
+    prods.map(parseVdm).forEach(v => {
+        if (v && v.id === stormAtcf && v.lat != null && nowMs - v.ms <= 72 * 3600000 && v.ms <= nowMs + 3600000) by[v.ms] = v;
+    });
+    return Object.values(by).sort((x, y) => x.ms - y.ms);
+}
+
+// "NNW at 4 kt" between two fixes; null when under 1.5 h apart, where the
+// center's wobble and the fix accuracy swamp the motion.
+function reconFixMotion(a, b) {
+    const h = (b.ms - a.ms) / 3600000;
+    if (h < 1.5) return null;
+    const kt = fcstMiles(a, b) / 1.15078 / h;
+    return kt < 1 ? 'nearly stationary' : `${compass16(a, b)} at ${Math.round(kt)} kt`;
+}
+
+const reconHhmm = ms => { const d = new Date(ms); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}Z`; };
+
+function reconFixFeatures(fixes, nowMs) {
+    const features = [];
+    if (fixes.length >= 2) features.push({ type: 'Feature', properties: { kind: 'path' },
+        geometry: { type: 'LineString', coordinates: fixes.map(v => [v.lon, v.lat]) } });
+    fixes.forEach((v, i) => {
+        const newest = i === fixes.length - 1;
+        features.push({ type: 'Feature',
+            properties: { kind: 'fix', i, newest: newest ? 1 : 0, old: nowMs - v.ms > 12 * 3600000 ? 1 : 0, sort: fixes.length - i,
+                lbl: `${reconHhmm(v.ms)}${v.mslp != null ? ` ${v.mslp}mb` : ''}` },
+            geometry: { type: 'Point', coordinates: [v.lon, v.lat] } });
+    });
+    return features;
+}
+
+function reconFixPopupHtml(fixes, i, nowMs) {
+    const v = fixes[i], prev = fixes[i - 1];
+    if (!v) return '';
+    const row = (k, val) => val ? `<div style="display:flex;justify-content:space-between;gap:14px;"><span style="color:#8b97a3;">${k}</span><span style="color:#fff;">${val}</span></div>` : '';
+    const ago = Math.round((nowMs - v.ms) / 60000);
+    let change = '';
+    if (prev) {
+        const h = (v.ms - prev.ms) / 3600000;
+        const dp = v.mslp != null && prev.mslp != null ? v.mslp - prev.mslp : null;
+        const mot = reconFixMotion(prev, v);
+        change = `<div style="margin-top:4px;border-top:1px solid rgba(255,255,255,0.12);padding-top:3px;color:#cfd6de;">Since the ${reconHhmm(prev.ms)} fix (${h.toFixed(1)} h):` +
+            (dp != null ? ` <span style="color:${dp < 0 ? '#ff6666' : dp > 0 ? '#7fff9e' : '#cfd6de'};">${dp > 0 ? '+' : ''}${dp} mb</span>` : '') +
+            (mot ? ` · moved ${mot}` : '') + `</div>`;
+    }
+    return `<div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:240px;">
+        <div style="color:#ff4dd2;font-weight:700;margin-bottom:4px;">✈ Recon center fix · ${reconHhmm(v.ms)}<span style="color:#8b97a3;font-weight:400;"> · ${ago < 60 ? `${ago} min` : `${(ago / 60).toFixed(1)} h`} ago</span></div>
+        ${row('Aircraft', esc([v.aircraft, v.mission].filter(Boolean).join(' ')))}
+        ${row(v.extrap ? 'Min pressure (extrap.)' : 'Min pressure', v.mslp != null ? `${v.mslp} mb` : '')}
+        ${row('Max flight-level wind', v.flWind != null ? `${v.flWind} kt` : '')}
+        ${row('Flight level', esc(v.level))}
+        ${row('Eye', esc(v.eye))}
+        ${row('Center', `${Math.abs(v.lat).toFixed(2)}°${v.lat < 0 ? 'S' : 'N'} ${Math.abs(v.lon).toFixed(2)}°${v.lon < 0 ? 'W' : 'E'}`)}
+        ${change}
+    </div>`;
+}
+
+async function fetchReconFixes(show) {
+    const setAll = feats => Object.values(maps).forEach(m => {
+        if (m.getSource && m.getSource('recon-fixes')) m.getSource('recon-fixes').setData({ type: 'FeatureCollection', features: feats });
+    });
+    if (!activeStorm) { reconFixes = []; reconFixSid = null; setAll([]); refreshReconFixLegends(); return; }
+    const sid = activeStorm;
+    try {
+        const prods = await fetchAfos(sid.startsWith('al') ? 'REPNT2' : 'REPPN2', 30);
+        if (sid !== activeStorm) return;
+        const now = Date.now();
+        reconFixes = stormVdms(prods, sid.toUpperCase(), now);
+        reconFixSid = sid;
+        setAll(reconFixFeatures(reconFixes, now));
+        refreshReconFixLegends();
+        if (show) {
+            const v = reconFixes[reconFixes.length - 1];
+            addLiveLog(v ? `RECON FIXES: ${stormShortId(sid)} — ${reconFixes.length} center fix${reconFixes.length === 1 ? '' : 'es'} in 72 h, newest ${reconHhmm(v.ms)}${v.mslp != null ? ` ${v.mslp} mb` : ''}`
+                : `RECON FIXES: no center fixes for ${stormShortId(sid)} in the last 72 h`, v ? '#ff4dd2' : '#ffb300');
+        }
+    } catch (e) {
+        if (show) addLiveLog(`RECON FIXES ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+function refreshReconFixLegends() {
+    Object.keys(maps).forEach(pid => { if (isLayerVisible(maps[pid], 'recon-fix-pts')) updateTropLegend(pid); });
+}
+
+// The key's RECON CENTER FIXES section.
+function reconFixLegendHtml(fixes, head, nowMs) {
+    const v = fixes[fixes.length - 1];
+    const dot = (c, s) => `<span style="width:9px;height:9px;border-radius:50%;background:#ff4dd2;display:inline-block;flex:none;${s || ''}"></span>`;
+    if (!v) return head('Recon center fixes') + `<div style="font-size:9px;color:#8b97a3;">none for this storm in the last 72 h</div>`;
+    // Motion over the newest fixes at least 1.5 h apart.
+    let j = fixes.length - 2;
+    while (j >= 0 && (v.ms - fixes[j].ms) < 1.5 * 3600000) j--;
+    const mot = j >= 0 ? reconFixMotion(fixes[j], v) : null;
+    const ago = Math.round((nowMs - v.ms) / 60000);
+    return head(`Recon center fixes · ${fixes.length}`) +
+        `<div style="display:flex;align-items:center;gap:5px;margin:1px 0;">${dot('', 'border:2px solid #fff;width:7px;height:7px;')}<span style="font-size:9px;color:#fff;white-space:nowrap;">newest ${reconHhmm(v.ms)}${v.mslp != null ? ` · ${v.mslp} mb` : ''}${v.flWind != null ? ` · FL ${v.flWind} kt` : ''}</span></div>` +
+        `<div style="font-size:8px;color:#8b97a3;margin-top:1px;">${ago < 60 ? `${ago} min` : `${(ago / 60).toFixed(1)} h`} ago${v.aircraft ? ` · ${esc(v.aircraft)}` : ''}${mot ? ` · moving ${mot}` : ''}</div>` +
+        `<div style="font-size:8px;color:#8b97a3;">labels: fix time · pressure · click a fix for details</div>`;
 }
 
 function trendWord(delta, up, down, eps) {
@@ -12368,6 +12544,7 @@ function productItemActiveOn(pid, item) {
     else if (layer === 'nhc-fcst-history') isActive = isLayerVisible(map, 'nhc-fcst-lines');
     else if (layer === 'nhc-outlook') isActive = isLayerVisible(map, 'nhc-outlook-fill');
     else if (layer === 'recon-hdob') isActive = isLayerVisible(map, 'recon-hdob-pts');
+    else if (layer === 'recon-fixes') isActive = isLayerVisible(map, 'recon-fix-pts');
     else if (layer === 'nhc-wsp') isActive = isLayerVisible(map, 'nhc-wsp-fill') && paneWsp[pid] === item.getAttribute('data-wsp');
     else if (layer === 'nhc-toa') isActive = isLayerVisible(map, `nhc-toa-${item.getAttribute('data-toa')}-line`);
     else if (layer === 'nhc-windfield') isActive = isLayerVisible(map, 'nhc-windfield-fill');
@@ -13150,6 +13327,18 @@ function initProductSidebar() {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
                 if (isActive) await fetchReconHdob(true);
+                updateSidebarToActivePane();
+                return;
+            }
+
+            // ─── Recon center fixes (VDM) on the map ───
+            if (layer === 'recon-fixes') {
+                const isActive = !item.classList.contains('active');
+                ['recon-fix-line', 'recon-fix-pts', 'recon-fix-labels'].forEach(l => {
+                    if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
+                });
+                if (isActive) await fetchReconFixes(true);
+                updateTropLegend(activePaneId);
                 updateSidebarToActivePane();
                 return;
             }
@@ -15295,7 +15484,7 @@ function clearPane(map, paneId) {
         'natt-vector', 'natt-cell', 'natt-tvs', 'natt-label',
         'meso-circ', 'meso-tvs', 'meso-label',
         'nws-cwa-layer', 'nws-cwa-label-layer',
-        'recon-hdob-line', 'recon-hdob-pts', 'recon-hdob-labels',
+        'recon-hdob-line', 'recon-hdob-pts', 'recon-hdob-labels', 'recon-fix-line', 'recon-fix-pts', 'recon-fix-labels',
         'adeck-lines', 'adeck-pts', 'adeck-labels'
     ];
     allToggleLayers.forEach(l => {
@@ -15973,6 +16162,8 @@ function startAutoRefresh() {
         if (Object.values(maps).some(m => isLayerVisible(m, 'recon-hdob-pts'))) {
             fetchReconHdob(false);
         }
+        // Center fixes come every 1-2 h on station; 5 min keeps the newest prompt
+        if (Object.values(maps).some(m => isLayerVisible(m, 'recon-fix-pts'))) fetchReconFixes(false);
     }, 5 * 60 * 1000);
 
     // Dedicated Top-of-Hour AirNow AQI Sync (:12, :27, :42 past the hour)
@@ -16715,6 +16906,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 9)', items: [
+        '<b>Recon center fixes on the map.</b> New toggle under NHC Tropical → Hurricane Hunters: <b>Recon Center Fixes (map)</b>. Every center fix from the last 72 hours for the selected storm plots as a magenta dot labeled with its time and pressure (e.g. <i>16:47Z 997mb</i>), joined in time order. That line is the center\'s actual observed path between NHC\'s 6-hourly best-track points. The newest fix is larger, ringed in white. Click any fix for the aircraft and mission, the minimum pressure, the max flight-level wind, the flight level, the eye report when there is one, the exact center, and the change since the previous fix, e.g. <i>Since the 14:56Z fix (1.9 h): −5 mb · moved E at 6 kt</i>. The on-map key gives the newest fix and the center\'s recent motion. Refreshes every 5 minutes while shown, and pairs well with Recon Flight Obs to see the plane\'s pattern around the center.'
+    ]},
     { date: 'Oct 7, 2026 (update 8)', items: [
         '<b>Storm Trends keeps up with the Hurricane Hunters.</b> While a recon plane is working the storm, the window now refreshes every <b>5 minutes</b> instead of 15. It counts a plane as working the storm if it fixed the center in the last 2½ hours, or sent observations near the storm in the last 30 minutes. It goes back to 15 minutes once the mission ends. A new <b>LATEST RECON</b> line in the header gives the newest center fix as soon as it arrives: time, aircraft, central pressure (set against the last best track, e.g. <i>997 mb, 5 mb below the 12Z best track</i>) and flight-level wind. Between NHC\'s 6-hourly analyses, that is the newest measure of the storm. The footer shows when the chart last refreshed and when it checks next.'
     ]},
@@ -17341,6 +17535,7 @@ const USER_GUIDE = [
         <p>The badge on <b>Recon Flight Obs</b> is tied to your <b>selected storm</b>: solid green <b>IN AIR</b> means a Hurricane Hunter is flying the storm you have selected right now; a dimmed <b>IN AIR · AL02</b> means aircraft are airborne, but in a different system (named on the badge), not your storm; <b>RECON</b> means no one is airborne anywhere. The flight-track layer likewise shows only the selected storm’s mission. (Flights are matched to storms by position, since the HDOB storm field is often a generic placeholder.)</p>
         <ul>
             <li><b>Recon Flight Obs (live)</b> — plots the aircraft’s actual flight track from its 30-second high-density observations (HDOBs, updated every ~10 minutes in flight). Points are colored by wind: cyan &lt;34 kt, yellow 34–49, orange 50–63, red 64+ (the stronger of SFMR surface wind or flight-level wind). The newest position is enlarged and labeled with the callsign and storm ID. Click any point for the decoded observation — flight-level wind, peak wind, SFMR surface wind, extrapolated surface pressure, temperature and dew point.</li>
+            <li><b>Recon Center Fixes (map)</b> — every center fix (Vortex Data Message) from the last 72 h for the selected storm, as magenta dots labeled with time and pressure and joined in time order: the center’s observed path between best-track points. The newest is ringed in white. Click a fix for the aircraft, min pressure, max flight-level wind, flight level, eye report, position, and the pressure change and motion since the previous fix. Motion is computed only across fixes at least 1.5 h apart, since closer fixes mostly show center wobble. The key shows the newest fix and recent motion. Refreshes every 5 min while on.</li>
             <li><b>Recon Schedule (TCPOD)</b> — CARCAH’s daily Tropical Cyclone Plan of the Day: which aircraft fly which systems, takeoff and fix times for the next 24 hours, and the outlook for the following day.</li>
             <li><b>Vortex Data Message</b> — the crew’s center-fix report from inside the storm: fix position, minimum pressure, max winds, and eye character.</li>
         </ul>

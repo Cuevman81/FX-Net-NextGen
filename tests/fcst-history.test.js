@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const M = require('./_load').load([
     'parseAdeckText', 'adeckDtgMs', 'adeckRunLabel', 'esc', 'ssCategory',
     'FCST_RUN_RAMP', 'FCST_NEWEST_COLOR', 'FCST_TREND_TAUS', 'fcstHist', 'fcstHexLerp', 'fcstRunColor', 'fcstCycles',
-    'fcstPosAt', 'fcstMiles', 'fcstShiftText', 'fcstShown', 'fcstTrend', 'fcstFocus', 'buildFcstHistoryFeatures',
+    'fcstPosAt', 'fcstMiles', 'compass16', 'fcstShiftText', 'fcstShown', 'fcstTrend', 'fcstFocus', 'buildFcstHistoryFeatures',
     'fcstValidText', 'fcstHistoryLegendHtml', 'fcstPointPopupHtml'
 ]);
 
