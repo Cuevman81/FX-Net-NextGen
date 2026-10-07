@@ -8093,12 +8093,47 @@ function parseVdm(text) {
     if (d.getTime() > Date.now() + 26 * 3600 * 1000) d = new Date(d.setUTCMonth(d.getUTCMonth() - 1));
     const mslp = text.match(/^D\.\s*(?:EXTRAP\s+)?(\d{3,4})\s*mb/mi);
     const flw = text.match(/MAX FL WIND\s+(\d+)\s*KT/i);
+    const pos = text.match(/^B\.\s*([\d.]+)\s*deg\s*([NS])\s+([\d.]+)\s*deg\s*([EW])/mi);
+    const ac = text.match(/^U\.\s*(\S+)/m);
     return {
         id: id[1].toUpperCase(),
         ms: d.getTime(),
         mslp: mslp ? +mslp[1] : null,
-        flWind: flw ? +flw[1] : null
+        flWind: flw ? +flw[1] : null,
+        lat: pos ? +pos[1] * (pos[2].toUpperCase() === 'S' ? -1 : 1) : null,
+        lon: pos ? +pos[3] * (pos[4].toUpperCase() === 'W' ? -1 : 1) : null,
+        aircraft: ac ? ac[1] : ''
     };
+}
+
+// Is a Hurricane Hunter working this storm right now? Yes if its last center
+// fix is under 2.5 h old (planes fix every 1-2 h on station), or an aircraft
+// sent obs in the last 30 min within ~6 deg of the storm, which also catches
+// a plane still on its way in before the first fix.
+function reconMissionActive(vdms, hdobObs, center, nowMs) {
+    const last = vdms[vdms.length - 1];
+    if (last && nowMs - last.ms <= 2.5 * 3600000) return true;
+    if (!center) return false;
+    return hdobObs.some(o => nowMs - o.ms <= 30 * 60000 &&
+        Math.hypot(o.lat - center.lat, (o.lon - center.lon) * Math.cos(center.lat * Math.PI / 180)) <= 6);
+}
+
+// Header line for the newest recon fix, set against the best track it
+// followed, or '' when there is no fix newer than the last analysis.
+function latestReconHtml(vdms, best, nowMs) {
+    const v = vdms[vdms.length - 1], b = best[best.length - 1];
+    if (!v || (b && v.ms <= b.ms)) return '';
+    const hhmm = ms => { const d = new Date(ms); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}Z`; };
+    const ago = Math.round((nowMs - v.ms) / 60000);
+    const parts = [];
+    if (v.mslp != null) {
+        const dp = b && b.mslp != null ? v.mslp - b.mslp : null;
+        parts.push(`<b>${v.mslp} mb</b>${dp ? ` <span style="color:${dp < 0 ? '#ff6666' : '#7fff9e'};">(${Math.abs(dp)} mb ${dp < 0 ? 'below' : 'above'} the ${b.dtg.slice(8, 10)}Z best track)</span>` : dp === 0 ? ` (same as the ${b.dtg.slice(8, 10)}Z best track)` : ''}`);
+    }
+    if (v.flWind != null) parts.push(`flight-level wind ${v.flWind} kt`);
+    if (!parts.length) return '';
+    return `<span style="color:#ff4dd2;">LATEST RECON</span> <span style="color:#fff;">${hhmm(v.ms)}</span>` +
+        `${v.aircraft ? ` ${esc(v.aircraft)}` : ''} (${ago < 60 ? `${ago} min` : `${(ago / 60).toFixed(1)} h`} ago): ` + parts.join(' · ');
 }
 
 function trendWord(delta, up, down, eps) {
@@ -8208,6 +8243,8 @@ function drawTrendsChart(canvas, best, vdms) {
     });
 }
 
+let trendsNextMs = 0;   // when the open Storm Trends panel refreshes next (set by openTrendsChart)
+
 async function openTrendsChart(announce = true) {
     const panel = document.getElementById('trends-panel');
     const title = document.getElementById('trends-title');
@@ -8221,10 +8258,12 @@ async function openTrendsChart(announce = true) {
     title.textContent = `${sid} — STORM TRENDS (OBSERVED INTENSITY HISTORY)`;
     if (announce) { note.textContent = 'Loading…'; tend.innerHTML = ''; }
     try {
-        const [btkRes, atlVdm, epacVdm] = await Promise.all([
+        const [btkRes, atlVdm, epacVdm, hdobProds] = await Promise.all([
             fetch(`/api/adeck?btk=${adeckStorm}`),
             fetchAfos('REPNT2', 30).catch(() => []),
-            fetchAfos('REPPN2', 15).catch(() => [])
+            fetchAfos('REPPN2', 15).catch(() => []),
+            // the newest few aircraft-ob messages, only to tell whether a plane is on station
+            fetchAfos(adeckStorm.startsWith('al') ? 'AHONT1' : 'AHOPN1', 4).catch(() => [])
         ]);
         if (!btkRes.ok) throw new Error(`best track HTTP ${btkRes.status}`);
         const best = parseBdeck(await btkRes.text());
@@ -8249,14 +8288,25 @@ async function openTrendsChart(announce = true) {
             if (dp != null) chips.push(`<span style="color:${dp < 0 ? '#ff6666' : dp > 0 ? '#7fff9e' : '#8b97a3'};">${h}h ΔP ${dp > 0 ? '+' : ''}${dp} mb${pw && pw !== 'STEADY' ? ' ' + pw : ''}</span>`);
             if (dv != null && h !== 6) chips.push(`<span style="color:${dv > 0 ? '#ff6666' : dv < 0 ? '#7fff9e' : '#8b97a3'};">${h}h ΔV ${dv > 0 ? '+' : ''}${dv} kt${vw && vw !== 'STEADY' ? ' ' + vw : ''}</span>`);
         });
-        tend.innerHTML = chips.length
-            ? `<b style="color:#fff;">NOW: ${last.vmax || '?'} kt / ${last.mslp || '?'} mb (${last.type || '—'})</b> · ` + chips.join(' · ')
-            : '';
+        const now = Date.now();
+        const recon = latestReconHtml(vdms, best, now);
+        tend.innerHTML = (chips.length
+            ? `<b style="color:#fff;">BEST TRACK ${last.dtg.slice(8, 10)}Z: ${last.vmax || '?'} kt / ${last.mslp || '?'} mb (${last.type || '—'})</b> · ` + chips.join(' · ')
+            : '') + (recon ? `<div style="margin-top:3px;">${recon}</div>` : '');
+        // Refresh every 5 min while a plane is working the storm, else every 15.
+        const lastV = vdms[vdms.length - 1];
+        const center = lastV && lastV.lat != null && lastV.ms > last.ms ? lastV : last;
+        const hdobObs = hdobProds.map(parseHdob).filter(Boolean).flatMap(h => h.obs);
+        const active = reconMissionActive(vdms, hdobObs, center.lat != null ? center : null, now);
+        trendsNextMs = now + (active ? 5 : 15) * 60000;
+        const upd = new Date(now);
         note.textContent = `Best track through ${last.dtg.slice(8, 10)}Z ${last.dtg.slice(6, 8)} (${adeckAgeStr(last.ms)}) · ${best.length} analyses` +
-            (vdms.length ? ` · ${vdms.length} recon vortex fix${vdms.length > 1 ? 'es' : ''} overlaid` : ' · no recon fixes yet for this system');
+            (vdms.length ? ` · ${vdms.length} recon vortex fix${vdms.length > 1 ? 'es' : ''} overlaid` : ' · no recon fixes yet for this system') +
+            ` · updated ${String(upd.getUTCHours()).padStart(2, '0')}:${String(upd.getUTCMinutes()).padStart(2, '0')}Z, next check in ${active ? '5 min (recon in the storm)' : '15 min'}`;
         if (announce) addLiveLog(`TRENDS: ${sid} — ${best.length} best-track analyses, now ${last.vmax} kt / ${last.mslp} mb${vdms.length ? `, ${vdms.length} recon fixes` : ''}`, '#00e5ff');
     } catch (e) {
         note.textContent = `Error: ${e.message}`;
+        trendsNextMs = Date.now() + 5 * 60000;
     }
 }
 
@@ -8492,11 +8542,18 @@ function initAdeck() {
     setInterval(() => {
         fetchAdeckList();
         if (adeckMode && adeckStorm) fetchAdeck(false);
-        const tp = document.getElementById('trends-panel');
-        if (tp && tp.style.display === 'block') openTrendsChart(false);
         const sp = document.getElementById('ships-panel');
         if (sp && sp.style.display === 'block') openShipsPanel(false);
     }, 15 * 60 * 1000);
+    // Storm Trends sets its own pace (5 min with recon on station, 15 min
+    // otherwise); check once a minute whether it's due.
+    setInterval(() => {
+        const tp = document.getElementById('trends-panel');
+        if (tp && tp.style.display === 'block' && trendsNextMs && Date.now() >= trendsNextMs) {
+            trendsNextMs = Date.now() + 5 * 60000;   // no second call while this one is in flight
+            openTrendsChart(false);
+        }
+    }, 60 * 1000);
 }
 
 // ─── Unified toggle behavior for panel-opening menu items ───
@@ -16658,6 +16715,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 8)', items: [
+        '<b>Storm Trends keeps up with the Hurricane Hunters.</b> While a recon plane is working the storm, the window now refreshes every <b>5 minutes</b> instead of 15. It counts a plane as working the storm if it fixed the center in the last 2½ hours, or sent observations near the storm in the last 30 minutes. It goes back to 15 minutes once the mission ends. A new <b>LATEST RECON</b> line in the header gives the newest center fix as soon as it arrives: time, aircraft, central pressure (set against the last best track, e.g. <i>997 mb, 5 mb below the 12Z best track</i>) and flight-level wind. Between NHC\'s 6-hourly analyses, that is the newest measure of the storm. The footer shows when the chart last refreshed and when it checks next.'
+    ]},
     { date: 'Oct 7, 2026 (update 7)', items: [
         '<b>Forecast History: every run labeled, plus a TREND mode.</b> Each past NHC forecast track now has its own color, from violet (oldest) through blue and green, with the <b>newest in bold white</b>. Each track ends in a label like <i>06Z Wed</i>. The key (top right) lists every run newest first with its age. <b>Hover a run</b> there to isolate it on the map, <b>click</b> to pin it, or press <b>▶ play runs</b> to step through them oldest to newest. Click any track or forecast point on the map for its run, its advisory, the valid time, wind and category, and where the newest run has the storm at that same time (e.g. <i>50 mi NE of here · 95 kt</i>). <b>TREND</b> (12h–120h) picks one moment, the newest run\'s +48 h for example, and marks where <i>each</i> run put the center then, joined oldest to newest, with the wind each run had. The key gives the move from one run to the next and the total since the oldest run shown (e.g. <i>50 mi SE · +10 kt</i>). For a storm with many advisories, choose to show the last 4, the last 8 or all of them.'
     ]},
@@ -17293,7 +17353,7 @@ const USER_GUIDE = [
             <li><b>ECMWF Ensemble Members (51)</b> — ECMWF’s physics ensemble (IFS ENS): 50 members (thin green), the control (white) and the mean (bold yellow-green), straight from ECMWF open data. Out to 15 days at 00Z/12Z and 6 days at 06Z/18Z. ECMWF posts each run 6–8 h after run time, so ECMWF tracks usually sit a run or two behind NHC’s newest aids; popups label that as ECMWF’s latest. Their winds, like any global model’s, run low for a strong storm. Tracks © ECMWF, CC BY 4.0.</li>
             <li><b>AI / ML Models (✦)</b> — data-driven guidance has its own <b>Early Cycle AI Models</b> and <b>Late Cycle AI Models</b> track views (the regular Early/Late Track Guidance are physics-only). GraphCast (Google DeepMind) plots now; GraphCast-deterministic, Google GenCast, ECMWF AIFS, AI-GFS, and AI-GEFS are wired and draw automatically once NHC distributes them. In the intensity charts, the AI aids (NNIC neural-net intensity consensus, NNIB baseline, GraphCast) show alongside the physics models flagged with ✦ so you can compare directly. The ✦ also appears on track end-labels and in the click popup. <b>AIFS</b>, ECMWF’s AI model, plots in the Late Cycle AI view, taken straight from ECMWF open data rather than NHC. <b>AIFS Ensemble (ECMWF AI, 51)</b> draws all 51 members of ECMWF’s AI ensemble with its control (white) and mean (bold pink).</li>
             <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones. <b>Hover or click</b> any line, point or key entry: that model is highlighted, with its run, whether it is the newest, the forecast hour and its valid time, and the wind and category there. The x-axis is hours from each model’s own run, so compare lines by the valid time in that readout. The Late Cycle chart also carries the ensembles: AIFS as a line, and GEFS (yellow), the AIFS ensemble (pink) and the ECMWF ensemble (green) each as their mean with the middle 80% of members shaded. Hover a mean for the members’ range and the strongest member at that hour. The shading ends once fewer than half the members still have the storm. Global-model winds run low for a strong storm, so read these for spread and trend.</li>
-            <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
+            <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows the latest best-track intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). A <b>LATEST RECON</b> line adds the newest center fix (time, aircraft, pressure against the last best track, flight-level wind) when it is newer than the best track. The chart refreshes every 5 min while a recon plane is working the storm and every 15 min otherwise; the footer shows the last refresh and the next check. Works for invests too, and follows the storm selector.</li>
             <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance. A CIRA block below adds a second independent RI consensus, the Convective <b>Decapitation</b> probability (odds the convection gets sheared off the center → rapid weakening — the counterpart to RI), and current structure predictors (cold-cloud fraction, IR core symmetry).</li>
         </ul>
         <p><b>Which run is which.</b> Every track is labeled at its end with the model ID <i>and its run</i>, e.g. <b>HWRF 06Z</b>. A run more than one cycle behind the newest in NHC’s deck also shows how far behind it is (<b>CMC 00Z −12h</b>). Click anywhere on a track, not just a dot, to see every model under the click with its full run time (<b>06Z Wed Oct 7</b>), how far its forecast goes, and whether it is the newest run. Click a forecast point for the same plus its valid time and forecast intensity: max wind with Saffir-Simpson category, and MSLP where available.</p>
