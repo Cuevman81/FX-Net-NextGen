@@ -3153,9 +3153,9 @@ function initFrontalPipIcons(map) {
     });
 
     // ─── Forecast History (run-to-run): past OFCL tracks + actual best-track path ───
-    // Each prior advisory's official forecast track is drawn faded (older fainter,
-    // newest highlighted) anchored at its fixed position, over the storm's actual
-    // traveled path — showing how the forecast has trended cycle to cycle.
+    // One color per run (see fcstRunColor), each anchored at its fixed position,
+    // over the storm's actual traveled path. Trend markers show where each run
+    // put the center at one valid time. Data: buildFcstHistoryFeatures.
     map.addSource('nhc-fcst-history', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({
         id: 'nhc-fcst-actual-line', type: 'line', source: 'nhc-fcst-history',
@@ -3166,12 +3166,12 @@ function initFrontalPipIcons(map) {
     map.addLayer({
         id: 'nhc-fcst-lines', type: 'line', source: 'nhc-fcst-history',
         filter: ['==', ['get', 'kind'], 'fcst'],
-        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['coalesce', ['get', 'op'], 0] },
         paint: {
             'line-color': ['coalesce', ['get', 'color'], '#00e5ff'],
             'line-width': ['coalesce', ['get', 'w'], 1.5],
             'line-opacity': ['coalesce', ['get', 'op'], 0.6],
-            'line-dasharray': [2.5, 2]
+            'line-dasharray': [2.5, 1.6]
         }
     });
     map.addLayer({
@@ -3187,17 +3187,53 @@ function initFrontalPipIcons(map) {
         }
     });
     map.addLayer({
+        id: 'nhc-fcst-pts', type: 'circle', source: 'nhc-fcst-history',
+        filter: ['==', ['get', 'kind'], 'fcstpt'],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['case', ['==', ['get', 'big'], 1], 3.4, 2.3],
+            'circle-color': ['get', 'color'],
+            'circle-opacity': ['coalesce', ['get', 'op'], 0.6],
+            'circle-stroke-width': 0.8,
+            'circle-stroke-color': '#000',
+            'circle-stroke-opacity': ['coalesce', ['get', 'op'], 0.6]
+        }
+    });
+    map.addLayer({
+        id: 'nhc-fcst-trend-line', type: 'line', source: 'nhc-fcst-history',
+        filter: ['==', ['get', 'kind'], 'trendline'],
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#ffd166', 'line-width': 1.6, 'line-opacity': 0.9 }
+    });
+    map.addLayer({
+        id: 'nhc-fcst-trend-pts', type: 'circle', source: 'nhc-fcst-history',
+        filter: ['==', ['get', 'kind'], 'trendpt'],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': 6,
+            'circle-color': ['get', 'color'],
+            'circle-opacity': ['coalesce', ['get', 'op'], 1],
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffd166',
+            'circle-stroke-opacity': ['coalesce', ['get', 'op'], 1]
+        }
+    });
+    map.addLayer({
         id: 'nhc-fcst-labels', type: 'symbol', source: 'nhc-fcst-history',
-        filter: ['==', ['get', 'kind'], 'fcstlabel'],
+        filter: ['match', ['get', 'kind'], ['fcstlabel', 'trendlabel'], true, false],
         layout: {
             visibility: 'none',
             'text-field': ['get', 'lbl'], 'text-font': ['Noto Sans Bold'],
-            'text-size': 9, 'text-offset': [0, 0.8], 'text-allow-overlap': false
+            'text-size': ['match', ['get', 'kind'], 'trendlabel', 10, 9.5],
+            'text-offset': ['match', ['get', 'kind'], 'trendlabel', ['literal', [0.9, 0]], ['literal', [0, 0.9]]],
+            'text-anchor': ['match', ['get', 'kind'], 'trendlabel', 'left', 'top'],
+            'symbol-sort-key': ['coalesce', ['get', 'sort'], 0],
+            'text-allow-overlap': false
         },
         paint: {
             'text-color': ['coalesce', ['get', 'color'], '#00e5ff'],
             'text-opacity': ['coalesce', ['get', 'op'], 0.85],
-            'text-halo-color': '#000', 'text-halo-width': 1.3
+            'text-halo-color': '#000', 'text-halo-width': 1.4
         }
     });
 
@@ -3918,7 +3954,7 @@ function initFrontalPipIcons(map) {
     map.on('click', e => {
         if (!isLayerVisible(map, 'adeck-lines')) return;
         // Leave clicks on the storm's own points and other popups alone.
-        const own = ['nhc-track-pts', 'nhc-past-pts', 'recon-hdob-pts', 'tide-gauges-pts'].filter(l => map.getLayer(l));
+        const own = ['nhc-track-pts', 'nhc-past-pts', 'recon-hdob-pts', 'tide-gauges-pts', 'nhc-fcst-pts', 'nhc-fcst-trend-pts'].filter(l => map.getLayer(l));
         if (own.length && map.queryRenderedFeatures(e.point, { layers: own }).length) return;
         const r = 6, box = [[e.point.x - r, e.point.y - r], [e.point.x + r, e.point.y + r]];
         const hits = map.queryRenderedFeatures(box, { layers: ['adeck-pts', 'adeck-lines'] });
@@ -3959,6 +3995,39 @@ function initFrontalPipIcons(map) {
     map.on('mouseleave', 'adeck-lines', () => { map.getCanvas().style.cursor = ''; });
     map.on('mouseenter', 'adeck-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'adeck-pts', () => { map.getCanvas().style.cursor = ''; });
+
+    // Forecast history click → which run a track or point is from. A point
+    // (or trend marker) gets its time, intensity and the newest run's position
+    // then; a bare line lists the runs under the click.
+    map.on('click', e => {
+        if (!isLayerVisible(map, 'nhc-fcst-lines')) return;
+        const own = ['nhc-track-pts', 'nhc-past-pts', 'recon-hdob-pts', 'tide-gauges-pts'].filter(l => map.getLayer(l));
+        if (own.length && map.queryRenderedFeatures(e.point, { layers: own }).length) return;
+        const r = 6, box = [[e.point.x - r, e.point.y - r], [e.point.x + r, e.point.y + r]];
+        const hits = map.queryRenderedFeatures(box, { layers: ['nhc-fcst-trend-pts', 'nhc-fcst-pts', 'nhc-fcst-lines'] });
+        if (!hits.length) return;
+        // Prefer a marker of the run in focus, then a trend marker, then any point.
+        const f = fcstFocus();
+        const pt = hits.find(h => h.layer.id !== 'nhc-fcst-lines' && h.properties.dtg === f)
+            || hits.find(h => h.layer.id === 'nhc-fcst-trend-pts') || hits.find(h => h.layer.id === 'nhc-fcst-pts');
+        let html;
+        if (pt) html = fcstPointPopupHtml(pt.properties, fcstHist);
+        else {
+            const seen = new Set();
+            const runs = hits.filter(h => !seen.has(h.properties.dtg) && seen.add(h.properties.dtg))
+                .sort((x, y) => (+x.properties.lagH || 0) - (+y.properties.lagH || 0)).slice(0, 8);
+            html = `<div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:220px;">` + runs.map(h => {
+                const p = h.properties, lag = +p.lagH || 0;
+                return `<div style="margin-bottom:4px;"><span style="color:${p.color};font-weight:700;">NHC run ${adeckRunLabel(p.dtg)}</span>
+                    <div style="font-size:10px;color:${lag ? '#ffd166' : '#00e676'};">${lag ? `${lag} h older than the newest` : 'newest forecast'}${p.maxTau ? ` · out to ${p.maxTau} h` : ''}</div></div>`;
+            }).join('') + `</div>`;
+        }
+        if (html) new maplibregl.Popup({ maxWidth: '320px' }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+    });
+    ['nhc-fcst-lines', 'nhc-fcst-pts', 'nhc-fcst-trend-pts'].forEach(l => {
+        map.on('mouseenter', l, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', l, () => { map.getCanvas().style.cursor = ''; });
+    });
 
     // NHC Tropical Outlook area click — shows probabilities + loads TWO discussion
     map.on('click', 'nhc-outlook-fill', e => {
@@ -6036,6 +6105,9 @@ function createTropLegend(paneId) {
     legend.className = 'trop-legend';
     legend.id = `trop-legend-${paneId}`;
     legend.style.cssText = 'position:absolute;top:24px;right:8px;z-index:12;background:rgba(0,0,0,0.82);border:1px solid rgba(255,170,0,0.35);border-radius:3px;padding:6px 8px;pointer-events:none;display:none;font-family:"Roboto Mono",monospace;max-width:240px;max-height:calc(100% - 90px);overflow:hidden;';
+    // The key itself lets clicks through to the map; only the forecast-history
+    // rows and buttons (pointer-events:auto) take them.
+    ['click', 'mouseover', 'mouseout'].forEach(t => legend.addEventListener(t, onFcstLegendEvent));
     paneEl.appendChild(legend);
 }
 
@@ -6099,6 +6171,8 @@ function updateTropLegend(paneId) {
             `<div style="position:relative;width:200px;height:10px;font-size:7.5px;color:#bbb;">${tickHtml}</div>` +
             `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">${kind === 'anom' ? '' : '26.5°C / 80°F ≈ hurricane threshold · '}NASA MUR${date ? ` · ${date}` : ''}</div>`);
     }
+
+    if (isLayerVisible(m, 'nhc-fcst-lines') && fcstHist.sid) sections.push(fcstHistoryLegendHtml(fcstHist, head));
 
     if (!sections.length) { legend.style.display = 'none'; return; }
     legend.innerHTML = sections.join('<div style="border-top:1px solid rgba(255,255,255,0.12);margin:5px 0 4px;"></div>');
@@ -7680,67 +7754,332 @@ function parseBdeck(text) {
     return pts.sort((a, b) => a.ms - b.ms);
 }
 
-// Build the run-to-run forecast-history overlay for the active storm: every past
-// OFCL forecast track (faded by age) over the actual best-track traveled path.
-async function fetchFcstHistory(show) {
-    const setAll = feats => Object.values(maps).forEach(m => {
-        if (m.getSource && m.getSource('nhc-fcst-history'))
-            m.getSource('nhc-fcst-history').setData({ type: 'FeatureCollection', features: feats });
+// ─── Forecast History (run to run) ───
+// Every past OFCL forecast track for the active storm over its actual
+// best-track path. Each run gets its own color (oldest violet through lime,
+// newest white) and a label naming its synoptic time; the key lists the runs,
+// and hovering or clicking one there isolates it on the map. TREND picks one
+// valid time and marks where each run put the center (and how strong) at that
+// moment, so the shift run to run reads directly; PLAY steps through the runs.
+// Oldest run → the run before the newest.
+const FCST_RUN_RAMP = ['#8a63ff', '#4f7dff', '#2fb8ff', '#2ee0b0', '#a8e33f'];
+const FCST_NEWEST_COLOR = '#ffffff';
+const FCST_TREND_TAUS = [12, 24, 36, 48, 72, 96, 120];
+const NHC_FCST_LAYERS = ['nhc-fcst-actual-line', 'nhc-fcst-lines', 'nhc-fcst-actual-pts', 'nhc-fcst-pts',
+    'nhc-fcst-trend-line', 'nhc-fcst-trend-pts', 'nhc-fcst-labels'];
+const fcstHist = { sid: null, cycles: [], bpts: [], hover: null, pinned: null, play: null, timer: null, trendTau: 0, show: 0 };
+
+function fcstHexLerp(a, b, t) {
+    const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+    const ch = s => Math.round(((pa >> s) & 255) + (((pb >> s) & 255) - ((pa >> s) & 255)) * t);
+    return '#' + ((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, '0');
+}
+
+// Color of run idx (0 = oldest) out of n; the newest is always white.
+function fcstRunColor(idx, n) {
+    if (idx >= n - 1) return FCST_NEWEST_COLOR;
+    const t = n > 2 ? idx / (n - 2) : 1;
+    const x = t * (FCST_RUN_RAMP.length - 1), i = Math.min(Math.floor(x), FCST_RUN_RAMP.length - 2);
+    return fcstHexLerp(FCST_RUN_RAMP[i], FCST_RUN_RAMP[i + 1], x - i);
+}
+
+// OFCL rows → one entry per run, oldest first, wind-radii repeats dropped.
+function fcstCycles(rows) {
+    const by = {};
+    rows.forEach(r => {
+        if (r.tech !== 'OFCL' || r.tau < 0) return;
+        const c = by[r.dtg] = by[r.dtg] || {};
+        if (!c[r.tau]) c[r.tau] = { tau: r.tau, lat: r.lat, lon: r.lon, vmax: r.vmax || null, mslp: r.mslp && r.mslp > 800 ? r.mslp : null };
     });
-    if (!activeStorm) { setAll([]); if (show) addLiveLog('FORECAST HISTORY: no active system selected', '#ffb300'); return; }
+    return Object.keys(by).sort().map(dtg => ({
+        dtg, ms: adeckDtgMs(dtg), pts: Object.values(by[dtg]).sort((a, b) => a.tau - b.tau)
+    })).filter(c => c.pts.length >= 2);
+}
+
+// Where one run puts the center at validMs, interpolated between its forecast
+// hours; null when that time is before the run or past its last forecast hour.
+function fcstPosAt(cycle, validMs) {
+    const tau = (validMs - cycle.ms) / 3600000, p = cycle.pts;
+    if (tau < p[0].tau || tau > p[p.length - 1].tau) return null;
+    for (let i = 0; i < p.length - 1; i++) {
+        const a = p[i], b = p[i + 1];
+        if (tau > b.tau) continue;
+        const f = b.tau === a.tau ? 0 : (tau - a.tau) / (b.tau - a.tau);
+        const lerp = (x, y) => x == null || y == null ? (f < 0.5 ? x : y) : x + (y - x) * f;
+        return { tau, lat: lerp(a.lat, b.lat), lon: lerp(a.lon, b.lon),
+            vmax: a.vmax && b.vmax ? Math.round(lerp(a.vmax, b.vmax) / 5) * 5 : (a.vmax || b.vmax),
+            exact: f === 0 || f === 1 };
+    }
+    return null;
+}
+
+function fcstMiles(a, b) {
+    const R = 3958.8, rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// "40 mi NNE" — where b sits from a; "same spot" under 10 miles.
+function fcstShiftText(a, b) {
+    const mi = fcstMiles(a, b);
+    if (mi < 10) return 'same spot';
+    const rad = Math.PI / 180;
+    const y = Math.sin((b.lon - a.lon) * rad) * Math.cos(b.lat * rad);
+    const x = Math.cos(a.lat * rad) * Math.sin(b.lat * rad) - Math.sin(a.lat * rad) * Math.cos(b.lat * rad) * Math.cos((b.lon - a.lon) * rad);
+    const brg = (Math.atan2(y, x) / rad + 360) % 360;
+    const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+    return `${Math.round(mi / 5) * 5} mi ${dirs[Math.round(brg / 22.5) % 16]}`;
+}
+
+// Runs to draw: the newest `show` of them (0 = all).
+function fcstShown(cycles, show) {
+    return show > 0 && cycles.length > show ? cycles.slice(cycles.length - show) : cycles;
+}
+
+// Each shown run's position at the trend's valid time (the newest run's
+// forecast hour trendTau), oldest first; runs that don't reach it drop out.
+function fcstTrend(cycles, trendTau) {
+    if (!trendTau || !cycles.length) return { validMs: 0, pts: [] };
+    const validMs = cycles[cycles.length - 1].ms + trendTau * 3600000;
+    const pts = [];
+    cycles.forEach(c => { const p = fcstPosAt(c, validMs); if (p) pts.push({ dtg: c.dtg, ...p }); });
+    return { validMs, pts };
+}
+
+function fcstFocus() { return fcstHist.play || fcstHist.hover || fcstHist.pinned; }
+
+function buildFcstHistoryFeatures(st, focus) {
+    const features = [];
+    const bp = st.bpts || [];
+    if (bp.length >= 2) features.push({ type: 'Feature', properties: { kind: 'actual' },
+        geometry: { type: 'LineString', coordinates: bp.map(p => [p.lon, p.lat]) } });
+    bp.forEach((p, i) => features.push({ type: 'Feature',
+        properties: { kind: 'fix', mw: p.vmax || 0, latest: i === bp.length - 1 ? 1 : 0 },
+        geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
+
+    const all = st.cycles || [], N = all.length;
+    const shown = fcstShown(all, st.show);
+    const newest = all[N - 1];
+    shown.forEach(c => {
+        const idx = all.indexOf(c), isNew = c === newest;
+        const color = fcstRunColor(idx, N);
+        // Without a focus, the newest is bold and older runs fade with age; with
+        // one, that run is bold and every other run steps back.
+        const age = shown.length > 1 ? shown.indexOf(c) / (shown.length - 1) : 1;
+        const op = focus ? (c.dtg === focus ? 1 : 0.16) : isNew ? 1 : +(0.45 + 0.4 * age).toFixed(2);
+        const w = focus ? (c.dtg === focus ? 3.4 : 1.4) : isNew ? 3 : 1.8;
+        const lagH = Math.round((newest.ms - c.ms) / 3600000);
+        const coords = c.pts.map(p => [p.lon, p.lat]);
+        const sortKey = focus ? (c.dtg === focus ? 0 : 1 + N - idx) : N - idx;
+        features.push({ type: 'Feature', properties: { kind: 'fcst', dtg: c.dtg, color, op, w, lagH, maxTau: c.pts[c.pts.length - 1].tau },
+            geometry: { type: 'LineString', coordinates: coords } });
+        c.pts.forEach(p => features.push({ type: 'Feature',
+            properties: { kind: 'fcstpt', dtg: c.dtg, color, op, lagH, tau: p.tau, vmax: p.vmax, mslp: p.mslp, big: isNew || c.dtg === focus ? 1 : 0 },
+            geometry: { type: 'Point', coordinates: [p.lon, p.lat] } }));
+        features.push({ type: 'Feature',
+            properties: { kind: 'fcstlabel', color, op: Math.max(op, focus ? 0.3 : 0.65), sort: sortKey,
+                lbl: `${c.dtg.slice(8, 10)}Z ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(c.ms).getUTCDay()]}${isNew ? ' ★' : ''}` },
+            geometry: { type: 'Point', coordinates: coords[coords.length - 1] } });
+    });
+
+    const tr = fcstTrend(shown, st.trendTau);
+    if (tr.pts.length >= 2) features.push({ type: 'Feature', properties: { kind: 'trendline' },
+        geometry: { type: 'LineString', coordinates: tr.pts.map(p => [p.lon, p.lat]) } });
+    tr.pts.forEach(p => {
+        const idx = all.findIndex(c => c.dtg === p.dtg);
+        const color = fcstRunColor(idx, N);
+        features.push({ type: 'Feature',
+            properties: { kind: 'trendpt', dtg: p.dtg, color, tau: Math.round(p.tau * 10) / 10, vmax: p.vmax, interp: p.exact ? 0 : 1,
+                lagH: Math.round((newest.ms - all[idx].ms) / 3600000), op: !focus || p.dtg === focus ? 1 : 0.35 },
+            geometry: { type: 'Point', coordinates: [p.lon, p.lat] } });
+        features.push({ type: 'Feature',
+            // Newest first when labels collide (lower sort key wins), focus above all.
+            properties: { kind: 'trendlabel', color, op: !focus || p.dtg === focus ? 1 : 0.35, sort: p.dtg === focus ? -999 : -10 - idx,
+                lbl: `${p.dtg.slice(8, 10)}Z${p.vmax ? ` ${p.vmax}kt` : ''}` },
+            geometry: { type: 'Point', coordinates: [p.lon, p.lat] } });
+    });
+    return features;
+}
+
+function renderFcstHistory() {
+    const fc = { type: 'FeatureCollection', features: buildFcstHistoryFeatures(fcstHist, fcstFocus()) };
+    Object.values(maps).forEach(m => {
+        if (m.getSource && m.getSource('nhc-fcst-history')) m.getSource('nhc-fcst-history').setData(fc);
+    });
+}
+
+// "Fri Oct 9, 7 AM CDT (12Z)" in the viewer's own zone.
+function fcstValidText(ms) {
+    const d = new Date(ms);
+    const local = d.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', timeZoneName: 'short' });
+    return `${local} (${String(d.getUTCHours()).padStart(2, '0')}Z)`;
+}
+
+// The key's FORECAST HISTORY section (inside the pane's tropical key).
+function fcstHistoryLegendHtml(st, head) {
+    const all = st.cycles, N = all.length;
+    if (!N) return head('Forecast history') + `<div style="font-size:9px;color:#8b97a3;">no NHC forecast tracks for this system yet</div>`;
+    const shown = fcstShown(all, st.show);
+    const newest = all[N - 1];
+    const tr = fcstTrend(shown, st.trendTau);
+    const byDtg = {};
+    tr.pts.forEach((p, i) => { byDtg[p.dtg] = { p, prev: tr.pts[i - 1] }; });
+    const btn = (on, act, val, label, title) =>
+        `<span data-fh="${act}" data-v="${val}" title="${title || ''}" style="pointer-events:auto;cursor:pointer;white-space:nowrap;padding:0 4px;border:1px solid ${on ? '#ffb347' : 'rgba(255,255,255,0.18)'};border-radius:2px;color:${on ? '#ffb347' : '#cfd6de'};font-size:8.5px;">${label}</span>`;
+    const focus = fcstFocus();
+    const rows = shown.slice().reverse().map(c => {
+        const idx = all.indexOf(c), color = fcstRunColor(idx, N);
+        const lagH = Math.round((newest.ms - c.ms) / 3600000);
+        const d = new Date(c.ms);
+        const name = `${c.dtg.slice(8, 10)}Z ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()]} ${d.getUTCDate()}`;
+        let tail = lagH ? `−${lagH}h` : 'newest';
+        if (st.trendTau) {
+            const t = byDtg[c.dtg];
+            tail = !t ? 'doesn’t reach' : `${t.p.vmax ? `${t.p.vmax}kt` : ''}${t.prev ? ` · ${fcstShiftText(t.prev, t.p)}` : ''}`;
+        }
+        const on = focus === c.dtg, pin = st.pinned === c.dtg;
+        return `<div data-fh="run" data-v="${c.dtg}" style="pointer-events:auto;cursor:pointer;display:flex;align-items:center;gap:5px;margin:1px 0;padding:0 2px;border-radius:2px;${on ? 'background:rgba(255,255,255,0.12);' : ''}">` +
+            `<span style="width:14px;height:0;border-top:${c === newest ? 3 : 2}px ${c === newest ? 'solid' : 'dashed'} ${color};flex:none;"></span>` +
+            `<span style="font-size:9px;color:${color};white-space:nowrap;font-weight:${c === newest ? 700 : 400};">${name}</span>` +
+            `<span style="font-size:8.5px;color:#8b97a3;white-space:nowrap;margin-left:auto;">${tail}${pin ? ' 📌' : ''}</span></div>`;
+    }).join('');
+    let trendNote = '';
+    if (st.trendTau) {
+        if (tr.pts.length >= 2) {
+            const a = tr.pts[0], b = tr.pts[tr.pts.length - 1];
+            const dv = a.vmax && b.vmax ? b.vmax - a.vmax : null;
+            trendNote = `<div style="font-size:8.5px;color:#ffd166;margin:2px 0 1px;">Center at ${esc(fcstValidText(tr.validMs))}</div>` +
+                `<div style="font-size:8.5px;color:#e8e8e8;">${a.dtg.slice(8, 10)}Z ${new Date(adeckDtgMs(a.dtg)).getUTCDate()} → newest: <b>${fcstShiftText(a, b)}</b>${dv != null ? ` · ${dv > 0 ? '+' : ''}${dv} kt` : ''}</div>` +
+                `<div style="font-size:8px;color:#8b97a3;margin-bottom:2px;">each run: wind then · move from the run before (speed changes count too)</div>`;
+        } else trendNote = `<div style="font-size:8.5px;color:#8b97a3;margin:2px 0;">Fewer than two shown runs reach ${esc(fcstValidText(tr.validMs))}.</div>`;
+    }
+    const taus = FCST_TREND_TAUS.filter(t => newest.pts.some(p => p.tau === t));
+    return head(`Forecast history · ${N} run${N === 1 ? '' : 's'}`) +
+        (N > 4 ? `<div style="display:flex;gap:3px;align-items:center;margin:1px 0 3px;font-size:8.5px;color:#8b97a3;">show ${
+            [[4, 'last 4'], [8, 'last 8'], [0, 'all']].filter(([n]) => !n || n < N).map(([n, l]) => btn(st.show === n, 'show', n, l)).join('')}</div>` : '') +
+        `<div style="display:flex;gap:3px;align-items:center;flex-wrap:wrap;margin:1px 0 3px;font-size:8.5px;color:#8b97a3;">trend ${
+            btn(!st.trendTau, 'trend', 0, 'off')}${taus.map(t => btn(st.trendTau === t, 'trend', t, `${t}h`, `where each run puts the center at the newest run's +${t} h`)).join('')}</div>` +
+        trendNote + rows +
+        `<div style="display:flex;gap:4px;align-items:center;margin-top:3px;">${shown.length > 1 ? btn(!!st.timer, 'play', 0, st.timer ? '■ stop' : '▶ play runs', 'step through the runs oldest to newest') : ''}` +
+        `<span style="font-size:8px;color:#8b97a3;">${st.pinned ? 'click the run again to unpin' : 'hover a run to isolate · click to pin'}</span></div>` +
+        `<div style="display:flex;align-items:center;gap:5px;margin-top:2px;"><span style="width:14px;height:0;border-top:3px solid #ff8c00;flex:none;"></span><span style="font-size:8.5px;color:#ddd;">actual path (best track)</span></div>`;
+}
+
+function refreshFcstLegends() {
+    Object.keys(maps).forEach(pid => { if (isLayerVisible(maps[pid], 'nhc-fcst-lines')) updateTropLegend(pid); });
+}
+
+function stopFcstPlay() {
+    if (fcstHist.timer) clearInterval(fcstHist.timer);
+    fcstHist.timer = null;
+    fcstHist.play = null;
+}
+
+// Clicks and hovers on the key's FORECAST HISTORY rows and buttons.
+function onFcstLegendEvent(e) {
+    const el = e.target.closest && e.target.closest('[data-fh]');
+    if (e.type === 'mouseout') {
+        if (el && el.dataset.fh === 'run' && !(e.relatedTarget && el.contains(e.relatedTarget)) && fcstHist.hover) {
+            fcstHist.hover = null; renderFcstHistory(); syncFcstLegendRows();
+        }
+        return;
+    }
+    if (!el) return;
+    const act = el.dataset.fh, v = el.dataset.v;
+    if (e.type === 'mouseover') {
+        if (act === 'run' && fcstHist.hover !== v) { fcstHist.hover = v; renderFcstHistory(); syncFcstLegendRows(); }
+        return;
+    }
+    if (act === 'run') fcstHist.pinned = fcstHist.pinned === v ? null : v;
+    else if (act === 'trend') fcstHist.trendTau = +v;
+    else if (act === 'show') fcstHist.show = +v;
+    else if (act === 'play') {
+        if (fcstHist.timer) stopFcstPlay();
+        else {
+            const runs = fcstShown(fcstHist.cycles, fcstHist.show).map(c => c.dtg);
+            let i = 0;
+            fcstHist.play = runs[0];
+            // Oldest to newest, holding one extra beat on the newest, then again.
+            fcstHist.timer = setInterval(() => {
+                i = (i + 1) % (runs.length + 1);
+                fcstHist.play = runs[Math.min(i, runs.length - 1)];
+                renderFcstHistory(); syncFcstLegendRows();
+            }, 1100);
+        }
+    }
+    renderFcstHistory();
+    refreshFcstLegends();
+}
+
+// Row highlight without rebuilding the key (a rebuild under the pointer
+// would re-fire mouseover on every frame).
+function syncFcstLegendRows() {
+    const f = fcstFocus();
+    document.querySelectorAll('.trop-legend [data-fh="run"]').forEach(r => {
+        r.style.background = r.dataset.v === f ? 'rgba(255,255,255,0.12)' : '';
+    });
+}
+
+// Fetch both decks for the active storm, then draw.
+async function fetchFcstHistory(show) {
+    if (!activeStorm) {
+        stopFcstPlay();
+        Object.assign(fcstHist, { sid: null, cycles: [], bpts: [], hover: null, pinned: null });
+        renderFcstHistory(); refreshFcstLegends();
+        if (show) addLiveLog('FORECAST HISTORY: no active system selected', '#ffb300');
+        return;
+    }
     const sid = activeStorm;
     try {
         const [fRes, bRes] = await Promise.all([
             fetch(`/api/adeck?fcst=${sid}`),
             fetch(`/api/adeck?btk=${sid}`).catch(() => null)
         ]);
-        const ofcl = fRes.ok ? parseAdeckText(await fRes.text()) : [];
+        const cycles = fcstCycles(fRes.ok ? parseAdeckText(await fRes.text()) : []);
         const bpts = (bRes && bRes.ok) ? parseBdeck(await bRes.text()).filter(p => p.lat != null) : [];
-        const features = [];
-
-        // Actual traveled path (best track) with fix dots colored by intensity
-        if (bpts.length >= 2) features.push({
-            type: 'Feature', properties: { kind: 'actual' },
-            geometry: { type: 'LineString', coordinates: bpts.map(p => [p.lon, p.lat]) }
-        });
-        bpts.forEach((p, i) => features.push({
-            type: 'Feature',
-            properties: { kind: 'fix', mw: p.vmax || 0, latest: i === bpts.length - 1 ? 1 : 0 },
-            geometry: { type: 'Point', coordinates: [p.lon, p.lat] }
-        }));
-
-        // Past forecast tracks: one OFCL polyline per cycle, faded oldest→newest,
-        // anchored at that advisory's fixed (tau 0) position
-        const byCycle = {};
-        ofcl.forEach(r => {
-            if (r.tau < 0) return;
-            (byCycle[r.dtg] = byCycle[r.dtg] || {})[r.tau] = r;   // dedupe wind-radii rows by tau
-        });
-        const cycles = Object.keys(byCycle).sort();
+        if (sid !== activeStorm) return;   // the selector moved on while this was in flight
+        if (fcstHist.sid !== sid) {
+            stopFcstPlay();
+            Object.assign(fcstHist, { hover: null, pinned: null, show: cycles.length > 8 ? 8 : 0 });
+        }
+        Object.assign(fcstHist, { sid, cycles, bpts });
+        if (fcstHist.pinned && !cycles.some(c => c.dtg === fcstHist.pinned)) fcstHist.pinned = null;
+        renderFcstHistory();
+        refreshFcstLegends();
         const N = cycles.length;
-        cycles.forEach((dtg, idx) => {
-            const pts = Object.values(byCycle[dtg]).sort((a, b) => a.tau - b.tau);
-            if (pts.length < 2) return;
-            const newest = idx === N - 1;
-            const op = +(0.28 + 0.72 * (N > 1 ? idx / (N - 1) : 1)).toFixed(2);
-            const color = newest ? '#00e5ff' : '#5fa8c8';
-            const coords = pts.map(p => [p.lon, p.lat]);
-            features.push({
-                type: 'Feature', properties: { kind: 'fcst', op, color, w: newest ? 3 : 1.6 },
-                geometry: { type: 'LineString', coordinates: coords }
-            });
-            features.push({
-                type: 'Feature',
-                properties: { kind: 'fcstlabel', op: Math.max(op, 0.6), color, lbl: `${+dtg.slice(8, 10)}Z ${+dtg.slice(4, 6)}/${+dtg.slice(6, 8)}` },
-                geometry: { type: 'Point', coordinates: coords[coords.length - 1] }
-            });
-        });
-
-        setAll(features);
         if (show) addLiveLog(`FORECAST HISTORY: ${stormShortId(sid)} — ${N} forecast cycle${N === 1 ? '' : 's'} + ${bpts.length} best-track fixes`, N ? '#00e5ff' : '#ffb300');
     } catch (e) {
         if (show) addLiveLog(`FORECAST HISTORY ERROR: ${e.message}`, '#ff3333');
     }
+}
+
+// Popup for a forecast-history point or trend marker.
+function fcstPointPopupHtml(p, st) {
+    const all = st.cycles, N = all.length;
+    const c = all.find(x => x.dtg === p.dtg);
+    if (!c) return '';
+    const newest = all[N - 1];
+    const lagH = Math.round((newest.ms - c.ms) / 3600000);
+    const validMs = c.ms + p.tau * 3600000;
+    const kt = +p.vmax || 0;
+    const cat = kt ? (kt < 34 ? 'Tropical Depression' : kt < 64 ? 'Tropical Storm' : `${ssCategory(kt)} hurricane`) : '';
+    let vsNewest = '';
+    if (c !== newest) {
+        // Map properties carry no coordinates; take the spot from the run itself.
+        const here = fcstPosAt(c, validMs), n = fcstPosAt(newest, validMs);
+        vsNewest = n && here ? `<div style="color:#cfd6de;margin-top:3px;">Newest run (${newest.dtg.slice(8, 10)}Z) at this time: <b>${fcstShiftText(here, n)}</b> of here${n.vmax ? ` · ${n.vmax} kt` : ''}</div>`
+            : `<div style="color:#8b97a3;margin-top:3px;">The newest run doesn't cover this time.</div>`;
+    }
+    const adv = new Date(c.ms + 3 * 3600000).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', timeZoneName: 'short' });
+    return `<div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:240px;">
+        <div style="color:${p.color};font-weight:700;margin-bottom:3px;">NHC forecast · run ${adeckRunLabel(c.dtg)}</div>
+        <div style="font-size:10px;color:${lagH ? '#ffd166' : '#00e676'};margin-bottom:3px;">${lagH ? `${lagH} h older than the newest run` : 'newest forecast'} · from the ~${esc(adv)} advisory</div>
+        <div style="color:#fff;">${p.interp == 1 ? `≈ F${String(Math.round(p.tau)).padStart(3, '0')} (between forecast points)` : `F${String(Math.round(p.tau)).padStart(3, '0')}`} · valid ${esc(fcstValidText(validMs))}</div>
+        ${kt ? `<div style="color:#ffd166;">${kt} kt (${Math.round(kt * 1.15078 / 5) * 5} mph) · ${cat}</div>` : ''}
+        ${p.mslp ? `<div style="color:#fff;">${p.mslp} mb</div>` : ''}
+        ${vsNewest}
+    </div>`;
 }
 
 // Decode one URNT12/URPN12 Vortex Data Message → { id, ms, mslp, flWind }
@@ -12882,10 +13221,12 @@ function initProductSidebar() {
             // ─── Forecast History (run-to-run) for the active storm ───
             if (layer === 'nhc-fcst-history') {
                 const isActive = !item.classList.contains('active');
-                ['nhc-fcst-actual-line', 'nhc-fcst-lines', 'nhc-fcst-actual-pts', 'nhc-fcst-labels'].forEach(l => {
+                NHC_FCST_LAYERS.forEach(l => {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
                 if (isActive) await fetchFcstHistory(true);
+                else if (!Object.values(maps).some(m => isLayerVisible(m, 'nhc-fcst-lines'))) stopFcstPlay();
+                updateTropLegend(activePaneId);
                 updateSidebarToActivePane();
                 return;
             }
@@ -14884,7 +15225,7 @@ function clearPane(map, paneId) {
         'nhc-toa-earliest-line', 'nhc-toa-earliest-label', 'nhc-surge-inun-layer',
         'nhc-peak-surge-layer', 'nhc-peak-surge-labels', 'surge-risk-layer',
         'tide-gauges-pts', 'tide-gauges-label', 'ocean-sst-layer',
-        'nhc-fcst-actual-line', 'nhc-fcst-lines', 'nhc-fcst-actual-pts', 'nhc-fcst-labels',
+        ...NHC_FCST_LAYERS,
         'cpc-temp-layer', 'cpc-precip-layer',
         'drought-fill', 'drought-outline', 'cpc-drought-layer',
         'probsevere-fill', 'probsevere-outline', 'probsevere-label',
@@ -16317,6 +16658,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 7)', items: [
+        '<b>Forecast History: every run labeled, plus a TREND mode.</b> Each past NHC forecast track now has its own color, from violet (oldest) through blue and green, with the <b>newest in bold white</b>. Each track ends in a label like <i>06Z Wed</i>. The key (top right) lists every run newest first with its age. <b>Hover a run</b> there to isolate it on the map, <b>click</b> to pin it, or press <b>▶ play runs</b> to step through them oldest to newest. Click any track or forecast point on the map for its run, its advisory, the valid time, wind and category, and where the newest run has the storm at that same time (e.g. <i>50 mi NE of here · 95 kt</i>). <b>TREND</b> (12h–120h) picks one moment, the newest run\'s +48 h for example, and marks where <i>each</i> run put the center then, joined oldest to newest, with the wind each run had. The key gives the move from one run to the next and the total since the oldest run shown (e.g. <i>50 mi SE · +10 kt</i>). For a storm with many advisories, choose to show the last 4, the last 8 or all of them.'
+    ]},
     { date: 'Oct 7, 2026 (update 6)', items: [
         '<b>GEFS joins the Late Cycle Intensity chart.</b> NOAA\'s GFS ensemble now plots like the two ECMWF ensembles: its mean as a bold yellow line (the same yellow as the GEFS mean on the map), with the middle 80% of its 30 members and control shaded behind it. Hover or click it for the members\' range and the strongest member at that hour. With all three ensembles side by side you can see at a glance whether NOAA\'s and ECMWF\'s ensembles agree on strength, and how unsure each is.'
     ]},
@@ -16897,7 +17241,7 @@ const USER_GUIDE = [
                 Only if <i>both</i> sources fail does the badge go <b>STALE</b> (orange) with an <b>OUT OF DATE</b> banner in the popup naming the advisory on screen versus NHC’s current one. Even then the <b>Official Advisories</b> text, model guidance, Storm Trends, SHIPS and recon stay current — they come from NHC/ATCF directly.<br>
                 Coastal watch/warning segments are colored to NHC convention when the source identifies them: <span style="color:#ffff00;">yellow</span> TS Watch, <span style="color:#0080ff;">blue</span> TS Warning, <span style="color:#ff69b4;">pink</span> Hurricane Watch, <span style="color:#ff0000;">red</span> Hurricane Warning.<br>
                 The storm’s <b>past track</b> is drawn too, as on NHC’s own cone graphic: dotted while it was a disturbance or low, solid once it became a tropical cyclone, with dots colored by intensity. Click a dot for the time, strength and pressure.</li>
-            <li><b>Forecast History (run-to-run)</b> — for the active storm, the storm’s actual traveled path (best-track, fix dots colored by intensity) with every past advisory’s official forecast track overlaid, newest bright and older ones faded, each anchored at the position it was issued from. Shows how the forecast has trended cycle to cycle and where the center has actually gone. Forecast tracks accumulate one per full advisory (sparse for a new storm, richer over time); the actual path reaches back to the invest stage.</li>
+            <li><b>Forecast History (run-to-run)</b> — for the active storm, the storm’s actual traveled path (best-track, fix dots colored by intensity) with every past advisory’s official forecast track overlaid. Each run has its own color, from violet (oldest) through green, with the newest in bold white, and is labeled with its synoptic time (<i>06Z Wed</i>). The on-map key lists the runs with their age: hover one to isolate it, click to pin it, or <b>▶ play runs</b> to step through them. Click a track or point for its run, valid time, intensity and where the newest run has the storm at that time. <b>Trend</b> (12h–120h) marks where each run put the center at one valid time, the newest run’s +48 h for example, joined oldest to newest. The key gives the wind each run had then and the move from one run to the next; the move includes speed changes as well as track shifts. <i>Show last 4 / 8 / all</i> trims a long-lived storm. Forecast tracks accumulate one per full advisory (sparse for a new storm, richer over time); the actual path reaches back to the invest stage.</li>
             <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details. A disturbance that already exists is marked with an <b>X</b> colored by its 2-day chance (yellow low, orange medium, red high), and when NHC gives one, an arrow shows where it is expected to develop. An area with no X is where formation is expected later.</li>
             <li><b>Tropical Discussions</b> open the full NHC text products.</li>
         </ul>
