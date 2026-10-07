@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const M = require('./_load').load([
     'ADECK_MODELS', 'AI_MODELS', 'isAiModel', 'parseAdeckText', 'adeckTechMeta',
     'pickAdeckCycles', 'adeckEmptyReason', 'buildAdeckFeatures', 'buildIntensitySeries', 'adeckDtgMs',
-    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus', 'intensityHitTest', 'ssCategory', 'intensityTooltipHtml', 'esc', 'ECMWF_TRACK_MODEL', 'ECMWF_ENS', 'compactTechList', 'ECMWF_ENS_INTENSITY', 'pctile', 'buildEnsembleIntensity'
+    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus', 'intensityHitTest', 'ssCategory', 'intensityTooltipHtml', 'esc', 'ECMWF_TRACK_MODEL', 'ECMWF_ENS', 'compactTechList', 'ENS_INTENSITY', 'pctile', 'buildEnsembleIntensity'
 ]);
 
 // rows for one tech / cycle at the given forecast hours
@@ -209,4 +209,16 @@ test('the band stops once fewer than half the members still have the storm', () 
         taus.forEach(t => rows.push({ dtg: '2026100700', tech: `XE0${m}`, tau: t, lat: 25, lon: -90, vmax: 40, mslp: 1000 }));
     }
     assert.deepEqual(M.buildEnsembleIntensity(rows, 'XE').pts.map(p => p.tau), [0, 12]);
+});
+
+test('GEFS joins as a mean + band from its 30 members and the AC00 control', () => {
+    const rows = [];
+    for (let m = 1; m <= 30; m++) [0, 12].forEach(t => rows.push({ dtg: '2026100706', tech: `AP${String(m).padStart(2, '0')}`, tau: t, lat: 25, lon: -90, vmax: 30 + m, mslp: 1000 }));
+    [0, 12].forEach(t => rows.push({ dtg: '2026100706', tech: 'AC00', tau: t, lat: 25, lon: -90, vmax: 45, mslp: 1000 }));
+    rows.push({ dtg: '2026100706', tech: 'AEMN', tau: 0, lat: 25, lon: -90, vmax: 99, mslp: 1000 });   // not a member
+    const e = M.buildEnsembleIntensity(rows, 'AP');
+    assert.equal(e.tech, 'GEFS');
+    assert.equal(e.members, 31);
+    assert.equal(e.band[0].max, 60);
+    assert.ok(!M.isAiModel('GEFS'));
 });
