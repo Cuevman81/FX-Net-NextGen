@@ -5,7 +5,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const M = require('./_load').load([
     'ADECK_MODELS', 'AI_MODELS', 'isAiModel', 'parseAdeckText', 'adeckTechMeta',
-    'pickAdeckCycles', 'adeckEmptyReason', 'buildAdeckFeatures', 'buildIntensitySeries', 'adeckDtgMs'
+    'pickAdeckCycles', 'adeckEmptyReason', 'buildAdeckFeatures', 'buildIntensitySeries', 'adeckDtgMs',
+    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus'
 ]);
 
 // rows for one tech / cycle at the given forecast hours
@@ -60,13 +61,41 @@ test('the intensity chart gets the same fallback', () => {
     assert.deepEqual(s.map(x => `${x.tech}@${x.dtg}`), ['GDMI@2026082918']);
 });
 
-test('lag is stamped on the map label only past one cycle, against the newest cycle in the deck', () => {
+test('every label names its run; the lag is stamped only past one cycle, against the newest cycle in the deck', () => {
     const rows = [...R('AVNI', '2026083012', [0, 6, 12]), ...R('GDMI', '2026082918', [0, 6])];
     const labels = M.buildAdeckFeatures(rows, 'ai-early').features.filter(f => f.properties.layerType === 'end').map(f => f.properties.lbl);
-    assert.deepEqual(labels, ['GDMI ✦ -18h'], 'AVNI is not in this view but still sets the reference cycle');
+    assert.deepEqual(labels, ['GDMI ✦ 18Z −18h'], 'AVNI is not in this view but still sets the reference cycle');
     const six = [...R('AVNI', '2026083012', [0, 6]), ...R('CMCI', '2026083006', [0, 6])];
     const l6 = M.buildAdeckFeatures(six, 'early').features.filter(f => f.properties.layerType === 'end').map(f => f.properties.lbl).sort();
-    assert.deepEqual(l6, ['AVNI', 'CMCI'], 'a routine 6 h offset is not stamped');
+    assert.deepEqual(l6, ['AVNI 12Z', 'CMCI 06Z'], 'a routine 6 h offset names the run but is not stamped');
+});
+
+test('tracks and points carry their run and its lag, so a click can say which run it is', () => {
+    const rows = [...R('AVNI', '2026083012', [0, 6, 12]), ...R('CMCI', '2026083006', [0, 6])];
+    const { features, newestCycle } = M.buildAdeckFeatures(rows, 'early');
+    assert.equal(newestCycle, '2026083012');
+    const line = t => features.find(f => f.properties.layerType === 'line' && f.properties.tech === t).properties;
+    assert.equal(line('AVNI').cycle, '2026083012');
+    assert.equal(line('AVNI').lagH, 0);
+    assert.equal(line('CMCI').lagH, 6);
+    assert.equal(line('AVNI').maxTau, 12);
+    assert.ok(features.filter(f => f.properties.layerType === 'pt' && f.properties.tech === 'CMCI').every(f => f.properties.lagH === 6));
+});
+
+test('run labels and the per-run breakdown read newest first', () => {
+    assert.equal(M.adeckRunLabel('2026100712'), '12Z Wed Oct 7');
+    assert.equal(M.adeckRunLabel(''), '');
+    const g = M.adeckRunGroups(['HWRF', 'AVNO', 'AVNI', 'HWFI'], { HWRF: '2026100706', AVNO: '2026100706', AVNI: '2026100712', HWFI: '2026100712' });
+    assert.deepEqual(g, [{ dtg: '2026100712', techs: ['AVNI', 'HWFI'] }, { dtg: '2026100706', techs: ['AVNO', 'HWRF'] }]);
+});
+
+test('a late-cycle aid one run behind is called normal; anything older is flagged', () => {
+    assert.match(M.adeckRunStatus(0, 'early'), /newest run/);
+    assert.match(M.adeckRunStatus(6, 'late'), /normal for a late-cycle model/);
+    assert.match(M.adeckRunStatus(6, 'eps'), /normal for a late-cycle model/);
+    assert.match(M.adeckRunStatus(6, 'early'), /no track in the newer runs/);
+    assert.match(M.adeckRunStatus(18, 'late'), /18 h behind.*no track in the newer runs/);
+    assert.match(M.adeckRunStatus(6, 'late', 'OFCL'), /official forecast from the latest full advisory/);
 });
 
 test('adeckEmptyReason distinguishes "not distributed" from "present but single-point"', () => {

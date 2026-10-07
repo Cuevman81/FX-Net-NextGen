@@ -3912,22 +3912,51 @@ function initFrontalPipIcons(map) {
     map.on('mouseenter', 'recon-hdob-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'recon-hdob-pts', () => { map.getCanvas().style.cursor = ''; });
 
-    // Model guidance point click → forecast position + intensity popup
-    map.on('click', 'adeck-pts', e => {
-        if (!e.features || !e.features[0]) return;
-        const p = e.features[0].properties;
+    // Model guidance click → which run each track is from. Spaghetti lines are
+    // 1-3 px wide, so the hit test uses a small box; a forecast point gets its
+    // position and intensity, a bare line lists every aid under the click.
+    map.on('click', e => {
+        if (!isLayerVisible(map, 'adeck-lines')) return;
+        // Leave clicks on the storm's own points and other popups alone.
+        const own = ['nhc-track-pts', 'nhc-past-pts', 'recon-hdob-pts', 'tide-gauges-pts'].filter(l => map.getLayer(l));
+        if (own.length && map.queryRenderedFeatures(e.point, { layers: own }).length) return;
+        const r = 6, box = [[e.point.x - r, e.point.y - r], [e.point.x + r, e.point.y + r]];
+        const hits = map.queryRenderedFeatures(box, { layers: ['adeck-pts', 'adeck-lines'] });
+        if (!hits.length) return;
+        const pt = hits.find(f => f.layer.id === 'adeck-pts');
         const cat = v => v == null ? '' : v < 34 ? ' (TD)' : v < 64 ? ' (TS)' : v < 83 ? ' (Cat 1)' :
             v < 96 ? ' (Cat 2)' : v < 113 ? ' (Cat 3)' : v < 137 ? ' (Cat 4)' : ' (Cat 5)';
-        const html = `
-            <div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:210px;">
-                <div style="color:${p.color};font-weight:700;margin-bottom:4px;">${p.name} <span style="color:#8b97a3;font-weight:400;">(${p.tech})</span>${isAiModel(p.tech) ? ' <span style="color:#ea80fc;font-weight:400;">✦ AI</span>' : ''}</div>
-                <div style="color:#8b97a3;">Init ${p.cycle}Z · F${String(p.tau).padStart(3, '0')}</div>
-                <div style="color:#fff;">Valid ${p.valid}</div>
+        let html;
+        if (pt) {
+            const p = pt.properties;
+            html = `
+            <div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:230px;">
+                <div style="color:${p.color};font-weight:700;margin-bottom:4px;">${esc(p.name)} <span style="color:#8b97a3;font-weight:400;">(${esc(p.tech)})</span>${isAiModel(p.tech) ? ' <span style="color:#ea80fc;font-weight:400;">✦ AI</span>' : ''}</div>
+                <div style="color:#fff;">Run <b>${adeckRunLabel(p.cycle)}</b> · F${String(p.tau).padStart(3, '0')}</div>
+                <div style="font-size:10px;margin-bottom:3px;">${adeckRunStatus(+p.lagH || 0, adeckMode, p.tech)}</div>
+                <div style="color:#fff;">Valid ${esc(p.valid)}</div>
                 ${p.vmax ? `<div style="color:#ffd166;">Max wind ${p.vmax} kt${cat(p.vmax)}</div>` : ''}
                 ${p.mslp ? `<div style="color:#fff;">MSLP ${p.mslp} mb</div>` : ''}
             </div>`;
-        new maplibregl.Popup({ maxWidth: '300px' }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+        } else {
+            const seen = new Set();
+            const lines = hits.filter(f => f.layer.id === 'adeck-lines' && !seen.has(f.properties.tech) && seen.add(f.properties.tech))
+                .sort((a, b) => (+a.properties.lagH || 0) - (+b.properties.lagH || 0) || String(a.properties.tech).localeCompare(b.properties.tech))
+                .slice(0, 10);
+            html = `<div style="font-family:'Roboto Mono',monospace;font-size:11px;min-width:240px;">` +
+                lines.map(f => {
+                    const p = f.properties, lag = +p.lagH || 0;
+                    return `<div style="margin-bottom:5px;"><div><span style="color:${p.color};font-weight:700;">${esc(p.tech)}</span> <span style="color:#cfd6de;">${esc(p.name || '')}</span></div>
+                        <div style="color:#fff;">Run <b>${adeckRunLabel(p.cycle)}</b>${p.maxTau ? ` · out to ${p.maxTau} h` : ''}</div>
+                        <div style="font-size:10px;">${adeckRunStatus(lag, adeckMode, p.tech)}</div></div>`;
+                }).join('') +
+                (seen.size > lines.length ? `<div style="color:#8b97a3;">+${seen.size - lines.length} more here — zoom in to separate them</div>` : '') +
+                `</div>`;
+        }
+        new maplibregl.Popup({ maxWidth: '320px' }).setLngLat(e.lngLat).setHTML(html).addTo(map);
     });
+    map.on('mouseenter', 'adeck-lines', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'adeck-lines', () => { map.getCanvas().style.cursor = ''; });
     map.on('mouseenter', 'adeck-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'adeck-pts', () => { map.getCanvas().style.cursor = ''; });
 
@@ -4066,7 +4095,7 @@ function initFrontalPipIcons(map) {
         [1, 2, 3].forEach(d => otlkLayers.push(`spc-day${d}-fill`));
         [1, 2].forEach(d => ['torn', 'wind', 'hail'].forEach(hz => otlkLayers.push(`spc-prob-${d}-${hz}-fill`)));
         [1, 2, 3, 4, 5, 6, 7, 8].forEach(d => otlkLayers.push(`spc-firewx-day${d}-fill`));
-        const queryLayers = ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nhc-wsp-fill', 'nhc-past-pts', 'tide-gauges-pts', 'nexrad-sites-layer', 'river-gauges-layer', 'wpc-ero-day1-fill', 'wpc-ero-day2-fill', 'wpc-ero-day3-fill', ...otlkLayers].filter(l => map.getLayer(l));
+        const queryLayers = ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nhc-wsp-fill', 'nhc-past-pts', 'tide-gauges-pts', 'adeck-pts', 'adeck-lines', 'nexrad-sites-layer', 'river-gauges-layer', 'wpc-ero-day1-fill', 'wpc-ero-day2-fill', 'wpc-ero-day3-fill', ...otlkLayers].filter(l => map.getLayer(l));
         const otherFeats = map.queryRenderedFeatures(e.point, { layers: queryLayers });
         if (otherFeats.length > 0) return;
 
@@ -7067,12 +7096,15 @@ function buildAdeckFeatures(rows, mode) {
         if (pts.length < 2) return;
         models.push(tech);
         const coords = pts.map(p => [p.lon, p.lat]);
+        const dtg = latest[tech];
+        // Hours this aid's run sits behind the newest run in the deck.
+        const lagH = newestCycle ? Math.round((adeckDtgMs(newestCycle) - adeckDtgMs(dtg)) / 3600000) : 0;
         features.push({
             type: 'Feature',
-            properties: { layerType: 'line', tech, color: meta.color, width: meta.width, opacity: meta.opacity },
+            properties: { layerType: 'line', tech, name: meta.name, cycle: dtg, lagH, maxTau: pts[pts.length - 1].tau,
+                color: meta.color, width: meta.width, opacity: meta.opacity },
             geometry: { type: 'LineString', coordinates: coords }
         });
-        const dtg = latest[tech];
         const initMs = Date.UTC(+dtg.slice(0, 4), +dtg.slice(4, 6) - 1, +dtg.slice(6, 8), +dtg.slice(8, 10));
         pts.forEach(p => {
             const v = new Date(initMs + p.tau * 3600 * 1000);
@@ -7080,7 +7112,7 @@ function buildAdeckFeatures(rows, mode) {
                 type: 'Feature',
                 properties: {
                     layerType: 'pt', tech, name: meta.name, color: meta.color,
-                    tau: p.tau, cycle: dtg, major: p.tau % 24 === 0 ? 1 : 0,
+                    tau: p.tau, cycle: dtg, lagH, major: p.tau % 24 === 0 ? 1 : 0,
                     valid: `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][v.getUTCDay()]} ${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCHours()).padStart(2, '0')}Z`,
                     vmax: p.vmax, mslp: p.mslp && p.mslp > 800 ? p.mslp : null
                 },
@@ -7088,21 +7120,46 @@ function buildAdeckFeatures(rows, mode) {
             });
         });
         if (meta.label) {
-            const lagH = newestCycle ? Math.round((adeckDtgMs(newestCycle) - adeckDtgMs(dtg)) / 3600000) : 0;
             features.push({
                 type: 'Feature',
                 properties: {
                     layerType: 'end', tech, color: meta.color,
-                    // Only past one cycle: late-cycle aids sit 6 h behind the
-                    // interps by definition, and stamping every one of them is
-                    // noise. 12 h+ is where a track is materially misplaced.
-                    lbl: tech + (isAiModel(tech) ? ' ✦' : '') + (lagH > 6 ? ` -${lagH}h` : '')
+                    // Every label names its run, so mixed runs read at a glance.
+                    // The lag is spelled out only past one cycle: late-cycle aids
+                    // sit 6 h behind the interps by design, and 12 h+ is where a
+                    // track is materially misplaced.
+                    lbl: `${tech}${isAiModel(tech) ? ' ✦' : ''} ${dtg.slice(8, 10)}Z${lagH > 6 ? ` −${lagH}h` : ''}`
                 },
                 geometry: { type: 'Point', coordinates: coords[coords.length - 1] }
             });
         }
     });
-    return { features, models, cycles: latest };
+    return { features, models, cycles: latest, newestCycle };
+}
+
+// "12Z Wed Oct 7" from an ATCF DTG (2026100712).
+function adeckRunLabel(dtg) {
+    if (!dtg || String(dtg).length < 10) return '';
+    const d = new Date(adeckDtgMs(String(dtg)));
+    return `${String(d.getUTCHours()).padStart(2, '0')}Z ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()]} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()]} ${d.getUTCDate()}`;
+}
+
+// Aids grouped by run, newest first: [{ dtg, techs: [...] }, ...]
+function adeckRunGroups(models, cycles) {
+    const by = {};
+    models.forEach(t => { (by[cycles[t]] = by[cycles[t]] || []).push(t); });
+    return Object.keys(by).sort().reverse().map(dtg => ({ dtg, techs: by[dtg].sort() }));
+}
+
+// Run status line for a popup: newest, one cycle back by design, or older.
+function adeckRunStatus(lagH, mode, tech) {
+    // OFCL is NHC's own forecast, not a model: its "run" is the synoptic time of
+    // the latest full advisory, which lands ~3 h after it (09Z for the 06Z run).
+    if (tech === 'OFCL') return `<span style="color:#ff8a80;">NHC's official forecast from the latest full advisory${lagH ? ' · the next one comes with the next advisory' : ''}</span>`;
+    if (!lagH) return '<span style="color:#00e676;">newest run in the deck</span>';
+    const late = mode === 'late' || mode === 'ai-late' || mode === 'eps';   // GEFS is a late-cycle run too
+    if (lagH <= 6 && late) return `<span style="color:#ffd166;">${lagH} h behind the newest run · normal for a late-cycle model</span>`;
+    return `<span style="color:#ff9a3c;">${lagH} h behind the newest run · this aid has no track in the newer runs yet</span>`;
 }
 
 const adeckDtgMs = dtg =>
@@ -7193,6 +7250,7 @@ function drawIntensityChart(canvas, series) {
     });
     // legend (right column), ordered by end-point intensity so it reads like the chart
     const legX = mL + pw + 34;
+    const newest = series.map(s => s.dtg).sort().pop();
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     [...series].sort((a, b) => b.pts[b.pts.length - 1].v - a.pts[a.pts.length - 1].v).forEach((s, i) => {
         const ly = mT + 8 + i * 15;
@@ -7200,8 +7258,12 @@ function drawIntensityChart(canvas, series) {
         ctx.beginPath(); ctx.moveTo(legX, ly); ctx.lineTo(legX + 16, ly); ctx.stroke();
         ctx.fillStyle = s.color; ctx.font = `${s.wide ? 'bold ' : ''}9px "Roboto Mono",monospace`;
         ctx.fillText(s.tech + (isAiModel(s.tech) ? ' ✦' : ''), legX + 21, ly);   // ✦ = AI/ML
-        ctx.fillStyle = '#8b97a3'; ctx.font = '8px "Roboto Mono",monospace';
-        ctx.fillText(`${s.pts[s.pts.length - 1].v} kt`, legX + 62, ly);
+        ctx.font = '8px "Roboto Mono",monospace';
+        // Run hour, amber when this aid is on an older run than the newest plotted
+        ctx.fillStyle = s.dtg === newest ? '#8b97a3' : '#ffb347';
+        ctx.fillText(`${s.dtg.slice(8, 10)}Z`, legX + 60, ly);
+        ctx.fillStyle = '#8b97a3';
+        ctx.fillText(`${s.pts[s.pts.length - 1].v} kt`, legX + 82, ly);
     });
 }
 
@@ -7226,7 +7288,7 @@ async function openIntensityChart(mode) {
         const laggards = newest ? series.filter(s => s.dtg !== newest).length : 0;
         const anyAi = series.some(s => isAiModel(s.tech));
         note.textContent = newest
-            ? `Newest run ${newest.slice(8, 10)}Z ${newest.slice(6, 8)} (${adeckAgeStr(adeckDtgMs(newest))}) · ${series.length} aids${laggards ? ` · ${laggards} from older runs` : ''} · dashed lines mark TS / Cat 1–5 thresholds${anyAi ? ' · ✦ = AI/ML model' : ''}`
+            ? `Newest run ${adeckRunLabel(newest)} (${adeckAgeStr(adeckDtgMs(newest))}) · ${series.length} aids${laggards ? ` · ${laggards} from older runs (run hour in amber in the key)` : ''} · dashed lines mark TS / Cat 1–5 thresholds${anyAi ? ' · ✦ = AI/ML model' : ''}`
             : 'No intensity guidance available for this system yet.';
         if (newest) updateHealth('adeck', adeckDtgMs(newest));
         if (series.length) addLiveLog(`INTENSITY: ${sid} ${mode}-cycle — ${series.length} aids, newest run ${newest.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newest))}) — ${series.map(s => s.tech).join(', ')}`, '#00e5ff');
@@ -7254,8 +7316,13 @@ async function fetchAdeck(show) {
         const info = document.getElementById('adeck-cycle-info');
         if (info) {
             if (newestDtg) {
-                info.innerHTML = `Newest run: <b style="color:#00e5ff;">${newestDtg.slice(8, 10)}Z ${newestDtg.slice(6, 8)} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+newestDtg.slice(4, 6) - 1]}</b> (${adeckAgeStr(adeckDtgMs(newestDtg))}) · ${models.length} aids${laggards ? ` · ${laggards} from older runs` : ''}`;
-                info.title = models.map(t => `${t}: ${cycles[t].slice(8, 10)}Z ${cycles[t].slice(6, 8)}`).join('\n');
+                const groups = adeckRunGroups(models, cycles);
+                const late = adeckMode === 'late' || adeckMode === 'ai-late' || adeckMode === 'eps';
+                info.innerHTML = `Newest run on map: <b style="color:#00e5ff;">${adeckRunLabel(newestDtg)}</b> (${adeckAgeStr(adeckDtgMs(newestDtg))}) · ${models.length} aids` +
+                    groups.map((g, i) => `<div style="margin-top:2px;"><b style="color:${i === 0 ? '#00e5ff' : '#ffb347'};">${g.dtg.slice(8, 10)}Z ${g.dtg.slice(6, 8)}</b>: ${esc(g.techs.join(', '))}</div>`).join('') +
+                    (late ? `<div style="margin-top:2px;color:#6c7680;">Late-cycle aids are the full model runs; they arrive 4–6 h after run time, so they normally trail the early-cycle aids by one run.</div>` : '') +
+                    `<div style="margin-top:2px;color:#6c7680;">Each track's label names its run. Click a track for details.</div>`;
+                info.title = '';
             } else {
                 info.textContent = adeckMode ? `No tracks for this view — ${adeckEmptyReason(rows, adeckMode)}` : '';
                 info.title = '';
@@ -16029,6 +16096,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 2)', items: [
+        '<b>Model guidance now says which run each track is.</b> In the Early Cycle, Late Cycle, GEFS and AI views, every track is labeled with its model and run (<b>HWRF 06Z</b>), and one more than a cycle behind also shows its lag (<b>CMC 00Z −12h</b>). Click anywhere on a track, not just a dot, for every model under the click with its full run time, how far it goes, and whether it is the newest run. The note under the storm selector now groups the aids by run, newest first, and the intensity charts show each aid\'s run hour in their key.',
+        '<b>Why late-cycle guidance looks a run behind:</b> late-cycle aids are the full model runs, which reach NHC 4–6 hours after their run time, so they normally sit one run behind the early-cycle aids. The popups now say so, and flag anything older. NHC\'s own forecast (OFCL) is labeled as the latest official advisory rather than a model run.',
+        '<b>Fixed: false "did not load" warnings.</b> A menu item could be flagged as failed when an unrelated new warning (shown in red in the log) arrived while it was loading. Only an actual error now marks an item as failed.'
+    ]},
     { date: 'Oct 7, 2026', items: [
         '<b>Tide gauges: how high the water is running, and whether it is flooding.</b> New under <b>NHC Tropical → Storm Surge</b>. All of NOAA\'s ~230 coastal tide gauges, each coloured by how far the water is running <b>above or below the normal tide</b> right now. That gap is the storm surge or wind setup building ahead of a storm. A ring means the gauge is <b>at flood stage now</b> (minor, moderate or major, from NWS flood levels). This morning the northern Gulf coast is already running about 1 to 1.3 ft above normal ahead of Tropical Storm Isaias; Bay Waveland is 0.2 ft below minor flooding.',
         '<b>Click any gauge</b> for a 4-day chart: the last 48 hours observed against the predicted tide, the next 48 hours of predicted tide, and the minor, moderate and major flood lines. It also lists the next high tides, NOAA\'s operational model peak where one exists, and the gauge\'s wind and pressure. The map refreshes every 5 minutes, and an open chart refreshes with it.',
@@ -16641,8 +16713,9 @@ const USER_GUIDE = [
             <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
             <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance. A CIRA block below adds a second independent RI consensus, the Convective <b>Decapitation</b> probability (odds the convection gets sheared off the center → rapid weakening — the counterpart to RI), and current structure predictors (cold-cloud fraction, IR core symmetry).</li>
         </ul>
-        <p>Every model’s ID is labeled at the end of its track in its color. Click any forecast point for the model name, initialization cycle, valid time, and that model’s forecast intensity — max wind with Saffir-Simpson category and MSLP where available. Tracks refresh every 15 minutes; each aid always shows its latest run.</p>
-        <p>The stamp under the storm selector tells you how fresh the plot is: the newest run time and its age, the number of aids plotted, and how many are still on an older cycle (hover for every model’s run). Data Health → TROPICAL tracks the same — the <b>Model Guidance</b> row is stamped with the run time itself, so it turns amber/red when a newer cycle should have arrived, and <b>Recon HDOB Feed</b> confirms the Hurricane Hunter feed is being checked (every 15 minutes in the background).</p>` },
+        <p><b>Which run is which.</b> Every track is labeled at its end with the model ID <i>and its run</i>, e.g. <b>HWRF 06Z</b>. A run more than one cycle behind the newest in NHC’s deck also shows how far behind it is (<b>CMC 00Z −12h</b>). Click anywhere on a track, not just a dot, to see every model under the click with its full run time (<b>06Z Wed Oct 7</b>), how far its forecast goes, and whether it is the newest run. Click a forecast point for the same plus its valid time and forecast intensity: max wind with Saffir-Simpson category, and MSLP where available.</p>
+        <p><b>Why late-cycle aids look a run behind.</b> The early-cycle aids (AVNI, HWFI, …) are the previous run’s models shifted forward to the current advisory time, so they are on the newest run. The late-cycle aids (AVNO, HWRF, …) are the full model runs, which reach NHC 4–6 hours after their run time, so they normally trail by one run (06Z late-cycle beside 12Z early-cycle). The GEFS ensemble is a late-cycle run too. Popups call that offset normal and flag anything older. Tracks refresh every 15 minutes, and each aid shows its latest run that has a track.</p>
+        <p>The stamp under the storm selector tells you how fresh the plot is: the newest run on the map and its age, then the aids grouped by run, newest first (e.g. <b>06Z 07</b>: AVNO, HWRF … · <b>00Z 07</b>: CMC, UKX). The intensity charts show each aid’s run hour in their key, in amber when it is older than the newest one plotted. Data Health → TROPICAL tracks the same — the <b>Model Guidance</b> row is stamped with the run time itself, so it turns amber/red when a newer cycle should have arrived, and <b>Recon HDOB Feed</b> confirms the Hurricane Hunter feed is being checked (every 15 minutes in the background).</p>` },
 
     { id: 'aviation', title: 'Aviation Hazards', html: `
         <ul>
@@ -18906,7 +18979,11 @@ function _productRestoreTitle(el) {
 function productStatusFromLog(msg, color) {
     if (!_productPending) return;
     const c = String(color || '').toLowerCase();
-    if (_PRODUCT_FAIL_COLORS.has(c)) {
+    // Red alone is not a failure: new warnings arrive in red from the
+    // background watchdog, and some status lines are red by design. Only an
+    // actual error message fails the row the user just clicked.
+    const isFailure = _PRODUCT_FAIL_COLORS.has(c) && !/^WATCHDOG: NEW/.test(msg) && /ERROR|FAIL/i.test(msg);
+    if (isFailure) {
         const el = _productPending.el;
         _productPendingClear();
         el.classList.add('failed');
