@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const M = require('./_load').load([
     'ADECK_MODELS', 'AI_MODELS', 'isAiModel', 'parseAdeckText', 'adeckTechMeta',
     'pickAdeckCycles', 'adeckEmptyReason', 'buildAdeckFeatures', 'buildIntensitySeries', 'adeckDtgMs',
-    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus'
+    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus', 'intensityHitTest', 'ssCategory', 'intensityTooltipHtml', 'esc'
 ]);
 
 // rows for one tech / cycle at the given forecast hours
@@ -106,4 +106,39 @@ test('adeckEmptyReason distinguishes "not distributed" from "present but single-
 
 test('adeckDtgMs parses the 10-digit cycle stamp as UTC', () => {
     assert.equal(M.adeckDtgMs('2026083012'), Date.UTC(2026, 7, 30, 12));
+});
+
+// ─── Intensity chart hover / click ───
+const HIT = {
+    legX: 520, keyRows: [{ tech: 'HWRF', y0: 13, y1: 27 }, { tech: 'SHIP', y0: 28, y1: 42 }],
+    series: [
+        { tech: 'HWRF', pts: [{ tau: 0, v: 35 }, { tau: 24, v: 70 }, { tau: 48, v: 95 }] },
+        { tech: 'SHIP', pts: [{ tau: 0, v: 35 }, { tau: 24, v: 55 }] }
+    ],
+    pts: [
+        { tech: 'HWRF', tau: 0, v: 35, x: 42, y: 300 }, { tech: 'HWRF', tau: 24, v: 70, x: 142, y: 200 }, { tech: 'HWRF', tau: 48, v: 95, x: 242, y: 120 },
+        { tech: 'SHIP', tau: 0, v: 35, x: 42, y: 300 }, { tech: 'SHIP', tau: 24, v: 55, x: 142, y: 250 }
+    ]
+};
+
+test('the intensity chart finds the point, then the line, then the key row under the pointer', () => {
+    assert.deepEqual(M.intensityHitTest(HIT, 145, 203), { tech: 'HWRF', tau: 24, v: 70 });
+    // halfway along HWRF's 24→48 h segment, nearer the 48 h end
+    assert.equal(M.intensityHitTest(HIT, 205, 150).tech, 'HWRF');
+    assert.equal(M.intensityHitTest(HIT, 205, 150).tau, 48);
+    assert.deepEqual(M.intensityHitTest(HIT, 530, 35), { tech: 'SHIP', tau: 24, v: 55, fromKey: true });
+    assert.equal(M.intensityHitTest(HIT, 400, 20), null);
+    assert.equal(M.intensityHitTest(null, 1, 1), null);
+});
+
+test('the intensity readout names the run, its status and the valid time', () => {
+    const s = { tech: 'HWRF', name: 'HWRF', color: '#f00', dtg: '2026100706', pts: [{ tau: 0, v: 35 }, { tau: 48, v: 95 }, { tau: 72, v: 90 }] };
+    const html = M.intensityTooltipHtml(s, { tech: 'HWRF', tau: 48, v: 95 }, 'late', '2026100712');
+    assert.match(html, /Run <b>06Z Wed Oct 7<\/b>/);
+    assert.match(html, /6 h behind the newest run · normal for a late-cycle model/);
+    assert.match(html, /F048 · valid Fri 06Z/);
+    assert.match(html, /Max wind 95 kt \(109 mph\) · Cat 2/);
+    assert.match(html, /Peak 95 kt \(Cat 2\) at F048/);
+    assert.equal(M.ssCategory(64), 'Cat 1');
+    assert.equal(M.ssCategory(30), 'TD');
 });

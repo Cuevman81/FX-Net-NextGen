@@ -7191,7 +7191,10 @@ function buildIntensitySeries(rows, mode) {
 
 const SS_THRESHOLDS = [[34, 'TS'], [64, 'C1'], [83, 'C2'], [96, 'C3'], [113, 'C4'], [137, 'C5']];
 
-function drawIntensityChart(canvas, series) {
+// `focus` (a tech) is drawn bold on top with the rest dimmed — set while the
+// cursor is over that aid. Point and key positions are kept on the canvas so
+// the hover/click readout can find what is under the pointer.
+function drawIntensityChart(canvas, series, focus) {
     const cssW = 660, cssH = 400;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = cssW * dpr; canvas.height = cssH * dpr;
@@ -7239,21 +7242,27 @@ function drawIntensityChart(canvas, series) {
         ctx.fillStyle = 'rgba(255,209,102,0.8)'; ctx.textAlign = 'left';
         ctx.fillText(lab, mL + pw + 4, Y(v));
     });
-    // model lines (OFCL/consensus drawn last, on top)
-    [...series].sort((a, b) => (a.wide ? 1 : 0) - (b.wide ? 1 : 0)).forEach(s => {
-        ctx.strokeStyle = s.color; ctx.lineWidth = s.wide ? 2.6 : 1.5;
+    // model lines (OFCL/consensus drawn last, on top; a focused aid above all)
+    const rank = s => (s.tech === focus ? 2 : s.wide ? 1 : 0);
+    [...series].sort((a, b) => rank(a) - rank(b)).forEach(s => {
+        const on = s.tech === focus;
+        ctx.globalAlpha = focus && !on ? 0.3 : 1;
+        ctx.strokeStyle = s.color; ctx.lineWidth = on ? 3.4 : s.wide ? 2.6 : 1.5;
         ctx.beginPath();
         s.pts.forEach((p, i) => { i ? ctx.lineTo(X(p.tau), Y(p.v)) : ctx.moveTo(X(p.tau), Y(p.v)); });
         ctx.stroke();
         ctx.fillStyle = s.color;
-        s.pts.forEach(p => { ctx.beginPath(); ctx.arc(X(p.tau), Y(p.v), s.wide ? 2.6 : 1.8, 0, Math.PI * 2); ctx.fill(); });
+        s.pts.forEach(p => { ctx.beginPath(); ctx.arc(X(p.tau), Y(p.v), on ? 3.4 : s.wide ? 2.6 : 1.8, 0, Math.PI * 2); ctx.fill(); });
     });
+    ctx.globalAlpha = 1;
     // legend (right column), ordered by end-point intensity so it reads like the chart
     const legX = mL + pw + 34;
     const newest = series.map(s => s.dtg).sort().pop();
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const keyRows = [];
     [...series].sort((a, b) => b.pts[b.pts.length - 1].v - a.pts[a.pts.length - 1].v).forEach((s, i) => {
         const ly = mT + 8 + i * 15;
+        keyRows.push({ tech: s.tech, y0: ly - 7, y1: ly + 7 });
         ctx.strokeStyle = s.color; ctx.lineWidth = s.wide ? 2.6 : 1.5;
         ctx.beginPath(); ctx.moveTo(legX, ly); ctx.lineTo(legX + 16, ly); ctx.stroke();
         ctx.fillStyle = s.color; ctx.font = `${s.wide ? 'bold ' : ''}9px "Roboto Mono",monospace`;
@@ -7264,6 +7273,90 @@ function drawIntensityChart(canvas, series) {
         ctx.fillText(`${s.dtg.slice(8, 10)}Z`, legX + 60, ly);
         ctx.fillStyle = '#8b97a3';
         ctx.fillText(`${s.pts[s.pts.length - 1].v} kt`, legX + 82, ly);
+    });
+    canvas._intHit = {
+        series, newest, legX, keyRows,
+        pts: series.flatMap(s => s.pts.map(p => ({ tech: s.tech, tau: p.tau, v: p.v, x: X(p.tau), y: Y(p.v) })))
+    };
+}
+
+// What is under the pointer: a forecast point within 10 px, else the nearest
+// line within 6 px (reported at its closer end), else a row of the key.
+function intensityHitTest(hit, x, y) {
+    if (!hit) return null;
+    let best = null, bd = 10;
+    hit.pts.forEach(p => { const d = Math.hypot(p.x - x, p.y - y); if (d <= bd) { bd = d; best = p; } });
+    if (best) return { tech: best.tech, tau: best.tau, v: best.v };
+    let seg = null, sd = 6;
+    const byTech = {};
+    hit.pts.forEach(p => (byTech[p.tech] = byTech[p.tech] || []).push(p));
+    Object.values(byTech).forEach(ps => {
+        for (let i = 1; i < ps.length; i++) {
+            const a = ps[i - 1], b = ps[i];
+            const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy || 1;
+            const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2));
+            const d = Math.hypot(a.x + t * dx - x, a.y + t * dy - y);
+            if (d <= sd) { sd = d; const p = t < 0.5 ? a : b; seg = { tech: p.tech, tau: p.tau, v: p.v }; }
+        }
+    });
+    if (seg) return seg;
+    if (x >= hit.legX - 4) {
+        const row = hit.keyRows.find(r => y >= r.y0 && y <= r.y1);
+        if (row) { const s = hit.series.find(q => q.tech === row.tech); const end = s.pts[s.pts.length - 1]; return { tech: s.tech, tau: end.tau, v: end.v, fromKey: true }; }
+    }
+    return null;
+}
+
+const ssCategory = v => v == null ? '' : v < 34 ? 'TD' : v < 64 ? 'TS' : v < 83 ? 'Cat 1' : v < 96 ? 'Cat 2' : v < 113 ? 'Cat 3' : v < 137 ? 'Cat 4' : 'Cat 5';
+
+function intensityTooltipHtml(s, h, mode, deckNewest) {
+    const initMs = adeckDtgMs(s.dtg);
+    const valid = new Date(initMs + h.tau * 3600e3);
+    const vZ = `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][valid.getUTCDay()]} ${String(valid.getUTCHours()).padStart(2, '0')}Z`;
+    const vLocal = valid.toLocaleString([], { weekday: 'short', hour: 'numeric', timeZoneName: 'short' });
+    const peak = s.pts.reduce((a, p) => (p.v > a.v ? p : a), s.pts[0]);
+    const lagH = deckNewest ? Math.round((adeckDtgMs(deckNewest) - initMs) / 3600e3) : 0;
+    return `<div style="color:${s.color};font-weight:700;">${esc(s.name)} <span style="color:#8b97a3;font-weight:400;">(${esc(s.tech)})</span>${isAiModel(s.tech) ? ' <span style="color:#ea80fc;font-weight:400;">✦ AI</span>' : ''}</div>
+        <div style="color:#fff;">Run <b>${adeckRunLabel(s.dtg)}</b></div>
+        <div style="font-size:9.5px;margin-bottom:3px;">${adeckRunStatus(lagH, mode, s.tech)}</div>
+        <div style="color:#fff;">${h.fromKey ? 'End of run · ' : ''}F${String(h.tau).padStart(3, '0')} · valid ${vZ} <span style="color:#8b97a3;">(${esc(vLocal)})</span></div>
+        <div style="color:#ffd166;">Max wind ${h.v} kt (${Math.round(h.v * 1.15078)} mph) · ${ssCategory(h.v)}</div>
+        <div style="color:#8b97a3;">Peak ${peak.v} kt (${ssCategory(peak.v)}) at F${String(peak.tau).padStart(3, '0')}</div>`;
+}
+
+// Hover (or tap) the chart for which run an aid is from. Wired once; reads the
+// series and deck state the last draw left on the canvas.
+function initIntensityHover() {
+    const canvas = document.getElementById('intensity-canvas');
+    const panel = document.getElementById('intensity-panel');
+    if (!canvas || !panel) return;
+    const tip = document.createElement('div');
+    tip.id = 'intensity-tip';
+    tip.style.cssText = 'position:absolute;display:none;pointer-events:none;z-index:2;background:rgba(6,8,12,0.96);border:1px solid rgba(0,229,255,0.35);border-radius:3px;padding:6px 8px;font:10.5px/1.5 "Roboto Mono",monospace;max-width:290px;';
+    panel.appendChild(tip);
+    let focus = null;
+    const show = e => {
+        const hit = canvas._intHit;
+        const r = canvas.getBoundingClientRect();
+        const h = intensityHitTest(hit, e.clientX - r.left, e.clientY - r.top);
+        const tech = h ? h.tech : null;
+        if (tech !== focus) { focus = tech; drawIntensityChart(canvas, hit.series, focus); }
+        canvas.style.cursor = h ? 'pointer' : '';
+        if (!h) { tip.style.display = 'none'; return; }
+        const s = hit.series.find(q => q.tech === h.tech);
+        tip.innerHTML = intensityTooltipHtml(s, h, panel.dataset.mode === 'late' ? 'late' : 'early', canvas._deckNewest);
+        tip.style.display = 'block';
+        const pr = panel.getBoundingClientRect();
+        let left = e.clientX - pr.left + 14, top = e.clientY - pr.top + 12;
+        if (left + tip.offsetWidth > pr.width - 6) left = e.clientX - pr.left - tip.offsetWidth - 14;
+        if (top + tip.offsetHeight > pr.height - 6) top = e.clientY - pr.top - tip.offsetHeight - 12;
+        tip.style.left = `${Math.max(4, left)}px`; tip.style.top = `${Math.max(4, top)}px`;
+    };
+    canvas.addEventListener('mousemove', show);
+    canvas.addEventListener('click', show);
+    canvas.addEventListener('mouseleave', () => {
+        tip.style.display = 'none';
+        if (focus && canvas._intHit) { focus = null; drawIntensityChart(canvas, canvas._intHit.series, null); }
     });
 }
 
@@ -7283,7 +7376,10 @@ async function openIntensityChart(mode) {
         if (!res.ok) throw new Error(`a-deck HTTP ${res.status}`);
         const rows = parseAdeckText(await res.text());
         const series = buildIntensitySeries(rows, mode);
-        drawIntensityChart(document.getElementById('intensity-canvas'), series);
+        const icv = document.getElementById('intensity-canvas');
+        // Newest run anywhere in the deck — the reference for "how far behind".
+        icv._deckNewest = rows.reduce((a, r) => (r.tau >= 0 && r.dtg > a ? r.dtg : a), '');
+        drawIntensityChart(icv, series);
         const newest = series.length ? series.map(s => s.dtg).sort().pop() : null;
         const laggards = newest ? series.filter(s => s.dtg !== newest).length : 0;
         const anyAi = series.some(s => isAiModel(s.tech));
@@ -7913,6 +8009,7 @@ function initAdeck() {
         if (p) p.dataset.mode = 'late';
         openIntensityChart('late');
     });
+    initIntensityHover();
     document.getElementById('intensity-close')?.addEventListener('click', () => {
         const p = document.getElementById('intensity-panel');
         if (p) p.style.display = 'none';
@@ -16096,6 +16193,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 3)', items: [
+        '<b>The intensity charts say which run each line is, too.</b> Hover over (or click) any line, point or key entry on the Early or Late Cycle Intensity chart. That model is highlighted and the others dim, with a readout of its run (<b>06Z Wed Oct 7</b>), whether that is the newest run or normal for a late-cycle model, the forecast hour and its valid time in Z and your local time, the wind there with its category, and the model\'s peak.',
+        'Worth knowing when you compare lines: the chart\'s x-axis is hours from <i>each model\'s own</i> run, so on a late-cycle chart F48 from a 06Z run and F48 from a 12Z run are six hours apart in real time. The valid time in the readout is the one to compare.'
+    ]},
     { date: 'Oct 7, 2026 (update 2)', items: [
         '<b>Model guidance now says which run each track is.</b> In the Early Cycle, Late Cycle, GEFS and AI views, every track is labeled with its model and run (<b>HWRF 06Z</b>), and one more than a cycle behind also shows its lag (<b>CMC 00Z −12h</b>). Click anywhere on a track, not just a dot, for every model under the click with its full run time, how far it goes, and whether it is the newest run. The note under the storm selector now groups the aids by run, newest first, and the intensity charts show each aid\'s run hour in their key.',
         '<b>Why late-cycle guidance looks a run behind:</b> late-cycle aids are the full model runs, which reach NHC 4–6 hours after their run time, so they normally sit one run behind the early-cycle aids. The popups now say so, and flag anything older. NHC\'s own forecast (OFCL) is labeled as the latest official advisory rather than a model run.',
@@ -16709,7 +16810,7 @@ const USER_GUIDE = [
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
             <li><b>AI / ML Models (✦)</b> — data-driven guidance has its own <b>Early Cycle AI Models</b> and <b>Late Cycle AI Models</b> track views (the regular Early/Late Track Guidance are physics-only). GraphCast (Google DeepMind) plots now; GraphCast-deterministic, Google GenCast, ECMWF AIFS, AI-GFS, and AI-GEFS are wired and draw automatically once NHC distributes them. In the intensity charts, the AI aids (NNIC neural-net intensity consensus, NNIB baseline, GraphCast) show alongside the physics models flagged with ✦ so you can compare directly. The ✦ also appears on track end-labels and in the click popup.</li>
-            <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones.</li>
+            <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones. <b>Hover or click</b> any line, point or key entry: that model is highlighted, with its run, whether it is the newest, the forecast hour and its valid time, and the wind and category there. The x-axis is hours from each model’s own run, so compare lines by the valid time in that readout.</li>
             <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
             <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance. A CIRA block below adds a second independent RI consensus, the Convective <b>Decapitation</b> probability (odds the convection gets sheared off the center → rapid weakening — the counterpart to RI), and current structure predictors (cold-cloud fraction, IR core symmetry).</li>
         </ul>
