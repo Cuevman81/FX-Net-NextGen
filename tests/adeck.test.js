@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const M = require('./_load').load([
     'ADECK_MODELS', 'AI_MODELS', 'isAiModel', 'parseAdeckText', 'adeckTechMeta',
     'pickAdeckCycles', 'adeckEmptyReason', 'buildAdeckFeatures', 'buildIntensitySeries', 'adeckDtgMs',
-    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus', 'intensityHitTest', 'ssCategory', 'intensityTooltipHtml', 'esc', 'ECMWF_TRACK_MODEL', 'ECMWF_ENS', 'compactTechList'
+    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus', 'intensityHitTest', 'ssCategory', 'intensityTooltipHtml', 'esc', 'ECMWF_TRACK_MODEL', 'ECMWF_ENS', 'compactTechList', 'ECMWF_ENS_INTENSITY', 'pctile', 'buildEnsembleIntensity'
 ]);
 
 // rows for one tech / cycle at the given forecast hours
@@ -182,4 +182,31 @@ test('ECMWF tracks up to two runs behind are called ECMWF\'s latest, not stale',
     assert.match(M.adeckRunStatus(12, 'aifs-ens', 'AF03'), /ECMWF's latest/);
     assert.match(M.adeckRunStatus(6, 'ai-late', 'AIFS'), /ECMWF's latest/);
     assert.match(M.adeckRunStatus(18, 'ecmwf-ens', 'XEMN'), /no track in the newer runs/);
+});
+
+test('an ECMWF ensemble becomes one mean line with a 10-90% member band', () => {
+    const mk = (tech, winds) => winds.map((v, i) => ({ dtg: '2026100700', tech, tau: i * 12, lat: 25, lon: -90, vmax: v, mslp: 1000 }));
+    const rows = [];
+    for (let m = 1; m <= 10; m++) rows.push(...mk(`AF${String(m).padStart(2, '0')}`, [30, 30 + m * 2, 30 + m * 4]));
+    rows.push(...mk('AF00', [30, 40]));                    // control drops out after 12 h
+    rows.push(...mk('XE01', [99, 99]));                    // other ensemble ignored
+    const e = M.buildEnsembleIntensity(rows, 'AF');
+    assert.equal(e.tech, 'AFMN');
+    assert.equal(e.members, 11);
+    assert.deepEqual(e.pts.map(p => p.tau), [0, 12, 24]);
+    assert.equal(e.pts[0].v, 30);
+    const b24 = e.band.find(b => b.tau === 24);
+    assert.equal(b24.n, 10);
+    assert.equal(b24.max, 70);
+    assert.ok(b24.lo < e.pts[2].v && e.pts[2].v < b24.hi);
+    assert.equal(M.buildEnsembleIntensity(rows.filter(r => !r.tech.startsWith('AF')), 'AF'), null);
+});
+
+test('the band stops once fewer than half the members still have the storm', () => {
+    const rows = [];
+    for (let m = 1; m <= 6; m++) {
+        const taus = m <= 2 ? [0, 12, 24] : [0, 12];
+        taus.forEach(t => rows.push({ dtg: '2026100700', tech: `XE0${m}`, tau: t, lat: 25, lon: -90, vmax: 40, mslp: 1000 }));
+    }
+    assert.deepEqual(M.buildEnsembleIntensity(rows, 'XE').pts.map(p => p.tau), [0, 12]);
 });

@@ -6940,7 +6940,7 @@ const ADECK_MODELS = {
     // straight from ECMWF open data (/api/ecmwf-tracks), not from NHC. The
     // remaining codes are placeholders: no public deck has carried them and
     // NHC's published tech list predates them, so they may never fill.
-    AIFS: ['AIFS (ECMWF AI, from ECMWF open data)', '#7c4dff', 2.4, 'L'],
+    AIFS: ['AIFS (ECMWF AI, from ECMWF open data)', '#7c4dff', 2.4, 'Ll'],
     GDMI: ['GraphCast Ens (Google DeepMind, interp)', '#f06292', 2, 'Ee'],
     GDMN: ['GraphCast Ens (Google DeepMind)', '#f06292', 2, 'Ll'],
     GRPI: ['GraphCast det (interp)', '#ec407a', 2, 'Ee'],
@@ -7231,6 +7231,47 @@ function buildIntensitySeries(rows, mode) {
     return series;
 }
 
+// An ECMWF ensemble on the intensity chart: its mean as a line, with the
+// members' 10th-90th percentile wind shaded behind it. Fifty-one lines would
+// bury every other aid; the band shows the same spread at a glance. Hours
+// where fewer than half the members still have the storm are dropped, like
+// the mean track.
+const ECMWF_ENS_INTENSITY = {
+    AF: { tech: 'AFMN', name: 'AIFS Ensemble mean (ECMWF AI)', color: '#ff4dd2' },
+    XE: { tech: 'XEMN', name: 'ECMWF Ensemble mean (IFS)', color: '#b2ff59' }
+};
+function pctile(sorted, q) {
+    if (!sorted.length) return null;
+    const i = (sorted.length - 1) * q, lo = Math.floor(i), hi = Math.ceil(i);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+}
+function buildEnsembleIntensity(rows, pre) {
+    const meta = ECMWF_ENS_INTENSITY[pre];
+    const re = new RegExp(`^${pre}\\d{2}$`);
+    const members = rows.filter(r => re.test(r.tech) && r.tau >= 0 && r.vmax);
+    if (!members.length) return null;
+    const dtg = members.reduce((a, r) => (r.dtg > a ? r.dtg : a), '');
+    const byTau = {}, techs = new Set();
+    const seen = new Set();
+    members.filter(r => r.dtg === dtg).forEach(r => {
+        const k = `${r.tech}|${r.tau}`;
+        if (seen.has(k)) return;
+        seen.add(k); techs.add(r.tech);
+        (byTau[r.tau] = byTau[r.tau] || []).push(r.vmax);
+    });
+    const need = Math.max(2, Math.ceil(techs.size / 2));
+    const pts = [], band = [];
+    for (const tau of Object.keys(byTau).map(Number).sort((a, b) => a - b)) {
+        const v = byTau[tau].sort((a, b) => a - b);
+        if (v.length < need) break;
+        const mean = v.reduce((a, b) => a + b, 0) / v.length;
+        pts.push({ tau, v: Math.round(mean) });
+        band.push({ tau, lo: Math.round(pctile(v, 0.1)), hi: Math.round(pctile(v, 0.9)), max: v[v.length - 1], n: v.length });
+    }
+    if (pts.length < 2) return null;
+    return { tech: meta.tech, name: meta.name, color: meta.color, wide: true, pts, dtg, band, members: techs.size };
+}
+
 const SS_THRESHOLDS = [[34, 'TS'], [64, 'C1'], [83, 'C2'], [96, 'C3'], [113, 'C4'], [137, 'C5']];
 
 // `focus` (a tech) is drawn bold on top with the rest dimmed — set while the
@@ -7254,7 +7295,7 @@ function drawIntensityChart(canvas, series, focus) {
     const pw = cssW - mL - mR, ph = cssH - mT - mB;
     const maxTau = Math.max(72, ...series.map(s => s.pts[s.pts.length - 1].tau));
     const xMax = Math.ceil(maxTau / 24) * 24;
-    const vTop = Math.max(...series.map(s => Math.max(...s.pts.map(p => p.v))));
+    const vTop = Math.max(...series.map(s => Math.max(...s.pts.map(p => p.v), ...(s.band || []).map(b => b.hi))));
     const yMax = Math.max(60, Math.ceil((vTop + 15) / 20) * 20);
     const X = tau => mL + (tau / xMax) * pw;
     const Y = v => mT + ph - (v / yMax) * ph;
@@ -7284,6 +7325,16 @@ function drawIntensityChart(canvas, series, focus) {
         ctx.fillStyle = 'rgba(255,209,102,0.8)'; ctx.textAlign = 'left';
         ctx.fillText(lab, mL + pw + 4, Y(v));
     });
+    // ensemble spread bands first, beneath every line
+    series.filter(s => s.band).forEach(s => {
+        ctx.globalAlpha = focus ? (s.tech === focus ? 0.3 : 0.06) : 0.16;
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        s.band.forEach((b, i) => { i ? ctx.lineTo(X(b.tau), Y(b.hi)) : ctx.moveTo(X(b.tau), Y(b.hi)); });
+        [...s.band].reverse().forEach(b => ctx.lineTo(X(b.tau), Y(b.lo)));
+        ctx.closePath(); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
     // model lines (OFCL/consensus drawn last, on top; a focused aid above all)
     const rank = s => (s.tech === focus ? 2 : s.wide ? 1 : 0);
     [...series].sort((a, b) => rank(a) - rank(b)).forEach(s => {
@@ -7363,7 +7414,10 @@ function intensityTooltipHtml(s, h, mode, deckNewest) {
         <div style="font-size:9.5px;margin-bottom:3px;">${adeckRunStatus(lagH, mode, s.tech)}</div>
         <div style="color:#fff;">${h.fromKey ? 'End of run · ' : ''}F${String(h.tau).padStart(3, '0')} · valid ${vZ} <span style="color:#8b97a3;">(${esc(vLocal)})</span></div>
         <div style="color:#ffd166;">Max wind ${h.v} kt (${Math.round(h.v * 1.15078)} mph) · ${ssCategory(h.v)}</div>
-        <div style="color:#8b97a3;">Peak ${peak.v} kt (${ssCategory(peak.v)}) at F${String(peak.tau).padStart(3, '0')}</div>`;
+        <div style="color:#8b97a3;">Peak ${peak.v} kt (${ssCategory(peak.v)}) at F${String(peak.tau).padStart(3, '0')}</div>${(() => {
+            const b = s.band && s.band.find(x => x.tau === h.tau);
+            return b ? `<div style="color:#cfd6de;margin-top:2px;">Members (${b.n} of ${s.members}): middle 80% ${b.lo}–${b.hi} kt · strongest ${b.max} kt</div>` : '';
+        })()}${/^(AIFS|AFMN|XEMN)$/.test(s.tech) ? '<div style="color:#8b97a3;font-size:9.5px;">Global model: winds run low for a strong storm · © ECMWF, CC BY 4.0</div>' : ''}`;
 }
 
 // Hover (or tap) the chart for which run an aid is from. Wired once; reads the
@@ -7414,10 +7468,18 @@ async function openIntensityChart(mode) {
     title.textContent = `${sid} — ${mode === 'early' ? 'EARLY CYCLE' : 'LATE CYCLE (EXPERIMENTAL)'} INTENSITY GUIDANCE`;
     note.textContent = 'Loading…';
     try {
-        const res = await fetch(`/api/adeck?id=${adeckStorm}`);
+        const storm = adeckStorm;
+        // Late cycle also carries ECMWF (AIFS + both ensembles), straight from
+        // ECMWF open data. Each is optional: a failure just leaves it off.
+        const ec = m => fetch(`/api/ecmwf-tracks?model=${m}&id=${storm}`).then(r => (r.ok ? r.text() : '')).catch(() => '');
+        const [res, ...ecTexts] = await Promise.all([fetch(`/api/adeck?id=${storm}`),
+            ...(mode === 'late' ? ['aifs', 'aifs-ens', 'ifs-ens'].map(ec) : [])]);
         if (!res.ok) throw new Error(`a-deck HTTP ${res.status}`);
-        const rows = parseAdeckText(await res.text());
+        if (adeckStorm !== storm || panel.dataset.mode !== mode) return;     // switched meanwhile
+        const ecRows = ecTexts.flatMap(t => parseAdeckText(t));
+        const rows = parseAdeckText(await res.text()).concat(ecRows);
         const series = buildIntensitySeries(rows, mode);
+        if (mode === 'late') ['AF', 'XE'].forEach(pre => { const e = buildEnsembleIntensity(ecRows, pre); if (e) series.push(e); });
         const icv = document.getElementById('intensity-canvas');
         // Newest run anywhere in the deck — the reference for "how far behind".
         icv._deckNewest = rows.reduce((a, r) => (r.tau >= 0 && r.dtg > a ? r.dtg : a), '');
@@ -7426,7 +7488,7 @@ async function openIntensityChart(mode) {
         const laggards = newest ? series.filter(s => s.dtg !== newest).length : 0;
         const anyAi = series.some(s => isAiModel(s.tech));
         note.textContent = newest
-            ? `Newest run ${adeckRunLabel(newest)} (${adeckAgeStr(adeckDtgMs(newest))}) · ${series.length} aids${laggards ? ` · ${laggards} from older runs (run hour in amber in the key)` : ''} · dashed lines mark TS / Cat 1–5 thresholds${anyAi ? ' · ✦ = AI/ML model' : ''}`
+            ? `Newest run ${adeckRunLabel(newest)} (${adeckAgeStr(adeckDtgMs(newest))}) · ${series.length} aids${laggards ? ` · ${laggards} from older runs (run hour in amber in the key)` : ''} · dashed lines mark TS / Cat 1–5 thresholds${anyAi ? ' · ✦ = AI/ML model' : ''}${series.some(s => s.band) ? ' · shading = middle 80% of ECMWF ensemble members · ECMWF © CC BY 4.0' : ''}`
             : 'No intensity guidance available for this system yet.';
         if (newest) updateHealth('adeck', adeckDtgMs(newest));
         if (series.length) addLiveLog(`INTENSITY: ${sid} ${mode}-cycle — ${series.length} aids, newest run ${newest.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newest))}) — ${series.map(s => s.tech).join(', ')}`, '#00e5ff');
@@ -16252,6 +16314,10 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 5)', items: [
+        '<b>ECMWF on the Late Cycle Intensity chart.</b> The chart now carries AIFS as an ordinary line, and both ECMWF ensembles as their <b>mean</b> (bold: pink for the AI ensemble, green for the physics ensemble) with the <b>middle 80% of members shaded</b> behind it. That shows how much the ensemble disagrees without burying the chart under 102 more lines. Hover or click a mean for the members\' range at that hour and the strongest member, e.g. <i>middle 80% 32–72 kt · strongest 85 kt</i>. The shading stops once fewer than half the members still have the storm.',
+        'Read these for the spread and the trend more than the peak: a global model\'s winds run low for a strong storm, and the readout says so.'
+    ]},
     { date: 'Oct 7, 2026 (update 4)', items: [
         '<b>ECMWF\'s AI model, its AI ensemble, and its full ensemble.</b> NHC\'s public model files carry only one AI track model, Google DeepMind. ECMWF publishes its own cyclone tracks free, so FX-Net now pulls three products straight from ECMWF. All three carry the same run labels and click popups as the other models.',
         '<b>AIFS</b>, ECMWF\'s AI model, now plots in <b>Late Cycle AI Models</b> beside Google DeepMind. <b>AIFS Ensemble (ECMWF AI, 51)</b> is new under AI / ML Models: all 51 members of ECMWF\'s AI ensemble, its control (white) and mean (bold pink), with NHC\'s official track for reference. <b>ECMWF Ensemble Members (51)</b> is new under Model Guidance: the same for ECMWF\'s physics ensemble, the European counterpart to the GEFS spaghetti.',
@@ -16876,7 +16942,7 @@ const USER_GUIDE = [
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
             <li><b>ECMWF Ensemble Members (51)</b> — ECMWF’s physics ensemble (IFS ENS): 50 members (thin green), the control (white) and the mean (bold yellow-green), straight from ECMWF open data. Out to 15 days at 00Z/12Z and 6 days at 06Z/18Z. ECMWF posts each run 6–8 h after run time, so ECMWF tracks usually sit a run or two behind NHC’s newest aids; popups label that as ECMWF’s latest. Their winds, like any global model’s, run low for a strong storm. Tracks © ECMWF, CC BY 4.0.</li>
             <li><b>AI / ML Models (✦)</b> — data-driven guidance has its own <b>Early Cycle AI Models</b> and <b>Late Cycle AI Models</b> track views (the regular Early/Late Track Guidance are physics-only). GraphCast (Google DeepMind) plots now; GraphCast-deterministic, Google GenCast, ECMWF AIFS, AI-GFS, and AI-GEFS are wired and draw automatically once NHC distributes them. In the intensity charts, the AI aids (NNIC neural-net intensity consensus, NNIB baseline, GraphCast) show alongside the physics models flagged with ✦ so you can compare directly. The ✦ also appears on track end-labels and in the click popup. <b>AIFS</b>, ECMWF’s AI model, plots in the Late Cycle AI view, taken straight from ECMWF open data rather than NHC. <b>AIFS Ensemble (ECMWF AI, 51)</b> draws all 51 members of ECMWF’s AI ensemble with its control (white) and mean (bold pink).</li>
-            <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones. <b>Hover or click</b> any line, point or key entry: that model is highlighted, with its run, whether it is the newest, the forecast hour and its valid time, and the wind and category there. The x-axis is hours from each model’s own run, so compare lines by the valid time in that readout.</li>
+            <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones. <b>Hover or click</b> any line, point or key entry: that model is highlighted, with its run, whether it is the newest, the forecast hour and its valid time, and the wind and category there. The x-axis is hours from each model’s own run, so compare lines by the valid time in that readout. The Late Cycle chart also carries ECMWF: AIFS as a line, and the AI and physics ensembles as their mean (bold pink / green) with the middle 80% of members shaded. Hover a mean for the members’ range and the strongest member at that hour. The shading ends once fewer than half the members still have the storm. Global-model winds run low for a strong storm, so read these for spread and trend.</li>
             <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
             <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance. A CIRA block below adds a second independent RI consensus, the Convective <b>Decapitation</b> probability (odds the convection gets sheared off the center → rapid weakening — the counterpart to RI), and current structure predictors (cold-cloud fraction, IR core symmetry).</li>
         </ul>
