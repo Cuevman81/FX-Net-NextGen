@@ -37,6 +37,14 @@
       "destination": "https://www.nhc.noaa.gov/text/MIATWOEP.shtml"
     },
     {
+      "source": "/api/tides-latest",
+      "destination": "https://tidesandcurrents.noaa.gov/inundationdb/data/latest_data.json"
+    },
+    {
+      "source": "/api/tides-flood",
+      "destination": "https://tidesandcurrents.noaa.gov/inundationdb/data/wl_inundation.json"
+    },
+    {
       "source": "/api/airsigmet",
       "destination": "https://aviationweather.gov/api/data/airsigmet?format=geojson"
     },

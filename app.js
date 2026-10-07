@@ -338,6 +338,10 @@ const HEALTH_THRESHOLDS = {
     nhcArrival:   { label: 'NHC Wind Arrival', thresholdMs: 8 * 60 * 60 * 1000 },
     nhcWindField: { label: 'NHC Wind Field',   thresholdMs: 8 * 60 * 60 * 1000 },
     nhcSurge:     { label: 'NHC Storm Surge',  thresholdMs: 8 * 60 * 60 * 1000 },
+    // Gauges report every 6 min; the dashboard file lags ~10 min behind that.
+    tideGauges:   { label: 'Tide Gauges',      thresholdMs: 45 * 60 * 1000 },
+    // Stamped noon UTC of the analysis day; NASA posts each day ~1 day late.
+    oceanSst:     { label: 'Sea-Surface Temp', thresholdMs: 60 * 60 * 60 * 1000 },
     spcOutlook: { label: 'SPC Outlooks',   thresholdMs: 60 * 60 * 1000 },
     spcFireWx:  { label: 'SPC Fire Wx',    thresholdMs: 12 * 60 * 60 * 1000 },
     spcMd:      { label: 'SPC MDs',       thresholdMs: 30 * 60 * 1000 },
@@ -380,7 +384,7 @@ const HEALTH_GROUPS = [
     { name: 'SPC PRODUCTS',      ids: ['spcOutlook', 'spcMd', 'spcLsr', 'probSevere'] },
     { name: 'AVIATION',          ids: ['airSigmet', 'gairmet', 'pireps', 'taf', 'cwa'] },
     { name: 'WPC PRODUCTS',      ids: ['wpcQpf', 'wpcEro', 'wpcMpd'] },
-    { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook', 'nhcWindProb', 'nhcArrival', 'nhcWindField', 'nhcSurge', 'reconHdob', 'adeck'] },
+    { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook', 'nhcWindProb', 'nhcArrival', 'nhcWindField', 'nhcSurge', 'tideGauges', 'oceanSst', 'reconHdob', 'adeck'] },
     { name: 'CLIMATE & OUTLOOKS',ids: ['cpcTemp', 'cpcPrecip', 'drought'] },
     { name: 'FIRE & AIR',        ids: ['firms', 'hms', 'spcFireWx', 'aqi'] },
     { name: 'HYDRO & SOLAR',     ids: ['riverGauges', 'solar'] }
@@ -1187,6 +1191,7 @@ function initMap(paneId) {
         if (paneId === activePaneId) {
             document.getElementById('val-lat').innerText = e.lngLat.lat.toFixed(4);
             document.getElementById('val-lon').innerText = e.lngLat.lng.toFixed(4);
+            if (paneSst[paneId] || document.getElementById('hud-sst')?.style.display !== 'none') updateOceanReadout(map, paneId, e.lngLat);
 
             if (isDataSamplerActive) {
                 try {
@@ -1661,6 +1666,12 @@ function setupMapLayers(map, paneId) {
             }
         });
     });
+
+    // ─── Layer 2b: Sea-surface temperature (NASA GIBS MUR, daily). Beneath the
+    // satellite and radar so it reads as a base field, like the ocean itself. ───
+    map.addSource('ocean-sst', { type: 'raster', tiles: [oceanSstTiles('sst')], tileSize: 256, maxzoom: 7 });
+    map.addLayer({ id: 'ocean-sst-layer', type: 'raster', source: 'ocean-sst',
+        layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85, 'raster-resampling': 'nearest' } });
 
     // ─── Layer 3: Satellite (GOES bird + sector chosen per pane) ───
     // Placeholder tiles only — the source is repointed the moment a channel is
@@ -3323,6 +3334,33 @@ function initFrontalPipIcons(map) {
         paint: { 'text-color': ['coalesce', ['get', 'color'], '#ffff00'], 'text-halo-color': '#000', 'text-halo-width': 2 }
     });
 
+    // ─── NOAA tide gauges: water level vs the normal (predicted) tide ───
+    // Fill = departure from the predicted tide (surge / wind setup), ring =
+    // flooding right now. Grey = no recent reading.
+    map.addSource('tide-gauges', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'tide-gauges-pts', type: 'circle', source: 'tide-gauges',
+        layout: { visibility: 'none', 'circle-sort-key': ['get', 'anom'] },
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3.5, 6, 6, 10, 9],
+            'circle-color': ['case', ['==', ['get', 'stale'], 1], '#5b6570', ['step', ['get', 'anom'],
+                '#5b6570', -900, '#3d6bff', -1, '#7fb2ff', -0.5, '#9fe3c3', 0.5, '#ffe14d', 1, '#ff9a1f', 2, '#ff3b3b', 3, '#d24dff']],
+            'circle-stroke-color': ['match', ['get', 'cat'], 1, TIDE_CAT_COLOR[1], 2, TIDE_CAT_COLOR[2], 3, TIDE_CAT_COLOR[3], '#000'],
+            'circle-stroke-width': ['match', ['get', 'cat'], 0, 1, 3]
+        }
+    });
+    map.addLayer({
+        id: 'tide-gauges-label', type: 'symbol', source: 'tide-gauges',
+        minzoom: 5.5,
+        layout: {
+            visibility: 'none',
+            'text-field': ['step', ['zoom'], ['get', 'label'], 8, ['format', ['get', 'label'], {}, '\n', {}, ['get', 'name'], { 'font-scale': 0.8 }]],
+            'text-font': ['Noto Sans Bold'], 'text-size': 10, 'text-offset': [0, 1.2], 'text-anchor': 'top',
+            'text-allow-overlap': false
+        },
+        paint: { 'text-color': '#e8f6ff', 'text-halo-color': '#000', 'text-halo-width': 1.5 }
+    });
+
     // ─── Layer 7h: CPC Temperature Outlook (WMS Raster) ───
     map.addSource('cpc-temp', {
         type: 'raster',
@@ -3980,6 +4018,14 @@ function initFrontalPipIcons(map) {
     map.on('mouseenter', 'nhc-past-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'nhc-past-pts', () => { map.getCanvas().style.cursor = ''; });
 
+    // Tide gauge click → the gauge's 4-day chart and flood levels.
+    map.on('click', 'tide-gauges-pts', e => {
+        const f = e.features && e.features[0];
+        if (f) openTidePanel(String(f.properties.id), true);
+    });
+    map.on('mouseenter', 'tide-gauges-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'tide-gauges-pts', () => { map.getCanvas().style.cursor = ''; });
+
     // Drought Monitor click
     map.on('click', 'drought-fill', e => {
         if (!e.features || !e.features[0]) return;
@@ -4020,7 +4066,7 @@ function initFrontalPipIcons(map) {
         [1, 2, 3].forEach(d => otlkLayers.push(`spc-day${d}-fill`));
         [1, 2].forEach(d => ['torn', 'wind', 'hail'].forEach(hz => otlkLayers.push(`spc-prob-${d}-${hz}-fill`)));
         [1, 2, 3, 4, 5, 6, 7, 8].forEach(d => otlkLayers.push(`spc-firewx-day${d}-fill`));
-        const queryLayers = ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nhc-wsp-fill', 'nhc-past-pts', 'nexrad-sites-layer', 'river-gauges-layer', 'wpc-ero-day1-fill', 'wpc-ero-day2-fill', 'wpc-ero-day3-fill', ...otlkLayers].filter(l => map.getLayer(l));
+        const queryLayers = ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nhc-wsp-fill', 'nhc-past-pts', 'tide-gauges-pts', 'nexrad-sites-layer', 'river-gauges-layer', 'wpc-ero-day1-fill', 'wpc-ero-day2-fill', 'wpc-ero-day3-fill', ...otlkLayers].filter(l => map.getLayer(l));
         const otherFeats = map.queryRenderedFeatures(e.point, { layers: queryLayers });
         if (otherFeats.length > 0) return;
 
@@ -6004,6 +6050,27 @@ function updateTropLegend(paneId) {
         sections.push(head(`Surge risk · Cat ${paneSurgeRisk[pid]} worst case`) + SURGE_DEPTH_KEY.risk.map(([c, l]) => row(c, l)).join('') +
             `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">reference map, not a forecast</div>`);
 
+    if (isLayerVisible(m, 'tide-gauges-pts'))
+        sections.push(head('Tide gauges · vs normal tide') +
+            [['#d24dff', '+3 ft or more'], ['#ff3b3b', '+2 to +3 ft'], ['#ff9a1f', '+1 to +2 ft'], ['#ffe14d', '+0.5 to +1 ft'],
+             ['#9fe3c3', 'near normal'], ['#7fb2ff', '−0.5 to −1 ft'], ['#3d6bff', '−1 ft or lower'], ['#5b6570', 'no recent reading']]
+                .map(([c, l]) => row(c, l, `background:${c};border-radius:50%;width:9px;`)).join('') +
+            `<div style="font-size:8px;color:#8b97a3;margin:3px 0 1px;">ring = flooding now</div>` +
+            [1, 2, 3].map(c => row('', TIDE_CAT[c].toLowerCase(), `border:2px solid ${TIDE_CAT_COLOR[c]};border-radius:50%;width:6px;height:6px;`)).join(''));
+    if (isLayerVisible(m, 'ocean-sst-layer') && paneSst[pid]) {
+        const kind = paneSst[pid], date = oceanSstDate[kind];
+        const lg = oceanLegend[kind];
+        const ticks = kind === 'anom' ? [[-3, '−3'], [0, '0'], [3, '+3 °C']] : [[0, '0'], [10, '10'], [20, '20'], [26.5, '26.5'], [32, '32 °C']];
+        const tickHtml = lg ? ticks.map(([v, t]) => {
+            const pct = Math.max(0, Math.min(100, (v - lg.lo) / (lg.hi - lg.lo) * 100));
+            return `<span style="position:absolute;left:${pct}%;transform:translateX(${pct > 90 ? '-100%' : pct < 5 ? '0' : '-50%'});">${t}</span>`;
+        }).join('') : '';
+        sections.push(head(kind === 'anom' ? 'SST vs normal' : 'Sea-surface temperature') +
+            `<div style="width:200px;height:9px;background:${lg ? lg.css : '#333'};"></div>` +
+            `<div style="position:relative;width:200px;height:10px;font-size:7.5px;color:#bbb;">${tickHtml}</div>` +
+            `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">${kind === 'anom' ? '' : '26.5°C / 80°F ≈ hurricane threshold · '}NASA MUR${date ? ` · ${date}` : ''}</div>`);
+    }
+
     if (!sections.length) { legend.style.display = 'none'; return; }
     legend.innerHTML = sections.join('<div style="border-top:1px solid rgba(255,255,255,0.12);margin:5px 0 4px;"></div>');
     legend.style.display = 'block';
@@ -6015,6 +6082,451 @@ function initNhcImpacts() {
     const check = () => { refreshNhcSurge('inun', false); refreshNhcSurge('peak', false); };
     setTimeout(check, 10000);
     setInterval(check, 15 * 60 * 1000);
+}
+
+// ─── OCEAN HEAT: sea-surface temperature (NASA GIBS, GHRSST MUR L4) ───
+// Daily ~1 km analysis, published about a day late. GIBS names the day it
+// actually served in a CORS-exposed `layer-time-actual` header, so one tiny
+// probe tile pins every pane to that date (tiles then never go stale under a
+// long-open session) and gives the key its "as of" date. Tiles are paletted
+// PNGs, so a pixel maps back to its exact 0.15 °C class through GIBS's own
+// colormap — that is what the cursor readout uses, not the blended canvas.
+const OCEAN_SST = {
+    sst:  { layer: 'GHRSST_L4_MUR_Sea_Surface_Temperature', colormap: 'GHRSST_Sea_Surface_Temperature', label: 'Sea-surface temperature' },
+    anom: { layer: 'GHRSST_L4_MUR_Sea_Surface_Temperature_Anomalies', colormap: 'GHRSST_Sea_Surface_Temperature_Anomalies', label: 'SST vs normal' }
+};
+const GIBS_WMTS = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best';
+const oceanSstTiles = (kind, date) =>
+    `${GIBS_WMTS}/${OCEAN_SST[kind].layer}/default/${date || 'default'}/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png`;
+let paneSst = {};                 // paneId -> 'sst' | 'anom'
+const oceanSstDate = {};          // kind -> 'YYYY-MM-DD' GIBS actually served
+const oceanColormaps = {};        // kind -> Promise<Map rgbKey -> [lo, hi]>
+const oceanTileCache = new Map(); // `${kind}/${date}/${x}/${y}` -> Promise<ImageData|null>
+
+// GIBS value strings: "[26.40,26.55)", "[-INF,0.00)", "[3.0,+INF)".
+function parseGibsRange(v) {
+    // Char codes 91 / 41 / 93 are the opening square bracket and the two
+    // closers. Spelled as codes because tests/_load.js finds a declaration's
+    // end by counting brackets, and literal ones in a regex would throw it off.
+    const s = String(v || '').trim();
+    if (s.charCodeAt(0) !== 91 || ![41, 93].includes(s.charCodeAt(s.length - 1))) return null;
+    const parts = s.slice(1, -1).split(',');
+    if (parts.length !== 2) return null;
+    const num = t => (/INF/i.test(t) ? (t.trim().startsWith('-') ? -Infinity : Infinity) : parseFloat(t));
+    const lo = num(parts[0]), hi = num(parts[1]);
+    return Number.isNaN(lo) || Number.isNaN(hi) ? null : [lo, hi];
+}
+
+function oceanColormap(kind) {
+    if (!oceanColormaps[kind]) {
+        oceanColormaps[kind] = fetch(`https://gibs.earthdata.nasa.gov/colormaps/v1.3/${OCEAN_SST[kind].colormap}.xml`)
+            .then(r => { if (!r.ok) throw new Error(`colormap HTTP ${r.status}`); return r.text(); })
+            .then(xml => {
+                const doc = new DOMParser().parseFromString(xml, 'application/xml');
+                const map = new Map();
+                doc.querySelectorAll('ColorMapEntry').forEach(e => {
+                    if (e.getAttribute('transparent') === 'true') return;
+                    const rng = parseGibsRange(e.getAttribute('value'));
+                    if (rng) map.set(e.getAttribute('rgb').replace(/\s/g, ''), rng);
+                });
+                return map;
+            })
+            .catch(e => { delete oceanColormaps[kind]; throw e; });
+    }
+    return oceanColormaps[kind];
+}
+
+// Legend bar built from the colormap itself, so the ticks sit where the colors are.
+const oceanLegend = {};           // kind -> { css, lo, hi }
+function oceanLegendFrom(cmap) {
+    const entries = [...cmap.entries()]
+        .filter(([, r]) => Number.isFinite(r[0]) && Number.isFinite(r[1])).sort((a, b) => a[1][0] - b[1][0]);
+    if (!entries.length) return null;
+    const lo = entries[0][1][0], hi = entries[entries.length - 1][1][1];
+    const every = Math.max(1, Math.ceil(entries.length / 32));
+    const stops = entries.filter((_, i) => i % every === 0 || i === entries.length - 1)
+        .map(([rgb, r]) => `rgb(${rgb}) ${((r[0] - lo) / (hi - lo) * 100).toFixed(1)}%`);
+    return { css: `linear-gradient(90deg,${stops.join(',')})`, lo, hi };
+}
+
+// The one tile that covers the whole world at zoom 0 doubles as the date probe.
+async function oceanProbeDate(kind) {
+    const res = await fetch(`${GIBS_WMTS}/${OCEAN_SST[kind].layer}/default/default/GoogleMapsCompatible_Level7/0/0/0.png`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const actual = res.headers.get('layer-time-actual') || '';
+    const m = /(\d{4}-\d{2}-\d{2})/.exec(actual);
+    return m ? m[1] : '';
+}
+
+async function showOceanSst(pid, kind, announce) {
+    const m = maps[pid];
+    if (!m) return;
+    try {
+        const date = await oceanProbeDate(kind);
+        if (paneSst[pid] !== kind) return;
+        if (date && date !== oceanSstDate[kind]) oceanSstDate[kind] = date;
+        if (m.getSource('ocean-sst')) m.getSource('ocean-sst').setTiles([oceanSstTiles(kind, oceanSstDate[kind])]);
+        if (date) updateHealth('oceanSst', Date.parse(`${date}T12:00:00Z`));
+        updateTropLegend(pid);
+        oceanColormap(kind).then(c => {               // also warms the cursor readout
+            if (!oceanLegend[kind]) { oceanLegend[kind] = oceanLegendFrom(c); updateTropLegend(pid); }
+        }).catch(() => {});
+        if (announce) addLiveLog(`OCEAN: ${OCEAN_SST[kind].label} loaded (NASA MUR daily analysis${date ? ` for ${date}` : ''}). Hover the map for the value under the cursor.`, '#00ff88');
+    } catch (e) {
+        // The 'default' tiles still draw even if the date probe failed.
+        if (announce) addLiveLog(`OCEAN: ${OCEAN_SST[kind].label} — could not confirm the analysis date (${e.message}); showing NASA's latest`, '#ffb300');
+        if (typeof _productPendingClear === 'function') _productPendingClear();
+    }
+}
+
+// Zoom-7 tile + pixel under a lon/lat (Web Mercator, 256 px tiles).
+function oceanTilePixel(lng, lat, z = 7) {
+    const n = 2 ** z;
+    const x = (lng + 180) / 360 * n;
+    const s = Math.sin(Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI / 180);
+    const y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * n;
+    const tx = Math.floor(x), ty = Math.floor(y);
+    return { tx: ((tx % n) + n) % n, ty: Math.max(0, Math.min(n - 1, ty)), px: Math.min(255, Math.floor((x - tx) * 256)), py: Math.min(255, Math.floor((y - ty) * 256)) };
+}
+
+function oceanTileImage(kind, tx, ty) {
+    const date = oceanSstDate[kind] || 'default';
+    const key = `${kind}/${date}/${tx}/${ty}`;
+    if (!oceanTileCache.has(key)) {
+        if (oceanTileCache.size > 48) oceanTileCache.delete(oceanTileCache.keys().next().value);
+        oceanTileCache.set(key, fetch(`${GIBS_WMTS}/${OCEAN_SST[kind].layer}/default/${date}/GoogleMapsCompatible_Level7/7/${ty}/${tx}.png`)
+            .then(r => (r.ok ? r.blob() : null))
+            .then(b => (b ? createImageBitmap(b, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }) : null))
+            .then(bmp => {
+                if (!bmp) return null;
+                const c = document.createElement('canvas');
+                c.width = bmp.width; c.height = bmp.height;
+                const ctx = c.getContext('2d', { willReadFrequently: true });
+                ctx.drawImage(bmp, 0, 0);
+                return ctx.getImageData(0, 0, c.width, c.height);
+            })
+            .catch(() => null));
+    }
+    return oceanTileCache.get(key);
+}
+
+const cToF = c => c * 9 / 5 + 32;
+// "29.4°C / 84.9°F" from a colormap class; anomalies convert as a difference.
+function oceanValueText(kind, rng) {
+    if (!rng) return 'land / no data';
+    const [lo, hi] = rng;
+    if (kind === 'anom') {
+        if (!Number.isFinite(lo)) return `below −3.0°C (−5.4°F)`;
+        if (!Number.isFinite(hi)) return `above +3.0°C (+5.4°F)`;
+        const mid = (lo + hi) / 2, sign = mid >= 0 ? '+' : '−';
+        return `${sign}${Math.abs(mid).toFixed(1)}°C (${sign}${Math.abs(mid * 1.8).toFixed(1)}°F)`;
+    }
+    if (!Number.isFinite(lo)) return 'below 0°C (32°F)';
+    if (!Number.isFinite(hi)) return `${lo.toFixed(1)}°C+ (${cToF(lo).toFixed(0)}°F+)`;
+    const mid = (lo + hi) / 2;
+    return `${mid.toFixed(1)}°C / ${cToF(mid).toFixed(0)}°F`;
+}
+
+let _oceanHoverSeq = 0;
+async function updateOceanReadout(map, paneId, lngLat) {
+    const box = document.getElementById('hud-sst');
+    const kind = paneSst[paneId];
+    if (!box) return;
+    if (!kind || !isLayerVisible(map, 'ocean-sst-layer')) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    const seq = ++_oceanHoverSeq;
+    const { tx, ty, px, py } = oceanTilePixel(lngLat.lng, lngLat.lat);
+    const [img, cmap] = await Promise.all([oceanTileImage(kind, tx, ty), oceanColormap(kind).catch(() => null)]);
+    if (seq !== _oceanHoverSeq) return;            // the cursor has moved on
+    const label = document.getElementById('hud-sst-label'), val = document.getElementById('val-sst');
+    if (label) label.textContent = kind === 'anom' ? 'SST ANOM:' : 'SST:';
+    if (!val) return;
+    if (!img || !cmap) { val.textContent = '--'; return; }
+    const i = (py * img.width + px) * 4, d = img.data;
+    const rng = d[i + 3] === 0 ? null : cmap.get(`${d[i]},${d[i + 1]},${d[i + 2]}`);
+    val.textContent = oceanValueText(kind, rng);
+    // Warm enough to sustain a hurricane (~26.5 °C) reads in the hurricane colour.
+    val.style.color = kind === 'sst' && rng && rng[0] >= 26.5 ? '#ff7a45' : '#ffb347';
+}
+
+// ─── COASTAL WATER LEVELS: NOAA CO-OPS tide gauges ───
+// The national inundation dashboard publishes two files every few minutes for
+// all ~290 gauges: latest observed + predicted water level, and flood
+// thresholds, peaks and next high tide (both relative to MHHW, in feet).
+// They send no CORS header, so they come through vercel.json pass-through
+// rewrites (/api/tides-*). Station positions and time zones come once per
+// session from CO-OPS metadata, which is CORS-open. Per-gauge charts read the
+// CO-OPS data API directly (also CORS-open).
+const COOPS_API = 'https://api.tidesandcurrents.noaa.gov';
+let tideStationMeta = null;        // Promise<Map id -> {lat, lng, tzcorr, observedst, state}>
+const tideStations = {};           // id -> merged record (see buildTideFeatures)
+let tideLoadedAt = 0;
+
+// US daylight time: second Sunday of March to first Sunday of November.
+// To the nearest hour — all it has to do is turn a gauge's local clock into UTC.
+function usDstActive(ms) {
+    const y = new Date(ms).getUTCFullYear();
+    const sunday = (month, nth) => {
+        const first = new Date(Date.UTC(y, month, 1)).getUTCDay();
+        return 1 + ((7 - first) % 7) + 7 * (nth - 1);
+    };
+    return ms >= Date.UTC(y, 2, sunday(2, 2), 7) && ms < Date.UTC(y, 10, sunday(10, 1), 6);
+}
+
+// CO-OPS stamps the dashboard files in each gauge's local clock ("LST/LDT").
+function stationLocalToUtc(str, tzcorr, observedst) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(str || ''));
+    if (!m || tzcorr == null || Number.isNaN(+tzcorr)) return 0;
+    let ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) - (+tzcorr) * 3600000;
+    if (observedst && usDstActive(ms - 3600000)) ms -= 3600000;
+    return ms;
+}
+
+const _num = v => (v === null || v === undefined || v === '' || Number.isNaN(+v) ? null : +v);
+
+// Flood category reached by a water level (feet above MHHW): 0 none, 1 minor,
+// 2 moderate, 3 major. NWS thresholds win; NOS's derived minor fills in where
+// NWS has none.
+function tideFloodCategory(level, thr) {
+    if (level == null || !thr) return 0;
+    if (thr.major != null && level >= thr.major) return 3;
+    if (thr.moderate != null && level >= thr.moderate) return 2;
+    if (thr.minor != null && level >= thr.minor) return 1;
+    return 0;
+}
+
+function loadTideStationMeta() {
+    if (!tideStationMeta) {
+        tideStationMeta = fetch(`${COOPS_API}/mdapi/prod/webapi/stations.json?type=waterlevels`)
+            .then(r => { if (!r.ok) throw new Error(`station list HTTP ${r.status}`); return r.json(); })
+            .then(d => new Map((d.stations || []).map(s => [String(s.id), {
+                lat: +s.lat, lng: +s.lng, tzcorr: s.timezonecorr, observedst: !!s.observedst, state: s.state || ''
+            }])))
+            .catch(e => { tideStationMeta = null; throw e; });
+    }
+    return tideStationMeta;
+}
+
+// Join the three sources into map features + full records. Pure, so testable.
+function buildTideFeatures(meta, latest, flood, nowMs) {
+    const features = [];
+    (latest.stations || []).forEach(s => {
+        const id = String(s.id);
+        const m = meta.get(id), f = flood[id] || {};
+        if (!m || !Number.isFinite(m.lat) || !Number.isFinite(m.lng)) return;
+        if (s.tidal === false || s.greatLakes) return;          // no tide to compare against
+        const obs = _num(s.latest_obs), pred = _num(s.latest_pred);
+        // A gauge with no reading ("n/a") is stamped with its prediction time,
+        // which can be in the future — that is not a fresh observation.
+        const obsMs = obs == null ? 0 : stationLocalToUtc(s.last_date_time_stamp, m.tzcorr, m.observedst);
+        const stale = !obsMs || nowMs - obsMs > 90 * 60 * 1000 || obsMs - nowMs > 15 * 60 * 1000;
+        const nwsMinor = _num(f.minor_MHHW);
+        const thr = { minor: nwsMinor != null ? nwsMinor : _num(f.nos_minor_MHHW), moderate: _num(f.moderate_MHHW), major: _num(f.major_MHHW), src: nwsMinor != null ? 'NWS' : 'NOS' };
+        const anom = obs != null && pred != null && !stale ? Math.round((obs - pred) * 100) / 100 : null;
+        const peak = p => (p && _num(p.value) != null ? { v: _num(p.value), ms: stationLocalToUtc(p.date, m.tzcorr, m.observedst), model: p.type === 'ofs' } : null);
+        const rec = {
+            id, name: s.name || id, state: s.state || m.state, lat: m.lat, lng: m.lng, tzcorr: m.tzcorr, observedst: m.observedst,
+            obs: stale ? null : obs, pred, anom, obsMs, stale, thr, cat: stale ? 0 : tideFloodCategory(obs, thr),
+            max72: _num(s.max_72hrs), wind: _num(f.wind_speed != null ? f.wind_speed : s.latest_wind), baro: _num(f.baro_value != null ? f.baro_value : s.latest_baro),
+            peakToday: peak(f.peak_today), peakTomorrow: peak(f.peak_tomorrow),
+            nextHigh: f.next_high_tide ? { v: _num(f.next_high_tide.value), ms: stationLocalToUtc(f.next_high_tide.date, m.tzcorr, m.observedst) } : null
+        };
+        rec.peakCat = Math.max(tideFloodCategory(rec.peakToday && rec.peakToday.v, thr), tideFloodCategory(rec.peakTomorrow && rec.peakTomorrow.v, thr));
+        features.push({
+            type: 'Feature', geometry: { type: 'Point', coordinates: [m.lng, m.lat] },
+            properties: { id, name: rec.name, anom: anom == null ? -999 : anom, stale: stale ? 1 : 0, cat: rec.cat,
+                label: anom == null ? '' : `${anom >= 0 ? '+' : '−'}${Math.abs(anom).toFixed(1)}` }
+        });
+        tideStations[id] = rec;
+    });
+    return features;
+}
+
+async function fetchTideGauges(announce) {
+    try {
+        const [meta, latest, flood] = await Promise.all([
+            loadTideStationMeta(),
+            fetch(cacheBust('/api/tides-latest')).then(r => { if (!r.ok) throw new Error(`latest HTTP ${r.status}`); return r.json(); }),
+            fetch(cacheBust('/api/tides-flood')).then(r => { if (!r.ok) throw new Error(`flood levels HTTP ${r.status}`); return r.json(); })
+        ]);
+        const features = buildTideFeatures(meta, latest, flood, Date.now());
+        Object.values(maps).forEach(m => {
+            if (m.getSource('tide-gauges')) m.getSource('tide-gauges').setData({ type: 'FeatureCollection', features });
+        });
+        tideLoadedAt = Date.now();
+        const newest = Math.max(0, ...Object.values(tideStations).map(r => (r.stale ? 0 : r.obsMs)));
+        updateHealth('tideGauges', newest || undefined);
+        const flooding = Object.values(tideStations).filter(r => r.cat > 0);
+        const high = Object.values(tideStations).filter(r => r.anom != null && r.anom >= 1);
+        if (announce) addLiveLog(`TIDES: ${features.length} NOAA tide gauges loaded — ${high.length} running 1 ft+ above normal tide, ${flooding.length} at flood stage${flooding.length ? ` (${flooding.slice(0, 4).map(r => r.name).join(', ')}${flooding.length > 4 ? '…' : ''})` : ''}. Click a gauge for its chart.`, '#00ff88');
+        const tp = document.getElementById('tide-panel');
+        if (tp && tp.style.display === 'block' && tp.dataset.station) openTidePanel(tp.dataset.station, false);
+    } catch (e) {
+        addLiveLog(`TIDES ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// ─── Per-gauge chart: 48 h observed, 48 h back + 48 h ahead predicted ───
+const _coopsDate = ms => {
+    const d = new Date(ms), p = n => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+};
+const _coopsMs = t => Date.parse(String(t).replace(' ', 'T') + ':00Z');
+
+async function coopsGet(id, params) {
+    const url = `${COOPS_API}/api/prod/datagetter?station=${encodeURIComponent(id)}&datum=MHHW&units=english&time_zone=gmt&format=json&application=FXNet&${params}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    if (d.error) throw new Error(d.error.message || 'no data');
+    return (d.data || d.predictions || []).map(p => ({ ms: _coopsMs(p.t), v: _num(p.v), type: p.type })).filter(p => p.v != null && p.ms);
+}
+
+const fmtLocal = ms => new Date(ms).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+const fmtFt = v => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)} ft`;
+const TIDE_CAT = ['', 'MINOR', 'MODERATE', 'MAJOR'];
+const TIDE_CAT_COLOR = ['#9aa4ae', '#ff9f1a', '#ff2b2b', '#c400ff'];
+
+async function openTidePanel(id, announce) {
+    const rec = tideStations[id];
+    const panel = document.getElementById('tide-panel');
+    if (!rec || !panel) return;
+    panel.dataset.station = id;
+    panel.style.display = 'block';
+    document.getElementById('tide-title').textContent = `TIDE GAUGE — ${rec.name}${rec.state ? `, ${rec.state}` : ''} (${id})`;
+    const sum = document.getElementById('tide-summary'), note = document.getElementById('tide-note');
+    const t = rec.thr;
+    const lines = [];
+    if (rec.obs != null) {
+        lines.push(`Now <b style="color:#00e5ff;">${Math.abs(rec.obs).toFixed(2)} ft ${rec.obs >= 0 ? 'above' : 'below'}</b> MHHW (${esc(fmtLocal(rec.obsMs))})` +
+            (rec.anom != null ? ` · <b style="color:${rec.anom >= 1 ? '#ff9a1f' : rec.anom <= -1 ? '#7fb2ff' : '#cfd6de'};">${Math.abs(rec.anom).toFixed(2)} ft ${rec.anom >= 0 ? 'above' : 'below'} the normal tide</b>` : ''));
+    } else {
+        lines.push(`<span style="color:#ffb300;">No recent reading — the gauge may be offline${rec.obsMs ? ` (last ${esc(fmtLocal(rec.obsMs))})` : ''}.</span>`);
+    }
+    if (t.minor != null) {
+        const toGo = rec.obs != null ? t.minor - rec.obs : null;
+        lines.push(`Flooding: <span style="color:${TIDE_CAT_COLOR[1]};">minor ${t.minor.toFixed(2)}</span>` +
+            (t.moderate != null ? ` · <span style="color:${TIDE_CAT_COLOR[2]};">moderate ${t.moderate.toFixed(2)}</span>` : '') +
+            (t.major != null ? ` · <span style="color:${TIDE_CAT_COLOR[3]};">major ${t.major.toFixed(2)}</span>` : '') +
+            ` ft${t.src === 'NOS' ? ' (NOS-derived minor)' : ''}` +
+            (rec.cat ? ` · <b style="color:${TIDE_CAT_COLOR[rec.cat]};">${TIDE_CAT[rec.cat]} FLOODING NOW</b>` : toGo != null ? ` · ${toGo.toFixed(2)} ft below minor` : ''));
+    }
+    const pk = (label, p) => p ? `${label} ${p.v >= 0 ? '+' : '−'}${Math.abs(p.v).toFixed(2)} ft at ${esc(fmtLocal(p.ms))}${tideFloodCategory(p.v, t) ? ` <b style="color:${TIDE_CAT_COLOR[tideFloodCategory(p.v, t)]};">(${TIDE_CAT[tideFloodCategory(p.v, t)].toLowerCase()} flooding)</b>` : ''}` : '';
+    const peaks = [pk('today', rec.peakToday), pk('tomorrow', rec.peakTomorrow)].filter(Boolean);
+    if (peaks.length) lines.push(`${(rec.peakToday && rec.peakToday.model) || (rec.peakTomorrow && rec.peakTomorrow.model) ? 'NOS model guidance peak (tide + surge)' : 'Peak tide (astronomical only)'}: ${peaks.join(' · ')}`);
+    const extra = [rec.wind != null ? `wind ${rec.wind.toFixed(0)} kt` : '', rec.baro != null ? `pressure ${rec.baro.toFixed(1)} mb` : '', rec.max72 != null ? `72-h high ${fmtFt(rec.max72)}` : ''].filter(Boolean);
+    if (extra.length) lines.push(extra.join(' · '));
+    sum.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+    if (announce) note.textContent = 'Loading the 4-day chart…';
+
+    const now = Date.now();
+    try {
+        const [obs, pred, hilo] = await Promise.all([
+            coopsGet(id, 'product=water_level&range=48'),
+            coopsGet(id, `product=predictions&interval=6&begin_date=${encodeURIComponent(_coopsDate(now - 48 * 3600e3))}&end_date=${encodeURIComponent(_coopsDate(now + 48 * 3600e3))}`),
+            coopsGet(id, `product=predictions&interval=hilo&begin_date=${encodeURIComponent(_coopsDate(now))}&range=48`).catch(() => [])
+        ]);
+        if (panel.dataset.station !== id) return;
+        drawTideChart(document.getElementById('tide-canvas'), { obs, pred, hilo, rec, now });
+        const highs = hilo.filter(p => p.type === 'H').slice(0, 4).map(p => `${fmtLocal(p.ms)} ${fmtFt(p.v)}`);
+        note.innerHTML = (highs.length ? `Next high tides (astronomical, no surge): ${esc(highs.join(' · '))}<br>` : '') +
+            `Feet above MHHW (the average higher high tide). Cyan = observed · dashed = predicted tide · the gap between them is the surge or wind setup. ` +
+            `${[rec.peakToday, rec.peakTomorrow].some(p => p && p.model) ? 'Magenta = NOS operational model peak; it can run low or high, so check it against the observed gap. ' : ''}Times are your local time. NOAA CO-OPS.`;
+    } catch (e) {
+        if (panel.dataset.station === id) note.textContent = `Could not load the chart from NOAA CO-OPS (${e.message}).`;
+    }
+}
+
+function drawTideChart(canvas, { obs, pred, hilo, rec, now }) {
+    if (!canvas) return;
+    const W = Math.min(640, window.innerWidth - 60), H = 230, dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const L = 40, R = 10, T = 10, B = 24, pw = W - L - R, ph = H - T - B;
+    const t0 = now - 48 * 3600e3, t1 = now + 48 * 3600e3;
+    const t = rec.thr;
+    const peaks = [rec.peakToday, rec.peakTomorrow].filter(p => p && p.model && p.ms >= t0 && p.ms <= t1);
+    const vals = [...obs.map(p => p.v), ...pred.map(p => p.v), ...peaks.map(p => p.v)];
+    if (!vals.length) { ctx.fillStyle = '#8b97a3'; ctx.font = '11px "Roboto Mono",monospace'; ctx.fillText('No data from this gauge.', L, H / 2); return; }
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    // Always show the minor flood line; higher ones only when the water is
+    // within reach, so a calm day isn't squashed flat under a 7 ft major line.
+    if (t.minor != null) hi = Math.max(hi, t.minor);
+    [t.moderate, t.major].forEach(v => { if (v != null && v <= hi + 1.5) hi = Math.max(hi, v); });
+    lo -= 0.25; hi += 0.25;
+    const X = ms => L + (ms - t0) / (t1 - t0) * pw;
+    const Y = v => T + (hi - v) / (hi - lo) * ph;
+
+    ctx.font = '9px "Roboto Mono",monospace';
+    // grid + y labels
+    const step = hi - lo > 6 ? 2 : hi - lo > 3 ? 1 : 0.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.fillStyle = '#8b97a3'; ctx.lineWidth = 1;
+    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+        ctx.beginPath(); ctx.moveTo(L, Y(v)); ctx.lineTo(L + pw, Y(v)); ctx.stroke();
+        ctx.fillText(`${v.toFixed(step < 1 ? 1 : 0)}`, 4, Y(v) + 3);
+    }
+    // x labels: every 12 h on local midnight/noon
+    const d = new Date(t0); d.setMinutes(0, 0, 0); d.setHours(d.getHours() < 12 ? 12 : 24);
+    for (let ms = d.getTime(); ms < t1; ms += 12 * 3600e3) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.beginPath(); ctx.moveTo(X(ms), T); ctx.lineTo(X(ms), T + ph); ctx.stroke();
+        const lab = new Date(ms).toLocaleString([], { weekday: 'short', hour: 'numeric' });
+        ctx.fillStyle = '#8b97a3'; ctx.fillText(lab, X(ms) - ctx.measureText(lab).width / 2, H - 8);
+    }
+    // flood thresholds
+    [[t.minor, 1], [t.moderate, 2], [t.major, 3]].forEach(([v, c]) => {
+        if (v == null || v > hi) return;
+        ctx.strokeStyle = TIDE_CAT_COLOR[c]; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(L, Y(v)); ctx.lineTo(L + pw, Y(v)); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = TIDE_CAT_COLOR[c]; ctx.fillText(`${TIDE_CAT[c].toLowerCase()} flood ${v.toFixed(2)}`, L + 4, Y(v) - 3);
+    });
+    // MHHW reference
+    if (lo < 0 && hi > 0) { ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.moveTo(L, Y(0)); ctx.lineTo(L + pw, Y(0)); ctx.stroke(); ctx.fillStyle = '#6c7680'; ctx.fillText('MHHW', L + pw - 30, Y(0) - 3); }
+    // now line
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(X(now), T); ctx.lineTo(X(now), T + ph); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#cfd6de'; ctx.fillText('now', X(now) + 3, T + 9);
+    const line = (pts, color, width, dash) => {
+        if (!pts.length) return;
+        ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash || []);
+        ctx.beginPath();
+        let gap = true, prev = 0;
+        pts.forEach(p => {
+            if (p.ms < t0 || p.ms > t1) return;
+            if (gap || p.ms - prev > 30 * 60e3) ctx.moveTo(X(p.ms), Y(p.v)); else ctx.lineTo(X(p.ms), Y(p.v));
+            gap = false; prev = p.ms;
+        });
+        ctx.stroke(); ctx.setLineDash([]);
+    };
+    line(pred, '#7fa7c9', 1.4, [5, 3]);
+    line(obs, '#00e5ff', 2);
+    // forecast peaks from the NOS operational forecast model
+    peaks.forEach(p => {
+        const x = X(p.ms), y = Y(p.v);
+        ctx.fillStyle = '#ff4dd2'; ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 5); ctx.lineTo(x - 5, y); ctx.closePath(); ctx.fill();
+        ctx.fillText('model peak', x + 7, y + 3);
+    });
+    // next high tides
+    ctx.fillStyle = '#7fa7c9';
+    hilo.filter(p => p.type === 'H').forEach(p => { ctx.beginPath(); ctx.arc(X(p.ms), Y(p.v), 2.5, 0, 2 * Math.PI); ctx.fill(); });
+}
+
+function initTides() {
+    // The SST analysis is daily; re-pin open panes to a new day when NASA posts it.
+    setInterval(() => Object.entries(paneSst).forEach(([pid, kind]) => {
+        if (maps[pid] && isLayerVisible(maps[pid], 'ocean-sst-layer')) showOceanSst(pid, kind, false);
+    }), 3 * 60 * 60 * 1000);
+    document.getElementById('tide-close')?.addEventListener('click', () => {
+        const p = document.getElementById('tide-panel');
+        if (p) { p.style.display = 'none'; delete p.dataset.station; }
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'Escape') return;
+        const p = document.getElementById('tide-panel');
+        if (p) { p.style.display = 'none'; delete p.dataset.station; }
+    });
 }
 
 // ─── Hurricane Hunter reconnaissance (IEM AFOS feeds, CORS-open) ───
@@ -10105,6 +10617,8 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'nhc-surge-inun-layer'), nhcSurgeStamp.inun ? 'NHC SURGE FLOODING' : 'NHC SURGE FLOODING (NOT ISSUED)', '#0070ff', nhcSurgeStamp.inun ? 'nhcSurge' : undefined);
     add(isLayerVisible(map, 'nhc-peak-surge-layer'), nhcSurgeStamp.peak ? 'NHC PEAK SURGE' : 'NHC PEAK SURGE (NOT ISSUED)', '#0070ff', nhcSurgeStamp.peak ? 'nhcSurge' : undefined);
     add(isLayerVisible(map, 'surge-risk-layer'), `SURGE RISK CAT ${paneSurgeRisk[paneId] || ''} (REF)`, '#0070ff');
+    add(isLayerVisible(map, 'tide-gauges-pts'), 'TIDE GAUGES VS NORMAL', '#00e5ff', 'tideGauges');
+    add(isLayerVisible(map, 'ocean-sst-layer'), `${paneSst[paneId] === 'anom' ? 'SST ANOMALY' : 'SEA-SURFACE TEMP'}${oceanSstDate[paneSst[paneId]] ? ` · ${oceanSstDate[paneSst[paneId]]}` : ''}`, '#ffb347');
     // Climate / environment
     add(isLayerVisible(map, 'cpc-temp-layer'), 'CPC TEMP OUTLOOK', '#ff8c69', 'cpcTemp');
     add(isLayerVisible(map, 'cpc-precip-layer'), 'CPC PRECIP OUTLOOK', '#69b3ff', 'cpcPrecip');
@@ -11176,6 +11690,8 @@ function productItemActiveOn(pid, item) {
     else if (layer === 'nhc-swath') isActive = isLayerVisible(map, 'nhc-swath-fill');
     else if (layer === 'nhc-surge-inun') isActive = isLayerVisible(map, 'nhc-surge-inun-layer');
     else if (layer === 'nhc-peak-surge') isActive = isLayerVisible(map, 'nhc-peak-surge-layer');
+    else if (layer === 'tide-gauges') isActive = isLayerVisible(map, 'tide-gauges-pts');
+    else if (layer === 'ocean-sst') isActive = isLayerVisible(map, 'ocean-sst-layer') && paneSst[pid] === item.getAttribute('data-sst');
     else if (layer === 'surge-risk') isActive = isLayerVisible(map, 'surge-risk-layer') && paneSurgeRisk[pid] === item.getAttribute('data-surgecat');
     else if (layer === 'adeck') {
         isActive = isLayerVisible(map, 'adeck-lines') && adeckMode === item.getAttribute('data-adeck');
@@ -12020,6 +12536,31 @@ function initProductSidebar() {
                 setVis(NHC_SURGE[kind].layers, isActive);
                 if (isActive) await refreshNhcSurge(kind, true);
                 updateTropLegend(activePaneId);
+                updateSidebarToActivePane();
+                return;
+            }
+            if (layer === 'tide-gauges') {
+                const isActive = !item.classList.contains('active');
+                setVis(['tide-gauges-pts', 'tide-gauges-label'], isActive);
+                if (isActive) await fetchTideGauges(true);
+                updateTropLegend(activePaneId);
+                updateSidebarToActivePane();
+                return;
+            }
+            if (layer === 'ocean-sst') {
+                const pid = activePaneId, kind = item.getAttribute('data-sst');
+                if (item.classList.contains('active')) {
+                    setVis(['ocean-sst-layer'], false);
+                    delete paneSst[pid];
+                    const hud = document.getElementById('hud-sst');
+                    if (hud) hud.style.display = 'none';
+                } else {
+                    paneSst[pid] = kind;
+                    if (map.getSource('ocean-sst')) map.getSource('ocean-sst').setTiles([oceanSstTiles(kind, oceanSstDate[kind])]);
+                    setVis(['ocean-sst-layer'], true);
+                    await showOceanSst(pid, kind, true);
+                }
+                updateTropLegend(pid);
                 updateSidebarToActivePane();
                 return;
             }
@@ -14054,6 +14595,7 @@ function clearPane(map, paneId) {
         'nhc-swath-fill', 'nhc-swath-line', 'nhc-toa-likely-line', 'nhc-toa-likely-label',
         'nhc-toa-earliest-line', 'nhc-toa-earliest-label', 'nhc-surge-inun-layer',
         'nhc-peak-surge-layer', 'nhc-peak-surge-labels', 'surge-risk-layer',
+        'tide-gauges-pts', 'tide-gauges-label', 'ocean-sst-layer',
         'nhc-fcst-actual-line', 'nhc-fcst-lines', 'nhc-fcst-actual-pts', 'nhc-fcst-labels',
         'cpc-temp-layer', 'cpc-precip-layer',
         'drought-fill', 'drought-outline', 'cpc-drought-layer',
@@ -14084,6 +14626,7 @@ function clearPane(map, paneId) {
     delete paneGibsBird[paneId];
     delete paneWsp[paneId];
     delete paneSurgeRisk[paneId];
+    delete paneSst[paneId];
     updateRadarLegend(paneId);
     updateTropLegend(paneId);
     updateEroLegend(paneId);
@@ -14867,6 +15410,7 @@ function startAutoRefresh() {
         if (anyOn(['nhc-windfield-fill', 'nhc-swath-fill'])) fetchNhcWind(false);
         if (anyOn(['nhc-surge-inun-layer'])) refreshNhcSurge('inun', false);
         if (anyOn(['nhc-peak-surge-layer'])) refreshNhcSurge('peak', false);
+        if (anyOn(['tide-gauges-pts'])) fetchTideGauges(false);
     }, 5 * 60 * 1000);
 }
 
@@ -15485,6 +16029,11 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026', items: [
+        '<b>Tide gauges: how high the water is running, and whether it is flooding.</b> New under <b>NHC Tropical → Storm Surge</b>. All of NOAA\'s ~230 coastal tide gauges, each coloured by how far the water is running <b>above or below the normal tide</b> right now. That gap is the storm surge or wind setup building ahead of a storm. A ring means the gauge is <b>at flood stage now</b> (minor, moderate or major, from NWS flood levels). This morning the northern Gulf coast is already running about 1 to 1.3 ft above normal ahead of Tropical Storm Isaias; Bay Waveland is 0.2 ft below minor flooding.',
+        '<b>Click any gauge</b> for a 4-day chart: the last 48 hours observed against the predicted tide, the next 48 hours of predicted tide, and the minor, moderate and major flood lines. It also lists the next high tides, NOAA\'s operational model peak where one exists, and the gauge\'s wind and pressure. The map refreshes every 5 minutes, and an open chart refreshes with it.',
+        '<b>Sea-surface temperature.</b> New under <b>NHC Tropical → Ocean Heat</b>: NASA\'s daily 1 km analysis, and the same as a <b>departure from normal</b>. Hover anywhere over water and the top bar shows the temperature under the cursor, in orange once it reaches the ~26.5°C (80°F) that hurricanes need. The value is read from NASA\'s own colour table, accurate to 0.15°C, not estimated from the screen. The analysis runs a day behind; the key shows which day.'
+    ]},
     { date: 'Oct 6, 2026', items: [
         '<b>Storm surge and wind-threat maps for landfalling storms.</b> The tropical section covered the storm itself well (cone, advisories, recon, models), but not what happens on land and when. Twelve new items under <b>NHC Tropical</b> fill that gap. Each is NHC\'s own product, from the same NOAA service as the cone, and each has a key in the top-right corner of the pane.',
         '<b>Wind Threat.</b> The 5-day chance of tropical-storm-force (34 kt), 50-kt and hurricane-force (64 kt) winds, as a map. <b>Click anywhere</b> on it for all three chances at that spot; at Gulfport this evening it reads 30–40%, 10–20% and under 5% for Tropical Depression Nine, matching NHC\'s text product. <b>TS Wind Arrival</b> shows when tropical-storm-force winds are most likely to begin, and the earliest reasonable time, which is the deadline for preparations. <b>Wind Field</b> shows how far out each wind speed reaches now and at each forecast time, and <b>Past Wind Swath</b> where it has reached so far.',
@@ -16060,6 +16609,11 @@ const USER_GUIDE = [
         <ul>
             <li><b>Surge Risk: Category 1–5</b> — <i>reference maps, not a forecast</i>. Each shows the worst-case surge flooding from any hurricane of that category, from NHC’s SLOSH maximum-of-maximums. Use them before a surge map is issued to see what is at stake along a stretch of coast.</li>
         </ul>
+        <h3>Tide Gauges</h3>
+        <p><b>Tide Gauges: Water vs Normal Tide</b> plots every NOAA coastal tide gauge. The fill colour is how far the water is running above (yellow → red → purple) or below (blue) the <i>predicted</i> tide right now: that difference is the storm surge or wind setup. A coloured <b>ring</b> means the gauge has reached a flood level now: orange minor, red moderate, purple major. Grey means the gauge has no recent reading. Zoom in for the departure in feet, and further for station names.</p>
+        <p><b>Click a gauge</b> for its chart. The cyan line is what was observed over the last 48 hours; the dashed line is the predicted (astronomical) tide, 48 hours back and 48 ahead. Horizontal lines mark the flood levels. Heights are feet above <b>MHHW</b>, the average of each day’s higher high tide, which is the level NWS flood thresholds are set from. Where NWS has no thresholds, NOAA’s derived minor level is used and labelled so. Magenta diamonds are NOAA’s operational forecast model peak (tide plus surge) where one runs. It can run high or low, so compare it with the observed gap. Esc or × closes the chart.</p>
+        <h3>Ocean Heat</h3>
+        <p><b>Sea-Surface Temperature</b> is NASA’s daily ~1 km analysis (MUR), about a day behind; the key shows the date. <b>SST vs Normal</b> is the same field as a departure from normal for the date, which makes warm eddies and the Loop Current stand out. Hover over water to read the value in the top bar; for SST it turns orange-red at 26.5°C (80°F), roughly what a hurricane needs. The value comes from NASA’s colour table, so it is accurate to the 0.15°C class the map is drawn with.</p>
         <h3>Official Advisories (per storm)</h3>
         <p>Read NHC’s authoritative text for any active storm. Pick a system from the dropdown — every active Atlantic and Pacific storm is listed with its current advisory number and age — then open a product:</p>
         <ul>
@@ -16492,7 +17046,7 @@ function initAlertViz() {
 // pane's toggles; they still load through the legacy re-click path.)
 
 const PROC_KEY = 'fxnet_procedures';
-const PROC_ATTRS = ['day', 'hazard', 'channel', 'gibs', 'qpf', 'qpe', 'period', 'l3', 'wsp', 'toa', 'surgecat'];
+const PROC_ATTRS = ['day', 'hazard', 'channel', 'gibs', 'qpf', 'qpe', 'period', 'l3', 'wsp', 'toa', 'surgecat', 'sst'];
 
 function loadProcStore() {
     try { return JSON.parse(localStorage.getItem(PROC_KEY) || '{}'); } catch (_) { return {}; }
@@ -18170,6 +18724,7 @@ function init() {
     initAdeck();
     initNhcAdv();
     initNhcImpacts();
+    initTides();
     initPanelToggles();
     updateWarnModeLabel();
     initHealthToggle();

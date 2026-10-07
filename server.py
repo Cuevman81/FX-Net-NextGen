@@ -47,6 +47,8 @@ SIMPLE_PROXIES = {
     '/api/wpc-ero-discussion': ('https://www.wpc.ncep.noaa.gov/discussions/hpcdiscussions.php?disc=qpferd', 'text/html'),
     '/api/nhc-two-atl':        ('https://www.nhc.noaa.gov/text/MIATWOAT.shtml', 'text/html'),
     '/api/nhc-two-epac':       ('https://www.nhc.noaa.gov/text/MIATWOEP.shtml', 'text/html'),
+    '/api/tides-latest':       ('https://tidesandcurrents.noaa.gov/inundationdb/data/latest_data.json', 'application/json'),
+    '/api/tides-flood':        ('https://tidesandcurrents.noaa.gov/inundationdb/data/wl_inundation.json', 'application/json'),
 }
 
 
