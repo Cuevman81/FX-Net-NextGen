@@ -794,6 +794,14 @@ const GIBS_PRODUCTS = {
     FireTemp: { layer: { east: 'GOES-East_ABI_FireTemp',              west: 'GOES-West_ABI_FireTemp' },              tms: 'GoogleMapsCompatible_Level7', max: 7, label: 'Fire Temp RGB' }
 };
 
+// Channels IEM serves color-enhanced live (13/14/15) loop on GIBS Clean IR:
+// nowCOAST, the only other time-stepped source, is plain grayscale, so their
+// loops used to drop to black and white. nowCOAST has one "longwave" layer for
+// all of 11-16 anyway, so Band 13 is no less faithful for 14 and 15. Water
+// vapor (8-10) is colored live too, but nothing publishes colored WV frames.
+const IR_LOOP_VIA_GIBS = new Set([13, 14, 15]);
+const loopsOnGibsIr = ch => IR_LOOP_VIA_GIBS.has(Number(ch));
+
 function gibsLayerId(prodKey, bird) {
     const p = GIBS_PRODUCTS[prodKey];
     return (p && p.layer[bird]) || p.layer.east;
@@ -10878,8 +10886,16 @@ async function startAnimation() {
     // Read the bird off the pane actually showing a channel, not the active one.
     const satPaneForLoop = loopMaps.find(([pid, m]) => isLayerVisible(m, 'satellite-layer') && paneGoesChannels[pid] !== null);
     const satLoopBird = satPaneForLoop ? goesBirdFor(satPaneForLoop[0]) : 'east';
-    if (showGibs && gibsProdForLoop) {
-        const allTimes = gibsTimesFor(gibsProdForLoop, gibsBirdForLoop);
+    // A color IR channel with no GIBS product on screen sets the loop's frame
+    // times from GIBS Clean IR (see IR_LOOP_VIA_GIBS).
+    const irPaneForLoop = loopMaps.find(([pid, m]) => isLayerVisible(m, 'satellite-layer') && loopsOnGibsIr(paneGoesChannels[pid]));
+    const loopGibsProd = (showGibs && gibsProdForLoop) || (irPaneForLoop ? 'CleanIR' : null);
+    const loopGibsBird = showGibs && gibsProdForLoop ? gibsBirdForLoop : irPaneForLoop ? goesBirdFor(irPaneForLoop[0]) : 'east';
+    if (loopGibsProd && !gibsTimesFor(loopGibsProd, loopGibsBird).length) await fetchGibsTimes(loopGibsProd, loopGibsBird);
+    if (irPaneForLoop && Number(paneGoesChannels[irPaneForLoop[0]]) !== 13)
+        addLiveLog(`LOOP: CH${paneGoesChannels[irPaneForLoop[0]]} loops on Band 13 Clean IR frames, the only color IR with past frames (nearly identical in the IR window)`, '#ffb300');
+    if (loopGibsProd) {
+        const allTimes = gibsTimesFor(loopGibsProd, loopGibsBird);
         const gStep = Math.max(stepMin, 10); // GIBS GOES cadence is 10 min
         let want = Math.min(Math.floor(durationMin / gStep) || 1, 24);
         // take every (gStep/10)-th real frame from the newest `want*stride` window
@@ -11066,15 +11082,18 @@ async function startAnimation() {
 
         // Create satellite animation layers per pane — GIBS (real frames) or nowCOAST
         if ((hadSatVisible || hadGibsVisible) && satFrames.length > 0) {
-            const gp = hadGibsVisible ? GIBS_PRODUCTS[gibsProd] : null;
-            const paneBird = paneGibsBird[paneId] || goesBirdFor(paneId);
+            // A color IR channel pane loops on GIBS Clean IR for its own bird.
+            const irGibs = !hadGibsVisible && hadSatVisible && loopsOnGibsIr(paneCh);
+            const loopProd = hadGibsVisible ? gibsProd : irGibs ? 'CleanIR' : null;
+            const gp = loopProd ? GIBS_PRODUCTS[loopProd] : null;
+            const paneBird = irGibs ? goesBirdFor(paneId) : (paneGibsBird[paneId] || goesBirdFor(paneId));
             for (let i = 0; i < satFrames.length; i++) {
                 const srcId = `anim-sat-src-${i}`;
                 const lyrId = `anim-sat-lyr-${i}`;
                 if (!map.getSource(srcId)) {
                     // fxframe:// = fetched once and retried, never re-requested (loadLoopFrameTile)
-                    const satUrl = loopFrameUrl(hadGibsVisible
-                        ? gibsTileUrl(gibsProd, satFrames[i].isoTime, paneBird)
+                    const satUrl = loopFrameUrl(loopProd
+                        ? gibsTileUrl(loopProd, satFrames[i].isoTime, paneBird)
                         : nowCoastSatUrl(paneCh, satFrames[i].isoTime));
                     const srcOpts = { type: 'raster', tiles: [satUrl], tileSize: 256 };
                     if (gp) srcOpts.maxzoom = gp.max;
@@ -17017,6 +17036,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 11)', items: [
+        '<b>IR satellite loops stay in color.</b> Channels 13, 14 and 15 show NOAA\'s color IR enhancement live, but their loops dropped to black and white. They used to animate from nowCOAST, the only per-channel source with past frames, and it is grayscale. These channels now loop on NASA GIBS Clean IR (Band 13) frames, which are colored and real 10-minute scans. Channels 14 and 15 use Band 13 frames in the loop, which are nearly identical in the IR window (the log says so); nowCOAST had only one longwave layer for all of them anyway. GOES-West IR channels can now loop too. Water vapor (8–10) is colored live but still loops in gray: no source publishes colored water-vapor frames.'
+    ]},
     { date: 'Oct 7, 2026 (update 10)', items: [
         '<b>Wind and surge layers follow the selected storm.</b> The tropical menu is now two groups. <b>TROPICAL · OVERVIEW</b> covers every system: cones, outlook areas and texts, ocean heat, and the surge-risk reference maps. <b>TROPICAL · SELECTED STORM</b> opens with one storm selector, and everything under it follows that storm: advisories, forecast history, track and intensity guidance, Storm Trends, SHIPS, the <b>wind field, past swath, TS-wind arrival times, surge flooding and peak surge</b>, and recon. A <i>This storm / All storms</i> switch under the selector picks whether those wind and surge layers draw just the selected storm (the default) or every system. A surge map issued for another storm shows a gray badge naming it (<i>AL09 ONLY</i>). NHC\'s wind-chance maps can\'t be split by storm, since NHC issues one combined map, so they are badged <b>ALL STORMS</b>.',
         '<b>Menu reorganized.</b> Groups now run in a forecaster\'s working order. Changes: SPC sorts its outlooks, probabilities and live products under their own headings. Surface Analysis is just observations and analyses. Soundings and SPC Mesoanalysis have a new <b>UPPER AIR &amp; SOUNDINGS</b> group. WPC QPF, excessive rainfall and MPDs joined river gauges in <b>PRECIP &amp; FLOODING</b>. Fire, smoke and air quality are one group. CPC outlooks and drought are <b>CLIMATE &amp; DROUGHT</b>. Meteogram, NDFD, model comparison, MOS and the text browser are <b>FORECASTS &amp; TEXT</b>. The day/night terminator moved to <b>MAP OVERLAYS</b>. Satellite lists the smooth-looping GIBS imagery first. Every product works as before, and saved displays and shared links are unaffected. Renamed groups keep the open/closed state you had. The filter box now also matches the heading a product sits under, so <i>qpf</i> finds the WPC rainfall forecasts.'

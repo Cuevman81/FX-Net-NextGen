@@ -96,3 +96,9 @@ test('an abort during the request itself is passed straight back, not retried', 
     await assert.rejects(h.loadLoopFrameTile({ url: h.loopFrameUrl(URL_HTTPS) }, ac), e => e.name === 'AbortError');
     assert.equal(h.calls.length, 1);
 });
+
+test('the color IR channels loop on GIBS Clean IR; gray channels stay on nowCOAST', () => {
+    const { loopsOnGibsIr } = load(['IR_LOOP_VIA_GIBS', 'loopsOnGibsIr']);
+    [13, 14, 15, '13'].forEach(ch => assert.equal(loopsOnGibsIr(ch), true, `CH${ch}`));
+    [2, 7, 8, 9, 10, 11, 12, 16, null].forEach(ch => assert.equal(loopsOnGibsIr(ch), false, `CH${ch}`));
+});
