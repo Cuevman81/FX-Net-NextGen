@@ -73,6 +73,10 @@
       "destination": "/api/proxy?__fn=adeck"
     },
     {
+      "source": "/api/ecmwf-tracks",
+      "destination": "/api/proxy?__fn=ecmwf-tracks"
+    },
+    {
       "source": "/api/drought-monitor",
       "destination": "/api/proxy?__fn=drought-monitor"
     },

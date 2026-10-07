@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const M = require('./_load').load([
     'ADECK_MODELS', 'AI_MODELS', 'isAiModel', 'parseAdeckText', 'adeckTechMeta',
     'pickAdeckCycles', 'adeckEmptyReason', 'buildAdeckFeatures', 'buildIntensitySeries', 'adeckDtgMs',
-    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus', 'intensityHitTest', 'ssCategory', 'intensityTooltipHtml', 'esc'
+    'adeckRunLabel', 'adeckRunGroups', 'adeckRunStatus', 'intensityHitTest', 'ssCategory', 'intensityTooltipHtml', 'esc', 'ECMWF_TRACK_MODEL', 'ECMWF_ENS', 'compactTechList'
 ]);
 
 // rows for one tech / cycle at the given forecast hours
@@ -141,4 +141,45 @@ test('the intensity readout names the run, its status and the valid time', () =>
     assert.match(html, /Peak 95 kt \(Cat 2\) at F048/);
     assert.equal(M.ssCategory(64), 'Cat 1');
     assert.equal(M.ssCategory(30), 'TD');
+});
+
+// ─── ECMWF tracks (AIFS, AIFS ENS, ECMWF ENS) ───
+test('AIFS is an AI aid in the late-cycle AI view only', () => {
+    assert.ok(M.isAiModel('AIFS'));
+    assert.ok(M.isAiModel('AF17') && M.isAiModel('AFMN'));
+    assert.ok(!M.isAiModel('XE17'));
+    assert.ok(M.adeckTechMeta('AIFS', 'ai-late'));
+    assert.equal(M.adeckTechMeta('AIFS', 'late'), null);
+    assert.equal(M.adeckTechMeta('AIFS', 'ai-early'), null);
+});
+
+test('the ECMWF ensemble views draw their own members, control, mean and OFCL — nothing else', () => {
+    assert.equal(M.adeckTechMeta('AF07', 'aifs-ens').label, false);
+    assert.match(M.adeckTechMeta('AF00', 'aifs-ens').name, /Control/);
+    assert.match(M.adeckTechMeta('AFMN', 'aifs-ens').name, /Mean/);
+    assert.equal(M.adeckTechMeta('XE07', 'aifs-ens'), null);
+    assert.ok(M.adeckTechMeta('XE07', 'ecmwf-ens'));
+    assert.ok(M.adeckTechMeta('OFCL', 'ecmwf-ens'));
+    assert.equal(M.adeckTechMeta('AVNO', 'ecmwf-ens'), null);
+    assert.equal(M.ECMWF_TRACK_MODEL['ai-late'], 'aifs');
+    assert.equal(M.ECMWF_TRACK_MODEL.early, undefined);
+});
+
+test('ECMWF ensemble rows become one spaghetti line per member', () => {
+    const rows = [...R('AF01', '2026100700', [0, 6, 12]), ...R('AF02', '2026100700', [0, 6]), ...R('AFMN', '2026100700', [0, 6, 12]), ...R('AVNI', '2026100712', [0, 6])];
+    const { models } = M.buildAdeckFeatures(rows, 'aifs-ens');
+    assert.deepEqual(models.sort(), ['AF01', 'AF02', 'AFMN']);
+});
+
+test('member lists collapse to a range in the run summary', () => {
+    const many = Array.from({ length: 51 }, (_, i) => `AF${String(i).padStart(2, '0')}`);
+    assert.equal(M.compactTechList(['AFMN', ...many]), 'AFMN, AF00–AF50 (51 members)');
+    assert.equal(M.compactTechList(['AVNO', 'HWRF']), 'AVNO, HWRF');
+    assert.equal(M.compactTechList(['AP01', 'AP02']), 'AP01, AP02');
+});
+
+test('ECMWF tracks up to two runs behind are called ECMWF\'s latest, not stale', () => {
+    assert.match(M.adeckRunStatus(12, 'aifs-ens', 'AF03'), /ECMWF's latest/);
+    assert.match(M.adeckRunStatus(6, 'ai-late', 'AIFS'), /ECMWF's latest/);
+    assert.match(M.adeckRunStatus(18, 'ecmwf-ens', 'XEMN'), /no track in the newer runs/);
 });

@@ -48,3 +48,6 @@ jobs:
 
       - name: Unit tests
         run: node --test tests/*.test.js
+
+      - name: Python unit tests (ECMWF track decoder, stdlib only)
+        run: python -m unittest discover -s tests -p 'test_*.py'

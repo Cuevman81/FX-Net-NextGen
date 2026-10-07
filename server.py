@@ -256,6 +256,17 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
             except Exception as e:
                 self._send(500, 'text/plain', f'ERROR: {str(e)}'.encode())
 
+        elif path == '/api/ecmwf-tracks':
+            # ECMWF AIFS / AIFS-ENS / IFS-ENS cyclone tracks (BUFR -> a-deck text).
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                et = load_api('_ecmwf_tracks.py', 'ecmwf_tracks')
+                self._send(200, 'text/plain', et.fetch(qs.get('model', [''])[0], qs.get('id', [''])[0]).encode())
+            except ValueError as e:
+                self._send(400, 'text/plain', f'ERROR: {e}'.encode())
+            except Exception as e:
+                self._send(502, 'text/plain', f'ERROR: {str(e)}'.encode())
+
         elif path == '/api/wpc-mpd':
             # WPC Mesoscale Precipitation Discussions, via the Vercel converter.
             try:

@@ -32,6 +32,7 @@ if _HERE not in sys.path:
 # public route name -> sibling module
 FEEDS = {
     'adeck':           '_adeck',
+    'ecmwf-tracks':    '_ecmwf_tracks',
     'drought-monitor': '_drought_monitor',
     'gibs-times':      '_gibs_times',
     'probsevere':      '_probsevere',
@@ -46,7 +47,7 @@ _loaded = {}
 
 def _load(name):
     """Import a feed module on first use so a cold start only pays for the
-    one feed being asked for, not all eight."""
+    one feed being asked for, not all of them."""
     mod = _loaded.get(name)
     if mod is None:
         mod = importlib.import_module(FEEDS[name])

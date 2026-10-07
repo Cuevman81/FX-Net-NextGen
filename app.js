@@ -6936,8 +6936,11 @@ const ADECK_MODELS = {
     CTCI: ['COAMPS-TC (interp)', '#d4e157', 2, 'Ee'],
     CTCX: ['COAMPS-TC', '#d4e157', 2, 'Ll'],
     // ── AI / machine-learning guidance ──
-    // GraphCast ensemble mean is live in the a-decks now; the others are wired
-    // and will plot automatically once NHC begins distributing them.
+    // GDMI/GDMN (Google DeepMind) are live in NHC's public a-decks. AIFS comes
+    // straight from ECMWF open data (/api/ecmwf-tracks), not from NHC. The
+    // remaining codes are placeholders: no public deck has carried them and
+    // NHC's published tech list predates them, so they may never fill.
+    AIFS: ['AIFS (ECMWF AI, from ECMWF open data)', '#7c4dff', 2.4, 'L'],
     GDMI: ['GraphCast Ens (Google DeepMind, interp)', '#f06292', 2, 'Ee'],
     GDMN: ['GraphCast Ens (Google DeepMind)', '#f06292', 2, 'Ll'],
     GRPI: ['GraphCast det (interp)', '#ec407a', 2, 'Ee'],
@@ -6979,7 +6982,15 @@ const ADECK_MODELS = {
 // AI / machine-learning model techs — marked distinctly so forecasters can tell
 // data-driven guidance from physics models at a glance.
 const AI_MODELS = new Set(['GDMI', 'GDMN', 'GDM2', 'GRPI', 'GRPH', 'GENI', 'GENC', 'EAII', 'EAIO', 'GAII', 'GAIO', 'EGMI', 'EGMN', 'NNIC', 'NNIB']);
-const isAiModel = tech => AI_MODELS.has(tech);
+const isAiModel = tech => AI_MODELS.has(tech) || tech === 'AIFS' || /^AF(\d{2}|MN)$/.test(tech);
+
+// Views that pull tracks from ECMWF open data, and which ECMWF product each needs.
+const ECMWF_TRACK_MODEL = { 'ai-late': 'aifs', 'aifs-ens': 'aifs-ens', 'ecmwf-ens': 'ifs-ens' };
+// The two ECMWF ensembles drawn as spaghetti, like GEFS: member prefix + styling.
+const ECMWF_ENS = {
+    'aifs-ens':  { pre: 'AF', label: 'AIFS Ensemble', member: '#ce93d8', mean: '#ff4dd2' },
+    'ecmwf-ens': { pre: 'XE', label: 'ECMWF Ensemble', member: '#81c784', mean: '#d4ff6b' }
+};
 
 let adeckMode = null;    // 'early' | 'late' | 'eps' (global, like other overlays)
 // One active tropical system, shared app-wide. adeckStorm / nhcAdvSel mirror it
@@ -7007,6 +7018,17 @@ function parseAdeckText(text) {
 }
 
 function adeckTechMeta(tech, mode) {
+    if (ECMWF_ENS[mode]) {
+        const e = ECMWF_ENS[mode];
+        const m = tech.match(/^([A-Z]{2})(\d{2}|MN)$/);
+        if (m && m[1] === e.pre) {
+            if (m[2] === 'MN') return { name: `${e.label} Mean (ECMWF)`, color: e.mean, width: 2.6, opacity: 1, label: true };
+            if (m[2] === '00') return { name: `${e.label} Control (ECMWF)`, color: '#ffffff', width: 1.5, opacity: 0.85, label: true };
+            return { name: `${e.label} Member ${+m[2]} (ECMWF)`, color: e.member, width: 1, opacity: 0.5, label: false };
+        }
+        if (tech === 'OFCL') return { name: 'NHC Official Forecast', color: '#ff3b3b', width: 3, opacity: 1, label: true };
+        return null;
+    }
     if (mode === 'eps') {
         const ap = tech.match(/^AP(\d{2})$/);
         if (ap) return { name: `GEFS Member ${+ap[1]}`, color: '#4fc3f7', width: 1, opacity: 0.55, label: false };
@@ -7057,8 +7079,9 @@ function pickAdeckCycles(rows, keep, minPts) {
 // Say WHY a view came up empty. "No tracks available" is true but useless: the
 // two causes look identical on the map and mean different things — the aid
 // isn't in NHC's public deck at all, or it is but its runs carry no track.
-function adeckEmptyReason(rows, mode) {
+function adeckEmptyReason(rows, mode, ecmwfNote) {
     if (mode === 'eps') return 'No GEFS ensemble members in this deck yet';
+    if (ECMWF_ENS[mode]) return ecmwfNote || `ECMWF isn't tracking this system in its latest ${ECMWF_ENS[mode].label} runs`;
     const roster = Object.keys(ADECK_MODELS).filter(t => adeckTechMeta(t, mode));
     if (!roster.length) return 'No aids defined for this view';
     const taus = {};
@@ -7144,6 +7167,21 @@ function adeckRunLabel(dtg) {
     return `${String(d.getUTCHours()).padStart(2, '0')}Z ${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()]} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()]} ${d.getUTCDate()}`;
 }
 
+// "AF00–AF50 (51 members)" instead of 51 IDs, for any ensemble member run.
+function compactTechList(techs) {
+    const groups = {}, rest = [];
+    techs.forEach(t => {
+        const m = /^(AP|AC|AF|XE)(\d{2})$/.exec(t);
+        if (m) (groups[m[1]] = groups[m[1]] || []).push(+m[2]); else rest.push(t);
+    });
+    const parts = Object.entries(groups).map(([p, ns]) => {
+        ns.sort((a, b) => a - b);
+        const f = n => p + String(n).padStart(2, '0');
+        return ns.length > 2 ? `${f(ns[0])}–${f(ns[ns.length - 1])} (${ns.length} members)` : ns.map(f).join(', ');
+    });
+    return [...rest, ...parts].join(', ');
+}
+
 // Aids grouped by run, newest first: [{ dtg, techs: [...] }, ...]
 function adeckRunGroups(models, cycles) {
     const by = {};
@@ -7157,7 +7195,11 @@ function adeckRunStatus(lagH, mode, tech) {
     // the latest full advisory, which lands ~3 h after it (09Z for the 06Z run).
     if (tech === 'OFCL') return `<span style="color:#ff8a80;">NHC's official forecast from the latest full advisory${lagH ? ' · the next one comes with the next advisory' : ''}</span>`;
     if (!lagH) return '<span style="color:#00e676;">newest run in the deck</span>';
-    const late = mode === 'late' || mode === 'ai-late' || mode === 'eps';   // GEFS is a late-cycle run too
+    // ECMWF open data lands 6-8 h after run time, so up to two runs behind NHC's
+    // newest deck cycle is simply ECMWF's latest, not a stale track.
+    if (/^(AIFS|AF(\d{2}|MN)|XE(\d{2}|MN))$/.test(tech || '') && lagH <= 12)
+        return `<span style="color:#ffd166;">${lagH} h behind the newest run · ECMWF's latest; it posts each run 6–8 h after run time</span>`;
+    const late = mode === 'late' || mode === 'ai-late' || mode === 'eps' || !!ECMWF_ENS[mode];   // ensembles are late-cycle runs too
     if (lagH <= 6 && late) return `<span style="color:#ffd166;">${lagH} h behind the newest run · normal for a late-cycle model</span>`;
     return `<span style="color:#ff9a3c;">${lagH} h behind the newest run · this aid has no track in the newer runs yet</span>`;
 }
@@ -7395,10 +7437,26 @@ async function openIntensityChart(mode) {
 
 async function fetchAdeck(show) {
     if (!adeckStorm || !adeckMode) return;
+    // The view and storm this fetch is for. ECMWF tracks can take a few seconds;
+    // if the user switches view or storm meanwhile, drop this result rather
+    // than draw one view's tracks with another's styling.
+    const mode = adeckMode, storm = adeckStorm;
     try {
-        const res = await fetch(`/api/adeck?id=${adeckStorm}`);
+        const ecModel = ECMWF_TRACK_MODEL[adeckMode];
+        const [res, ecText] = await Promise.all([
+            fetch(`/api/adeck?id=${adeckStorm}`),
+            // ECMWF tracks are an addition: their failure must never cost the NHC aids.
+            ecModel ? fetch(`/api/ecmwf-tracks?model=${ecModel}&id=${adeckStorm}`)
+                .then(r => (r.ok ? r.text() : `# ecmwf error HTTP ${r.status}`)).catch(e => `# ecmwf error ${e.message}`) : Promise.resolve('')
+        ]);
         if (!res.ok) throw new Error(`a-deck HTTP ${res.status}`);
-        const rows = parseAdeckText(await res.text());
+        const ecRows = parseAdeckText(ecText);
+        const rows = parseAdeckText(await res.text()).concat(ecRows);
+        const ecmwfNote = !ecModel ? '' : /# ecmwf error/.test(ecText)
+            ? 'ECMWF open data did not answer — try again shortly'
+            : !ecRows.length ? `ECMWF isn't tracking this system in its latest runs` : '';
+        if (adeckMode !== mode || adeckStorm !== storm) return;
+        const ecmwfUsed = ecRows.length ? (adeckMode === 'ai-late' ? 'AIFS' : ECMWF_ENS[adeckMode].label) : '';
         const { features, models, cycles } = buildAdeckFeatures(rows, adeckMode);
         const data = { type: 'FeatureCollection', features };
         Object.values(maps).forEach(m => {
@@ -7413,22 +7471,23 @@ async function fetchAdeck(show) {
         if (info) {
             if (newestDtg) {
                 const groups = adeckRunGroups(models, cycles);
-                const late = adeckMode === 'late' || adeckMode === 'ai-late' || adeckMode === 'eps';
+                const late = adeckMode === 'late' || adeckMode === 'ai-late' || adeckMode === 'eps' || !!ECMWF_ENS[adeckMode];
                 info.innerHTML = `Newest run on map: <b style="color:#00e5ff;">${adeckRunLabel(newestDtg)}</b> (${adeckAgeStr(adeckDtgMs(newestDtg))}) · ${models.length} aids` +
-                    groups.map((g, i) => `<div style="margin-top:2px;"><b style="color:${i === 0 ? '#00e5ff' : '#ffb347'};">${g.dtg.slice(8, 10)}Z ${g.dtg.slice(6, 8)}</b>: ${esc(g.techs.join(', '))}</div>`).join('') +
+                    groups.map((g, i) => `<div style="margin-top:2px;"><b style="color:${i === 0 ? '#00e5ff' : '#ffb347'};">${g.dtg.slice(8, 10)}Z ${g.dtg.slice(6, 8)}</b>: ${esc(compactTechList(g.techs))}</div>`).join('') +
+                    (ecmwfUsed ? `<div style="margin-top:2px;color:#6c7680;">${ecmwfUsed} tracks: © ECMWF, CC BY 4.0, from ECMWF open data.</div>` : '') +
                     (late ? `<div style="margin-top:2px;color:#6c7680;">Late-cycle aids are the full model runs; they arrive 4–6 h after run time, so they normally trail the early-cycle aids by one run.</div>` : '') +
                     `<div style="margin-top:2px;color:#6c7680;">Each track's label names its run. Click a track for details.</div>`;
                 info.title = '';
             } else {
-                info.textContent = adeckMode ? `No tracks for this view — ${adeckEmptyReason(rows, adeckMode)}` : '';
+                info.textContent = adeckMode ? `No tracks for this view — ${adeckEmptyReason(rows, adeckMode, ecmwfNote)}` : '';
                 info.title = '';
             }
         }
         if (show) {
-            const modeLabel = { early: 'early-cycle', late: 'late-cycle', eps: 'GEFS ensemble', 'ai-early': 'early-cycle AI', 'ai-late': 'late-cycle AI' }[adeckMode];
+            const modeLabel = { early: 'early-cycle', late: 'late-cycle', eps: 'GEFS ensemble', 'ai-early': 'early-cycle AI', 'ai-late': 'late-cycle AI', 'aifs-ens': 'AIFS ensemble', 'ecmwf-ens': 'ECMWF ensemble' }[adeckMode];
             addLiveLog(models.length
-                ? `GUIDANCE: ${adeckStorm.toUpperCase().slice(0, 4)} ${modeLabel} — ${models.length} tracks, newest run ${newestDtg.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newestDtg))})${laggards ? `, ${laggards} aid(s) still on older runs` : ''} — ${models.join(', ')}`
-                : `GUIDANCE: no ${modeLabel} tracks for ${adeckStorm.toUpperCase().slice(0, 4)} — ${adeckEmptyReason(rows, adeckMode)}`,
+                ? `GUIDANCE: ${adeckStorm.toUpperCase().slice(0, 4)} ${modeLabel} — ${models.length} tracks, newest run ${newestDtg.slice(8, 10)}Z (${adeckAgeStr(adeckDtgMs(newestDtg))})${laggards ? `, ${laggards} aid(s) still on older runs` : ''} — ${compactTechList(models)}${ecmwfNote && adeckMode === 'ai-late' ? ` (AIFS: ${ecmwfNote})` : ''}`
+                : `GUIDANCE: no ${modeLabel} tracks for ${adeckStorm.toUpperCase().slice(0, 4)} — ${adeckEmptyReason(rows, adeckMode, ecmwfNote)}`,
                 models.length ? '#00e5ff' : '#ffb300');
         }
     } catch (e) {
@@ -16193,6 +16252,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 7, 2026 (update 4)', items: [
+        '<b>ECMWF\'s AI model, its AI ensemble, and its full ensemble.</b> NHC\'s public model files carry only one AI track model, Google DeepMind. ECMWF publishes its own cyclone tracks free, so FX-Net now pulls three products straight from ECMWF. All three carry the same run labels and click popups as the other models.',
+        '<b>AIFS</b>, ECMWF\'s AI model, now plots in <b>Late Cycle AI Models</b> beside Google DeepMind. <b>AIFS Ensemble (ECMWF AI, 51)</b> is new under AI / ML Models: all 51 members of ECMWF\'s AI ensemble, its control (white) and mean (bold pink), with NHC\'s official track for reference. <b>ECMWF Ensemble Members (51)</b> is new under Model Guidance: the same for ECMWF\'s physics ensemble, the European counterpart to the GEFS spaghetti.',
+        '<b>Timing.</b> ECMWF posts each run 6–8 hours after its run time, so these usually sit a run or two behind NHC\'s newest guidance; the popups say so. AIFS and the AI ensemble run four times a day out to 15 days. The physics ensemble runs out to 15 days at 00Z/12Z and 6 days at 06Z/18Z. As with any global model, their wind speeds run low for a strong storm, so read them for track. Tracks © ECMWF, CC BY 4.0, credited under the storm selector whenever one is on the map.',
+        '<b>Also fixed:</b> switching guidance views quickly could briefly draw one view\'s tracks in another\'s colors. Each view now ignores results that arrive after you have moved on. Ensemble member lists in the run summary now read <b>AF00–AF50 (51 members)</b> instead of 51 IDs, and so does GEFS.'
+    ]},
     { date: 'Oct 7, 2026 (update 3)', items: [
         '<b>The intensity charts say which run each line is, too.</b> Hover over (or click) any line, point or key entry on the Early or Late Cycle Intensity chart. That model is highlighted and the others dim, with a readout of its run (<b>06Z Wed Oct 7</b>), whether that is the newest run or normal for a late-cycle model, the forecast hour and its valid time in Z and your local time, the wind there with its category, and the model\'s peak.',
         'Worth knowing when you compare lines: the chart\'s x-axis is hours from <i>each model\'s own</i> run, so on a late-cycle chart F48 from a 06Z run and F48 from a 12Z run are six hours apart in real time. The valid time in the readout is the one to compare.'
@@ -16809,7 +16874,8 @@ const USER_GUIDE = [
             <li><b>Early Cycle Track Guidance</b> — the interpolated aids available at advisory time: GFS (AVNI), ECMWF (EMXI), UKMET, Canadian, HAFS-A/B, COAMPS-TC, Google DeepMind, ensemble means, beta-advection trackers, and the TVCN / HCCA consensus (wide cyan / green). The NHC Official forecast plots in white when the system is a numbered cyclone.</li>
             <li><b>Late Cycle Track Guidance</b> — the raw synoptic-time runs of the same models, each plotted from its most recent available cycle.</li>
             <li><b>GEFS Ensemble Members (EPS)</b> — all 30 GEFS perturbation members (thin blue) plus the control (white) and ensemble mean (yellow), showing the true spread in the guidance.</li>
-            <li><b>AI / ML Models (✦)</b> — data-driven guidance has its own <b>Early Cycle AI Models</b> and <b>Late Cycle AI Models</b> track views (the regular Early/Late Track Guidance are physics-only). GraphCast (Google DeepMind) plots now; GraphCast-deterministic, Google GenCast, ECMWF AIFS, AI-GFS, and AI-GEFS are wired and draw automatically once NHC distributes them. In the intensity charts, the AI aids (NNIC neural-net intensity consensus, NNIB baseline, GraphCast) show alongside the physics models flagged with ✦ so you can compare directly. The ✦ also appears on track end-labels and in the click popup.</li>
+            <li><b>ECMWF Ensemble Members (51)</b> — ECMWF’s physics ensemble (IFS ENS): 50 members (thin green), the control (white) and the mean (bold yellow-green), straight from ECMWF open data. Out to 15 days at 00Z/12Z and 6 days at 06Z/18Z. ECMWF posts each run 6–8 h after run time, so ECMWF tracks usually sit a run or two behind NHC’s newest aids; popups label that as ECMWF’s latest. Their winds, like any global model’s, run low for a strong storm. Tracks © ECMWF, CC BY 4.0.</li>
+            <li><b>AI / ML Models (✦)</b> — data-driven guidance has its own <b>Early Cycle AI Models</b> and <b>Late Cycle AI Models</b> track views (the regular Early/Late Track Guidance are physics-only). GraphCast (Google DeepMind) plots now; GraphCast-deterministic, Google GenCast, ECMWF AIFS, AI-GFS, and AI-GEFS are wired and draw automatically once NHC distributes them. In the intensity charts, the AI aids (NNIC neural-net intensity consensus, NNIB baseline, GraphCast) show alongside the physics models flagged with ✦ so you can compare directly. The ✦ also appears on track end-labels and in the click popup. <b>AIFS</b>, ECMWF’s AI model, plots in the Late Cycle AI view, taken straight from ECMWF open data rather than NHC. <b>AIFS Ensemble (ECMWF AI, 51)</b> draws all 51 members of ECMWF’s AI ensemble with its control (white) and mean (bold pink).</li>
             <li><b>Early / Late Cycle Intensity Guidance</b> — a chart of forecast max wind (kt) vs forecast hour from the same a-deck: SHIPS / Decay-SHIPS, LGEM, the IVCN intensity consensus, HCCA, the hurricane-model aids (HAFS-A/B, HWRF, HMON, COAMPS-TC), GFS, Google DeepMind, and the NHC Official forecast. Dashed lines mark the TS / Cat 1–5 thresholds and the legend is sorted by end-of-run intensity. The late-cycle version shows only the raw synoptic-time dynamical runs (experimental). Esc or × closes it. Note: unlike the UCAR plots (one frozen image per init time), each aid here always shows its own newest run — the note below the chart tells you the newest cycle and how many aids are still on older ones. <b>Hover or click</b> any line, point or key entry: that model is highlighted, with its run, whether it is the newest, the forecast hour and its valid time, and the wind and category there. The x-axis is hours from each model’s own run, so compare lines by the valid time in that readout.</li>
             <li><b>Storm Trends (Obs History)</b> — the storm’s <i>observed</i> life so far, from NHC’s live best track: wind (cyan) and central pressure (yellow) on a time axis with classification changes (DB → LO → TD → TS…) marked. Hurricane Hunter vortex fixes overlay in magenta (◆ measured min pressure, ✕ max flight-level wind). The header shows current intensity plus 6/12/24-h pressure/wind tendencies — DEEPENING / FILLING, STRENGTHENING / WEAKENING (red = intensifying). Works for invests too, and follows the storm selector.</li>
             <li><b>Environment / RI (SHIPS)</b> — the environmental drivers behind the intensity forecast, from NHC’s SHIPS diagnostics. A color-coded table of vertical shear, SST, mid-level humidity, ocean heat content, maximum potential intensity, and the SHIPS forecast wind across F0–F72 (green favors intensification, red is hostile), a plain-language FAVORABLE / MARGINAL / HOSTILE banner with the reasons, and the Rapid Intensification Outlook — consensus RI probabilities at each threshold with the 24-h odds highlighted and compared to climatology. This is the “is the environment conducive?” read; use it alongside the intensity guidance. A CIRA block below adds a second independent RI consensus, the Convective <b>Decapitation</b> probability (odds the convection gets sheared off the center → rapid weakening — the counterpart to RI), and current structure predictors (cold-cloud fraction, IR core symmetry).</li>
