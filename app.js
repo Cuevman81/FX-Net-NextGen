@@ -333,6 +333,11 @@ const HEALTH_THRESHOLDS = {
     // ~40 min after synoptic time, so 8 h means the feed itself has stalled.
     nhcStorms:  { label: 'NHC Storms',    thresholdMs: 8 * 60 * 60 * 1000 },
     nhcOutlook: { label: 'NHC Outlook',   thresholdMs: 6 * 60 * 60 * 1000 },
+    // The impact products regenerate with each full advisory (6-hourly).
+    nhcWindProb:  { label: 'NHC Wind Chance',  thresholdMs: 8 * 60 * 60 * 1000 },
+    nhcArrival:   { label: 'NHC Wind Arrival', thresholdMs: 8 * 60 * 60 * 1000 },
+    nhcWindField: { label: 'NHC Wind Field',   thresholdMs: 8 * 60 * 60 * 1000 },
+    nhcSurge:     { label: 'NHC Storm Surge',  thresholdMs: 8 * 60 * 60 * 1000 },
     spcOutlook: { label: 'SPC Outlooks',   thresholdMs: 60 * 60 * 1000 },
     spcFireWx:  { label: 'SPC Fire Wx',    thresholdMs: 12 * 60 * 60 * 1000 },
     spcMd:      { label: 'SPC MDs',       thresholdMs: 30 * 60 * 1000 },
@@ -375,7 +380,7 @@ const HEALTH_GROUPS = [
     { name: 'SPC PRODUCTS',      ids: ['spcOutlook', 'spcMd', 'spcLsr', 'probSevere'] },
     { name: 'AVIATION',          ids: ['airSigmet', 'gairmet', 'pireps', 'taf', 'cwa'] },
     { name: 'WPC PRODUCTS',      ids: ['wpcQpf', 'wpcEro', 'wpcMpd'] },
-    { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook', 'reconHdob', 'adeck'] },
+    { name: 'TROPICAL',          ids: ['nhcStorms', 'nhcOutlook', 'nhcWindProb', 'nhcArrival', 'nhcWindField', 'nhcSurge', 'reconHdob', 'adeck'] },
     { name: 'CLIMATE & OUTLOOKS',ids: ['cpcTemp', 'cpcPrecip', 'drought'] },
     { name: 'FIRE & AIR',        ids: ['firms', 'hms', 'spcFireWx', 'aqi'] },
     { name: 'HYDRO & SOLAR',     ids: ['riverGauges', 'solar'] }
@@ -1171,6 +1176,7 @@ function initMap(paneId) {
         createEroLegend(paneId);
         createProbLegend(paneId);
         createFireWxLegend(paneId);
+        createTropLegend(paneId);
         applyPaneRestore(paneId);   // re-apply any persisted product setup for this pane
         addLiveLog(`PANE ${paneId}: Map ready`, '#00ff88');
         setTimeout(() => map.resize(), 100);
@@ -2944,6 +2950,96 @@ function initFrontalPipIcons(map) {
         paint: { 'raster-opacity': 0.7 }
     });
 
+    // ─── Layer 7e2: NHC storm impacts — surge, wind chance, wind field, arrival ───
+    // Added beneath the cone/track so those stay readable on top. Surge layers
+    // are rasters drawn by NOAA's MapServer in NHC's own colors; the wind
+    // products are vectors styled here (see the NHC STORM IMPACTS section).
+    map.addSource('surge-risk', { type: 'raster', tiles: [surgeRiskTiles(3)], tileSize: 512 });
+    map.addLayer({ id: 'surge-risk-layer', type: 'raster', source: 'surge-risk',
+        layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.75 } });
+    map.addSource('nhc-surge-inun', { type: 'raster', tiles: [NHC_INUN_TILES], tileSize: 512 });
+    map.addLayer({ id: 'nhc-surge-inun-layer', type: 'raster', source: 'nhc-surge-inun',
+        layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.8 } });
+    map.addSource('nhc-peak-surge', { type: 'raster', tiles: [NHC_PEAK_SURGE_TILES], tileSize: 512 });
+    map.addLayer({ id: 'nhc-peak-surge-layer', type: 'raster', source: 'nhc-peak-surge',
+        layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.95 } });
+    map.addSource('nhc-peak-surge-pts', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'nhc-peak-surge-labels', type: 'symbol', source: 'nhc-peak-surge-pts',
+        layout: {
+            visibility: 'none', 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Bold'],
+            'text-size': 11, 'text-allow-overlap': false
+        },
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#000', 'text-halo-width': 1.6 }
+    });
+
+    map.addSource('nhc-wsp', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'nhc-wsp-fill', type: 'fill', source: 'nhc-wsp',
+        layout: { visibility: 'none' },
+        paint: { 'fill-color': nhcWspColorExpr(), 'fill-opacity': 0.5, 'fill-antialias': false }
+    });
+    map.addLayer({
+        id: 'nhc-wsp-line', type: 'line', source: 'nhc-wsp',
+        layout: { visibility: 'none' },
+        paint: { 'line-color': nhcWspColorExpr(), 'line-width': 0.8, 'line-opacity': 0.9 }
+    });
+
+    // One source for the wind field: kind 'now' (advisory radii), 'fcst'
+    // (radii at each forecast time) and 'swath' (cumulative past extent).
+    map.addSource('nhc-wind', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+        id: 'nhc-swath-fill', type: 'fill', source: 'nhc-wind',
+        filter: ['==', ['get', 'kind'], 'swath'],
+        layout: { visibility: 'none', 'fill-sort-key': ['get', 'radii'] },
+        paint: { 'fill-color': NHC_RADII_COLOR, 'fill-opacity': 0.28 }
+    });
+    map.addLayer({
+        id: 'nhc-swath-line', type: 'line', source: 'nhc-wind',
+        filter: ['==', ['get', 'kind'], 'swath'],
+        layout: { visibility: 'none' },
+        paint: { 'line-color': NHC_RADII_COLOR, 'line-width': 1, 'line-opacity': 0.7 }
+    });
+    map.addLayer({
+        id: 'nhc-windfield-fcst', type: 'line', source: 'nhc-wind',
+        filter: ['==', ['get', 'kind'], 'fcst'],
+        layout: { visibility: 'none' },
+        paint: { 'line-color': NHC_RADII_COLOR, 'line-width': 0.9, 'line-opacity': 0.45, 'line-dasharray': [3, 2] }
+    });
+    map.addLayer({
+        id: 'nhc-windfield-fill', type: 'fill', source: 'nhc-wind',
+        filter: ['==', ['get', 'kind'], 'now'],
+        layout: { visibility: 'none', 'fill-sort-key': ['get', 'radii'] },
+        paint: { 'fill-color': NHC_RADII_COLOR, 'fill-opacity': 0.32 }
+    });
+    map.addLayer({
+        id: 'nhc-windfield-line', type: 'line', source: 'nhc-wind',
+        filter: ['==', ['get', 'kind'], 'now'],
+        layout: { visibility: 'none' },
+        paint: { 'line-color': NHC_RADII_COLOR, 'line-width': 1.8 }
+    });
+
+    // Arrival of tropical-storm-force winds: isochrones labeled with their time.
+    map.addSource('nhc-toa', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    [['likely', '#ffd166', [1, 0]], ['earliest', '#ff5c5c', [4, 2]]].forEach(([kind, color, dash]) => {
+        map.addLayer({
+            id: `nhc-toa-${kind}-line`, type: 'line', source: 'nhc-toa',
+            filter: ['==', ['get', 'kind'], kind],
+            layout: { visibility: 'none', 'line-join': 'round' },
+            paint: { 'line-color': color, 'line-width': 1.8, 'line-dasharray': dash }
+        });
+        map.addLayer({
+            id: `nhc-toa-${kind}-label`, type: 'symbol', source: 'nhc-toa',
+            filter: ['==', ['get', 'kind'], kind],
+            layout: {
+                visibility: 'none', 'symbol-placement': 'line', 'symbol-spacing': 260,
+                'text-field': ['get', 'label'], 'text-font': ['Noto Sans Bold'], 'text-size': 10,
+                'text-keep-upright': true
+            },
+            paint: { 'text-color': color, 'text-halo-color': '#000', 'text-halo-width': 1.6 }
+        });
+    });
+
     // ─── Layer 7f: NHC Active Storms (GeoJSON) ───
     map.addSource('nhc-storms', {
         type: 'geojson',
@@ -2960,6 +3056,32 @@ function initFrontalPipIcons(map) {
         filter: ['==', ['get', 'layerType'], 'cone'],
         layout: { visibility: 'none' },
         paint: { 'line-color': ['case', ['==', ['get', 'isPTC'], 1], '#b388ff', '#ff6600'], 'line-width': 1.5 }
+    });
+    // Observed past track, as on NHC's cone graphic: dotted while the system was
+    // a disturbance or low, solid once it was a tropical cyclone.
+    map.addLayer({
+        id: 'nhc-past-line', type: 'line', source: 'nhc-storms',
+        filter: ['all', ['==', ['get', 'layerType'], 'pasttrack'], ['!', ['in', ['get', 'stormtype'], ['literal', ['DB', 'LO', 'WV', 'DS']]]]],
+        layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#e8e8e8', 'line-width': 2 }
+    });
+    map.addLayer({
+        id: 'nhc-past-line-weak', type: 'line', source: 'nhc-storms',
+        filter: ['all', ['==', ['get', 'layerType'], 'pasttrack'], ['in', ['get', 'stormtype'], ['literal', ['DB', 'LO', 'WV', 'DS']]]],
+        layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#e8e8e8', 'line-width': 1.6, 'line-dasharray': [0.6, 2] }
+    });
+    map.addLayer({
+        id: 'nhc-past-pts', type: 'circle', source: 'nhc-storms',
+        filter: ['==', ['get', 'layerType'], 'pastpoint'],
+        layout: { visibility: 'none' },
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 2, 8, 4.5],
+            'circle-color': ['step', ['coalesce', ['get', 'intensity'], 0],
+                '#00e5ff', 34, '#ffff00', 64, '#ff6600', 96, '#ff0000', 130, '#ff00ff'],
+            'circle-stroke-width': 0.8,
+            'circle-stroke-color': '#000'
+        }
     });
     map.addLayer({
         id: 'nhc-track-line', type: 'line', source: 'nhc-storms',
@@ -3168,6 +3290,7 @@ function initFrontalPipIcons(map) {
     });
     map.addLayer({
         id: 'nhc-outlook-outline', type: 'line', source: 'nhc-outlook',
+        filter: ['==', ['geometry-type'], 'Polygon'],
         layout: { visibility: 'none' },
         paint: {
             'line-color': ['match', ['get', 'risk7day'],
@@ -3179,6 +3302,25 @@ function initFrontalPipIcons(map) {
             'line-width': 2,
             'line-dasharray': [4, 2]
         }
+    });
+    // NHC's graphic marks a disturbance that already exists with an X (colored
+    // by its 2-day chance) and, when NHC gives one, an arrow toward where it is
+    // expected to develop. Areas with no X are where formation is expected later.
+    map.addLayer({
+        id: 'nhc-outlook-motion', type: 'line', source: 'nhc-outlook',
+        filter: ['==', ['get', 'layerType'], 'motion'],
+        layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': ['coalesce', ['get', 'color'], '#ffcc00'], 'line-width': 2.5 }
+    });
+    map.addLayer({
+        id: 'nhc-outlook-x', type: 'symbol', source: 'nhc-outlook',
+        filter: ['==', ['get', 'layerType'], 'xpoint'],
+        layout: {
+            visibility: 'none', 'text-field': 'X', 'text-font': ['Noto Sans Bold'],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 3, 18, 8, 26],
+            'text-allow-overlap': true, 'text-ignore-placement': true
+        },
+        paint: { 'text-color': ['coalesce', ['get', 'color'], '#ffff00'], 'text-halo-color': '#000', 'text-halo-width': 2 }
     });
 
     // ─── Layer 7h: CPC Temperature Outlook (WMS Raster) ───
@@ -3797,6 +3939,47 @@ function initFrontalPipIcons(map) {
     map.on('mouseenter', 'nhc-outlook-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'nhc-outlook-fill', () => { map.getCanvas().style.cursor = ''; });
 
+    // Wind chance click: all three thresholds at the clicked spot, queried live
+    // so the numbers are exact rather than read off generalized shapes.
+    map.on('click', 'nhc-wsp-fill', async e => {
+        const { lng, lat } = e.lngLat;
+        const where = `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'} ${Math.abs(lng).toFixed(2)}°${lng >= 0 ? 'E' : 'W'}`;
+        const box = body => `<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:10px;border-radius:4px;max-width:300px;">
+            <div style="font-weight:bold;color:#ffb347;font-size:13px;margin-bottom:2px;">Chance of damaging winds</div>
+            <div style="color:#8b97a3;font-size:9px;margin-bottom:7px;">${where} · next 5 days (NHC)</div>${body}</div>`;
+        popup.setLngLat(e.lngLat).setHTML(box('<div style="color:#8b97a3;">Loading…</div>')).addTo(map);
+        try {
+            const p = await nhcWindChanceAt(lng, lat);
+            const syn = Object.values(nhcWspCache).map(c => c.synMs).find(Boolean);
+            const line = (thr, label) => `<div style="display:flex;justify-content:space-between;gap:12px;margin:2px 0;">
+                <span style="color:#cfd6de;">${label}</span><b style="color:${(NHC_WSP_BANDS.find(b => b[0] === p[thr]) || [, '#9aa4ae'])[1]};">${esc(p[thr])}</b></div>`;
+            popup.setHTML(box(
+                line('34', 'Tropical-storm force (39+ mph)') + line('50', '50 kt (58+ mph)') + line('64', 'Hurricane force (74+ mph)') +
+                `<div style="color:#8b97a3;font-size:9px;margin-top:6px;line-height:1.4;">Chance of sustained winds this strong at any time in the next 5 days${syn ? `, from the ${nhcSynLabel(syn)} cycle` : ''}. Gusts can be stronger.</div>`));
+        } catch (err) {
+            popup.setHTML(box(`<div style="color:#ff6666;">Could not reach NOAA's wind probability service (${esc(err.message)}).</div>`));
+        }
+    });
+    map.on('mouseenter', 'nhc-wsp-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'nhc-wsp-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // Past-track point: what the storm was at that time.
+    map.on('click', 'nhc-past-pts', e => {
+        const f = e.features && e.features[0];
+        if (!f) return;
+        const p = f.properties;
+        const dtg = String(Math.round(+p.dtg || 0));
+        const when = dtg.length === 10 ? `${dtg.slice(8, 10)}Z ${new Date(Date.UTC(+dtg.slice(0, 4), +dtg.slice(4, 6) - 1, +dtg.slice(6, 8))).toLocaleString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}` : '';
+        const TYPES = { DB: 'Disturbance', LO: 'Low', WV: 'Tropical wave', TD: 'Tropical Depression', TS: 'Tropical Storm', HU: 'Hurricane', MH: 'Major Hurricane', SD: 'Subtropical Depression', SS: 'Subtropical Storm', EX: 'Post-Tropical', PT: 'Post-Tropical' };
+        const kt = Math.round(+p.intensity || 0);
+        popup.setLngLat(e.lngLat).setHTML(`<div style="font-family:Inter,sans-serif;font-size:11px;color:#e0e0e0;background:#0d1117;padding:9px;border-radius:4px;">
+            <div style="font-weight:bold;color:#e8e8e8;margin-bottom:3px;">Past position · ${esc(when)}</div>
+            <div>${esc(TYPES[p.stormtype] || p.stormtype || '')} · <b>${kt} kt</b> (${Math.round(kt * 1.15078)} mph)${+p.mslp ? ` · ${Math.round(+p.mslp)} mb` : ''}</div>
+            <div style="color:#8b97a3;font-size:9px;margin-top:3px;">NHC best track</div></div>`).addTo(map);
+    });
+    map.on('mouseenter', 'nhc-past-pts', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'nhc-past-pts', () => { map.getCanvas().style.cursor = ''; });
+
     // Drought Monitor click
     map.on('click', 'drought-fill', e => {
         if (!e.features || !e.features[0]) return;
@@ -3837,7 +4020,7 @@ function initFrontalPipIcons(map) {
         [1, 2, 3].forEach(d => otlkLayers.push(`spc-day${d}-fill`));
         [1, 2].forEach(d => ['torn', 'wind', 'hail'].forEach(hz => otlkLayers.push(`spc-prob-${d}-${hz}-fill`)));
         [1, 2, 3, 4, 5, 6, 7, 8].forEach(d => otlkLayers.push(`spc-firewx-day${d}-fill`));
-        const queryLayers = ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nexrad-sites-layer', 'river-gauges-layer', 'wpc-ero-day1-fill', 'wpc-ero-day2-fill', 'wpc-ero-day3-fill', ...otlkLayers].filter(l => map.getLayer(l));
+        const queryLayers = ['metars-temp', 'firms-fires-layer', 'spc-md-fill', 'wpc-mpd-fill', 'spc-lsr-icons', 'airnow-aqi-layer', 'drought-fill', 'nhc-track-pts', 'nhc-outlook-fill', 'nhc-wsp-fill', 'nhc-past-pts', 'nexrad-sites-layer', 'river-gauges-layer', 'wpc-ero-day1-fill', 'wpc-ero-day2-fill', 'wpc-ero-day3-fill', ...otlkLayers].filter(l => map.getLayer(l));
         const otherFeats = map.queryRenderedFeatures(e.point, { layers: queryLayers });
         if (otherFeats.length > 0) return;
 
@@ -5501,6 +5684,339 @@ async function fetchWPCFronts(show) {
 
 const NHC_BASE = 'https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather_summary/MapServer';
 
+// ─── NHC STORM IMPACTS: surge, wind chance, wind field, arrival times ───
+// Everything here comes from NOAA's tropical MapServer (the same one behind the
+// cone) or its two sibling services — CORS-open, so no proxy and no function.
+// Surge products are image rasters, drawn server-side in NHC's own colors; the
+// wind products are vectors styled to NHC's legends.
+const NHC_TROP_SVC = 'https://mapservices.weather.noaa.gov/tropical/rest/services/tropical';
+const arcExportTiles = (svc, layers) =>
+    `${NHC_TROP_SVC}/${svc}/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=102100&imageSR=102100&size=512,512&layers=show:${layers}&format=png32&transparent=true&f=image`;
+// Potential Storm Surge Flooding: inundation depth (24) + tidal mask (28).
+const NHC_INUN_TILES = arcExportTiles('NHC_tropical_weather_summary', '24,28');
+// Peak Storm Surge: the coastal range lines (1) and polygons (2).
+const NHC_PEAK_SURGE_TILES = arcExportTiles('NHC_PeakStormSurge', '1,2');
+// Storm Surge Risk (SLOSH maximum-of-maximums) image layer per category: the US
+// East/Gulf mosaic, then Puerto Rico/USVI.
+const SURGE_RISK_LAYERS = { 1: '5,26', 2: '9,30', 3: '13,34', 4: '17,38', 5: '21,42' };
+const surgeRiskTiles = cat => arcExportTiles('StormSurgeRisk', SURGE_RISK_LAYERS[cat] || SURGE_RISK_LAYERS[3]);
+
+// Legend colors, read from each service's own legend so the key matches the map.
+const SURGE_DEPTH_KEY = {
+    risk: [['#0070ff', 'Up to 3 ft'], ['#ffff73', 'Over 3 ft'], ['#ffaa00', 'Over 6 ft'], ['#e60000', 'Over 9 ft'], ['#9c9c9c', 'Leveed area']],
+    inun: [['#0070ff', 'Over 1 ft'], ['#ffff00', 'Over 3 ft'], ['#ffaa00', 'Over 6 ft'], ['#ff0000', 'Over 9 ft'], ['#9c9c9c', 'Leveed / intertidal']],
+    peak: [['#005ce6', 'Up to 3 ft'], ['#ffff00', 'Up to 6 ft'], ['#ffaa00', 'Up to 9 ft'], ['#ff0000', 'Up to 12 ft'], ['#c500ff', 'Over 12 ft']]
+};
+
+const NHC_WSP_LAYER = { '34': 30, '50': 31, '64': 32 };
+const NHC_WSP_NAME = { '34': 'tropical-storm-force (34 kt)', '50': '50-kt', '64': 'hurricane-force (64 kt)' };
+const NHC_WSP_BANDS = [
+    ['5-10%', '#267300'], ['10-20%', '#38a800'], ['20-30%', '#55ff00'], ['30-40%', '#e6e600'], ['40-50%', '#ffd37f'],
+    ['50-60%', '#e69800'], ['60-70%', '#ffaa00'], ['70-80%', '#e60000'], ['80-90%', '#a83800'], ['>90%', '#a900e6']
+];
+function nhcWspColorExpr() {
+    return ['match', ['get', 'percentage'], ...NHC_WSP_BANDS.flat(), 'rgba(0,0,0,0)'];
+}
+const NHC_RADII_COLOR = ['match', ['to-number', ['get', 'radii'], 34], 64, '#ff2b2b', 50, '#ff9a1f', '#ffe14d'];
+const NHC_TWO_RISK_COLOR = { Low: '#ffff00', Medium: '#ff9900', High: '#ff0000' };
+
+let paneWsp = {};          // paneId -> '34' | '50' | '64'
+let paneSurgeRisk = {};    // paneId -> '1'..'5'
+const nhcWspCache = {};    // threshold -> { data, at, synMs, ingestMs }
+const nhcSurgeStamp = { inun: null, peak: null };   // last product drawn, per surge kind
+
+// NOAA names these files after the synoptic time they were made from
+// ("2026100618_wsp34knt120hr_5km"); that is the time worth showing.
+function nhcSynopticMs(src) {
+    const m = /(\d{4})(\d{2})(\d{2})(\d{2})/.exec(String(src || ''));
+    return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4]) : 0;
+}
+function nhcSynLabel(ms) {
+    if (!ms) return '';
+    const d = new Date(ms);
+    return `${String(d.getUTCHours()).padStart(2, '0')}Z ${d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })} ${d.getUTCDate()}`;
+}
+
+// NHC's development arrow: the line plus a two-stroke head at its end, sized
+// to the last segment and drawn in a latitude-corrected frame so it stays square.
+function nhcArrowFeatures(geom) {
+    const lines = !geom ? [] : geom.type === 'MultiLineString' ? geom.coordinates
+        : geom.type === 'LineString' ? [geom.coordinates] : [];
+    const out = [];
+    lines.forEach(c => {
+        if (!c || c.length < 2) return;
+        out.push({ type: 'LineString', coordinates: c });
+        const [x1, y1] = c[c.length - 2], [x2, y2] = c[c.length - 1];
+        const k = Math.cos(y2 * Math.PI / 180) || 1;
+        const dx = (x2 - x1) * k, dy = y2 - y1, len = Math.hypot(dx, dy);
+        if (!len) return;
+        const ux = dx / len, uy = dy / len, L = Math.min(0.8, len * 0.35);
+        [150, -150].forEach(deg => {
+            const a = deg * Math.PI / 180;
+            const rx = ux * Math.cos(a) - uy * Math.sin(a), ry = ux * Math.sin(a) + uy * Math.cos(a);
+            out.push({ type: 'LineString', coordinates: [[x2 + rx * L / k, y2 + ry * L], [x2, y2]] });
+        });
+    });
+    return out;
+}
+
+async function nhcLayerGeojson(base, id, extra = '') {
+    const res = await fetch(cacheBust(`${base}/${id}/query?where=1%3D1&outFields=*${extra}&f=geojson`));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    if (d.error) throw new Error(d.error.message || 'map service error');
+    return (d.features || []).filter(f => f.geometry);
+}
+const nhcIngestMs = feats => feats.reduce((mx, f) => Math.max(mx, +(f.properties.idp_ingestdate || 0) || 0), 0);
+
+// Observed past track for the Active Storms layer (NHC's cone graphic shows it).
+async function fetchNhcPastTrack() {
+    const [lines, pts] = await Promise.all([nhcLayerGeojson(NHC_BASE, 11), nhcLayerGeojson(NHC_BASE, 10)]);
+    lines.forEach(f => { f.properties.layerType = 'pasttrack'; });
+    pts.forEach(f => {
+        f.properties.layerType = 'pastpoint';
+        f.properties.intensity = +f.properties.intensity || 0;
+    });
+    return [...lines, ...pts];
+}
+
+// ─── Wind speed probabilities (cumulative, 120 h) ───
+// The full-detail polygons are 1-2 MB per threshold. Generalized to ~3 km —
+// finer than the 5 km grid they are contoured from — they are ~100 KB.
+const nhcWspInflight = {};  // threshold -> pending fetch, so two panes share one download
+function fetchNhcWsp(thr) {
+    const c = nhcWspCache[thr];
+    if (c && Date.now() - c.at < 4 * 60 * 1000) return Promise.resolve(c);
+    if (!nhcWspInflight[thr]) nhcWspInflight[thr] = loadNhcWsp(thr).finally(() => { delete nhcWspInflight[thr]; });
+    return nhcWspInflight[thr];
+}
+async function loadNhcWsp(thr) {
+    const feats = await nhcLayerGeojson(NHC_BASE, NHC_WSP_LAYER[thr], '&maxAllowableOffset=0.03&geometryPrecision=2');
+    const p0 = feats[0] ? feats[0].properties : {};
+    const out = {
+        // NHC leaves the <5% band unshaded on its own graphic.
+        data: { type: 'FeatureCollection', features: feats.filter(f => f.properties.percentage && f.properties.percentage !== '<5%') },
+        at: Date.now(), synMs: nhcSynopticMs(p0.idp_source), ingestMs: nhcIngestMs(feats)
+    };
+    nhcWspCache[thr] = out;
+    return out;
+}
+
+async function showNhcWsp(pid, thr, announce) {
+    const m = maps[pid];
+    if (!m) return;
+    try {
+        const r = await fetchNhcWsp(thr);
+        if (paneWsp[pid] !== thr) return;     // switched to another threshold meanwhile
+        if (m.getSource('nhc-wsp')) m.getSource('nhc-wsp').setData(r.data);
+        updateHealth('nhcWindProb', r.ingestMs || undefined);
+        updateTropLegend(pid);
+        if (announce) addLiveLog(r.data.features.length
+            ? `NHC: 5-day chance of ${NHC_WSP_NAME[thr]} winds loaded (${nhcSynLabel(r.synMs)} cycle). Click the map for the chance at a spot.`
+            : `NHC: no area has a 5% or greater chance of ${NHC_WSP_NAME[thr]} winds right now.`, '#00ff88');
+    } catch (e) {
+        addLiveLog(`NHC WIND CHANCE ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// Chance of all three thresholds at one spot: three tiny point queries.
+async function nhcWindChanceAt(lng, lat) {
+    const q = id => fetch(`${NHC_BASE}/${id}/query?geometry=${lng.toFixed(4)},${lat.toFixed(4)}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=percentage&returnGeometry=false&f=json`)
+        .then(r => r.json())
+        .then(d => (d.features && d.features[0] && d.features[0].attributes.percentage) || '<5%');
+    const [p34, p50, p64] = await Promise.all([30, 31, 32].map(q));
+    return { '34': p34, '50': p50, '64': p64 };
+}
+
+// ─── Wind field: advisory radii, forecast radii, past swath ───
+async function fetchNhcWind(announce) {
+    try {
+        const simp = '&maxAllowableOffset=0.01&geometryPrecision=3';
+        const [now, fcst, swath] = await Promise.all([16, 15, 12].map(id => nhcLayerGeojson(NHC_BASE, id, simp)));
+        const tag = (fs, kind) => fs.map(f => {
+            f.properties.kind = kind;
+            f.properties.radii = +f.properties.radii || 34;
+            return f;
+        });
+        const feats = [...tag(swath, 'swath'), ...tag(fcst, 'fcst'), ...tag(now, 'now')]
+            .sort((a, b) => a.properties.radii - b.properties.radii);
+        Object.values(maps).forEach(m => {
+            if (m.getSource('nhc-wind')) m.getSource('nhc-wind').setData({ type: 'FeatureCollection', features: feats });
+        });
+        updateHealth('nhcWindField', nhcIngestMs(now) || undefined);
+        if (announce) {
+            const storms = new Set(now.map(f => String(f.properties.stormid || '').toUpperCase()).filter(Boolean));
+            addLiveLog(`NHC: wind field loaded for ${storms.size} storm${storms.size === 1 ? '' : 's'} (${now.length} current radii, ${fcst.length} forecast, ${swath.length} swath)`, '#00ff88');
+        }
+    } catch (e) {
+        addLiveLog(`NHC WIND FIELD ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// ─── Arrival time of tropical-storm-force winds ───
+async function fetchNhcArrival(announce) {
+    try {
+        const [likely, earliest] = await Promise.all([19, 18].map(id => nhcLayerGeojson(NHC_BASE, id, '&geometryPrecision=3')));
+        const tag = (fs, kind) => fs.map(f => ({
+            type: 'Feature', geometry: f.geometry,
+            properties: { kind, label: String(f.properties.arrival_time || '').trim(), bin: f.properties.binnumber || '' }
+        })).filter(f => f.properties.label);
+        const feats = [...tag(likely, 'likely'), ...tag(earliest, 'earliest')];
+        Object.values(maps).forEach(m => {
+            if (m.getSource('nhc-toa')) m.getSource('nhc-toa').setData({ type: 'FeatureCollection', features: feats });
+        });
+        updateHealth('nhcArrival', nhcIngestMs([...likely, ...earliest]) || undefined);
+        if (announce) addLiveLog(feats.length
+            ? `NHC: arrival times of tropical-storm-force winds loaded (${feats.length} contours). Times are the advisory's local time.`
+            : 'NHC: no arrival-time contours right now (no storm is forecast to bring tropical-storm-force winds).', '#00ff88');
+    } catch (e) {
+        addLiveLog(`NHC ARRIVAL TIME ERROR: ${e.message}`, '#ff3333');
+    }
+}
+
+// ─── Storm surge: issued only while surge watches/warnings are up ───
+const NHC_SURGE = {
+    inun: {
+        name: 'Potential Storm Surge Flooding map', source: 'nhc-surge-inun', tiles: NHC_INUN_TILES,
+        layers: ['nhc-surge-inun-layer'], badge: 'nhc-surge-inun-badge',
+        probe: `${NHC_BASE}/23/query?where=1%3D1&outFields=name,binnumber,idp_ingestdate&returnGeometry=false&f=json`
+    },
+    peak: {
+        name: 'Peak Storm Surge graphic', source: 'nhc-peak-surge', tiles: NHC_PEAK_SURGE_TILES,
+        layers: ['nhc-peak-surge-layer', 'nhc-peak-surge-labels'], badge: 'nhc-peak-surge-badge',
+        probe: `${NHC_TROP_SVC}/NHC_PeakStormSurge/MapServer/2/query?where=1%3D1&outFields=idp_source,idp_ingestdate&returnGeometry=false&f=json`
+    }
+};
+
+function setSurgeBadge(kind, issued) {
+    const b = document.getElementById(NHC_SURGE[kind].badge);
+    if (!b) return;
+    b.textContent = issued ? 'ISSUED' : 'NOT ISSUED';
+    b.className = `badge ${issued ? 'red' : 'gray'}`;
+    b.title = issued
+        ? `NHC's ${NHC_SURGE[kind].name} is in effect for a storm threatening the U.S. coast.`
+        : `No ${NHC_SURGE[kind].name} right now. NHC issues it only while storm surge watches or warnings are in effect for the U.S. coast; this badge turns red when it does.`;
+}
+
+// Checks whether the product exists and, when it changed, re-tiles every pane
+// so a new advisory's surge map replaces the old one. Cheap when nothing moved:
+// one attribute-only query.
+async function refreshNhcSurge(kind, announce) {
+    const k = NHC_SURGE[kind];
+    let feats;
+    try {
+        const res = await fetch(cacheBust(k.probe));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        if (d.error) throw new Error(d.error.message || 'map service error');
+        feats = d.features || [];
+    } catch (e) {
+        if (announce) addLiveLog(`SURGE ERROR: ${k.name} — ${e.message}`, '#ff3333');
+        return;
+    }
+    setSurgeBadge(kind, feats.length > 0);
+    if (!feats.length) {
+        if (nhcSurgeStamp[kind]) {
+            // It was issued and has now been withdrawn — drop the old tiles.
+            Object.values(maps).forEach(m => { if (m.getSource(k.source)) m.getSource(k.source).setTiles([cacheBust(k.tiles)]); });
+            if (kind === 'peak') setPeakSurgeLabels([]);
+            nhcSurgeStamp[kind] = null;
+        }
+        if (announce) {
+            addLiveLog(`SURGE: NHC has not issued a ${k.name}. It is only produced while storm surge watches or warnings are in effect for the U.S. coast. The layer stays on and fills in by itself once it is issued.`, '#ffb300');
+            if (typeof _productPendingClear === 'function') _productPendingClear();
+        }
+        return;
+    }
+    const a = feats[0].attributes || {};
+    const ingest = Math.max(...feats.map(f => +(f.attributes.idp_ingestdate || 0) || 0));
+    // Peak surge names its source file; the inundation mosaic names its rasters.
+    const label = a.idp_source || a.name || a.binnumber || '';
+    const stamp = `${label}|${feats.length}|${ingest}`;
+    if (stamp !== nhcSurgeStamp[kind]) {
+        nhcSurgeStamp[kind] = stamp;
+        const tiles = `${k.tiles}&_v=${ingest}`;
+        Object.values(maps).forEach(m => { if (m.getSource(k.source)) m.getSource(k.source).setTiles([tiles]); });
+        if (kind === 'peak') {
+            const pts = await nhcLayerGeojson(`${NHC_TROP_SVC}/NHC_PeakStormSurge/MapServer`, 0).catch(() => []);
+            setPeakSurgeLabels(pts.filter(f => String(f.properties.name || '').trim()));
+        }
+    }
+    updateHealth('nhcSurge', ingest || undefined);
+    if (announce) addLiveLog(`SURGE: ${k.name} loaded (${label || 'current advisory'})`, '#00ff88');
+}
+
+function setPeakSurgeLabels(features) {
+    Object.values(maps).forEach(m => {
+        if (m.getSource('nhc-peak-surge-pts')) m.getSource('nhc-peak-surge-pts').setData({ type: 'FeatureCollection', features });
+    });
+}
+
+// ─── On-map key for the impact layers (top-right, under the pane label; the
+// bottom corners already hold the layer list and the radar/SPC/ERO keys) ───
+function createTropLegend(paneId) {
+    const paneEl = document.querySelector(`.pane[data-pane="${paneId}"]`);
+    if (!paneEl || paneEl.querySelector('.trop-legend')) return;
+    const legend = document.createElement('div');
+    legend.className = 'trop-legend';
+    legend.id = `trop-legend-${paneId}`;
+    legend.style.cssText = 'position:absolute;top:24px;right:8px;z-index:12;background:rgba(0,0,0,0.82);border:1px solid rgba(255,170,0,0.35);border-radius:3px;padding:6px 8px;pointer-events:none;display:none;font-family:"Roboto Mono",monospace;max-width:240px;max-height:calc(100% - 90px);overflow:hidden;';
+    paneEl.appendChild(legend);
+}
+
+function updateTropLegend(paneId) {
+    const pid = paneId || activePaneId;
+    const legend = document.getElementById(`trop-legend-${pid}`);
+    const m = maps[pid];
+    if (!legend || !m) return;
+    const head = t => `<div style="font-size:9px;font-weight:700;color:#ffb347;letter-spacing:0.8px;text-transform:uppercase;margin:0 0 3px;white-space:nowrap;">${t}</div>`;
+    const row = (color, label, style) => `<div style="display:flex;align-items:center;gap:5px;margin:1px 0;"><span style="width:12px;height:9px;display:inline-block;${style || `background:${color};opacity:0.85;`}"></span><span style="font-size:9px;color:#ddd;white-space:nowrap;">${label}</span></div>`;
+    const sections = [];
+
+    if (isLayerVisible(m, 'nhc-wsp-fill') && paneWsp[pid]) {
+        const c = nhcWspCache[paneWsp[pid]];
+        const cells = NHC_WSP_BANDS.map(([, col]) => `<span style="flex:1;height:9px;background:${col};"></span>`).join('');
+        const ticks = ['5', '10', '20', '30', '40', '50', '60', '70', '80', '90'].map(t => `<span style="flex:1;font-size:7.5px;color:#bbb;">${t}</span>`).join('');
+        sections.push(head(`5-day chance of ${paneWsp[pid]}-kt winds`) +
+            `<div style="display:flex;width:200px;">${cells}</div><div style="display:flex;width:200px;">${ticks}</div>` +
+            `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">percent${c && c.synMs ? ` · ${nhcSynLabel(c.synMs)} cycle` : ''}</div>`);
+    }
+    const toaL = isLayerVisible(m, 'nhc-toa-likely-line'), toaE = isLayerVisible(m, 'nhc-toa-earliest-line');
+    if (toaL || toaE) {
+        sections.push(head('TS-force wind arrival') +
+            (toaL ? row('', 'Most likely', 'border-top:2px solid #ffd166;height:0;') : '') +
+            (toaE ? row('', 'Earliest reasonable', 'border-top:2px dashed #ff5c5c;height:0;') : '') +
+            `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">advisory's local time</div>`);
+    }
+    const wf = isLayerVisible(m, 'nhc-windfield-fill'), sw = isLayerVisible(m, 'nhc-swath-fill');
+    if (wf || sw) {
+        sections.push(head(wf && sw ? 'Wind field · past swath' : wf ? 'Wind field' : 'Past wind swath') +
+            row('#ffe14d', '34 kt+ (39 mph)') + row('#ff9a1f', '50 kt+ (58 mph)') + row('#ff2b2b', '64 kt+ (74 mph)') +
+            (wf ? `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">shaded now · dashed at forecast times</div>` : ''));
+    }
+    if (isLayerVisible(m, 'nhc-surge-inun-layer'))
+        sections.push(head('Surge flooding above ground') + SURGE_DEPTH_KEY.inun.map(([c, l]) => row(c, l)).join('') +
+            (nhcSurgeStamp.inun ? '' : `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">not issued right now</div>`));
+    if (isLayerVisible(m, 'nhc-peak-surge-layer'))
+        sections.push(head('Peak storm surge') + SURGE_DEPTH_KEY.peak.map(([c, l]) => row(c, l)).join('') +
+            (nhcSurgeStamp.peak ? '' : `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">not issued right now</div>`));
+    if (isLayerVisible(m, 'surge-risk-layer') && paneSurgeRisk[pid])
+        sections.push(head(`Surge risk · Cat ${paneSurgeRisk[pid]} worst case`) + SURGE_DEPTH_KEY.risk.map(([c, l]) => row(c, l)).join('') +
+            `<div style="font-size:8px;color:#8b97a3;margin-top:2px;">reference map, not a forecast</div>`);
+
+    if (!sections.length) { legend.style.display = 'none'; return; }
+    legend.innerHTML = sections.join('<div style="border-top:1px solid rgba(255,255,255,0.12);margin:5px 0 4px;"></div>');
+    legend.style.display = 'block';
+}
+
+function initNhcImpacts() {
+    // The surge badges double as an "is NHC's surge map out?" indicator, so
+    // check them even when the layers are off (two attribute-only queries).
+    const check = () => { refreshNhcSurge('inun', false); refreshNhcSurge('peak', false); };
+    setTimeout(check, 10000);
+    setInterval(check, 15 * 60 * 1000);
+}
+
 // ─── Hurricane Hunter reconnaissance (IEM AFOS feeds, CORS-open) ───
 // HDOBs (URNT15/URPA15): 30-sec aircraft obs transmitted in 10-min batches
 // while a mission is airborne. TCPOD (REPRPD): CARCAH's daily recon tasking.
@@ -7141,6 +7657,8 @@ async function fetchNhcDirectStorms() {
 async function fetchNoaaTropicalGis() {
     const combined = { type: 'FeatureCollection', features: [] };
 
+    // Past track is decoration on the cone — its loss must never cost the cone.
+    const pastP = fetchNhcPastTrack().catch(() => []);
     // Cache-bust so each poll gets the latest advisory, not a cached copy
     const [coneRes, trackRes, pointsRes, warnRes] = await Promise.all([
         fetch(cacheBust(`${NHC_BASE}/7/query?where=1%3D1&outFields=*&f=geojson`)),
@@ -7152,6 +7670,7 @@ async function fetchNoaaTropicalGis() {
     const [coneData, trackData, pointsData, warnData] = await Promise.all([
         coneRes.json(), trackRes.json(), pointsRes.json(), warnRes.json()
     ]);
+    combined.features.push(...await pastP);
 
     // Flag Potential Tropical Cyclones so they can be labeled/styled distinctly
     const isPTCName = n => /potential tropical cyclone/i.test(n || '');
@@ -7266,8 +7785,11 @@ async function fetchNHCStorms(show) {
         const direct = await fetchNhcDirectStorms();
         nhcGisStaleBins = {};          // nothing on screen is out of date anymore
         nhcStormSource = 'nhc';
-        setNhcStormData(direct.data);
         const advs = [...new Set(direct.data.features.map(f => `${f.properties.stormname} #${f.properties.advisnum}`))];
+        // NHC's advisory KMZs carry no past track. The mirror's, even when it
+        // is behind, is still the path the storm really took — keep it.
+        if (noaa) direct.data.features.push(...noaa.data.features.filter(f => /^past/.test(f.properties.layerType || '')));
+        setNhcStormData(direct.data);
         setNhcStormBadge('NHC DIRECT', 'green',
             `Cone/track pulled straight from NHC's advisory graphics because the NOAA GIS mirror is behind. Showing ${advs.join(', ')}.`);
         updateHealth('nhcStorms', direct.issuedMs || undefined);
@@ -7291,26 +7813,43 @@ async function fetchNHCOutlook(show) {
 
     addLiveLog('NHC: Fetching tropical outlook areas...', '#ffcc00');
     try {
-        const [twoDay, sevenDay] = await Promise.all([
-            fetch(cacheBust(`${NHC_BASE}/1/query?where=1%3D1&outFields=*&f=geojson`)).then(r => r.json()),
-            fetch(cacheBust(`${NHC_BASE}/3/query?where=1%3D1&outFields=*&f=geojson`)).then(r => r.json())
-        ]);
+        // 3 = 7-day areas, 2 = current location of disturbances that already
+        // exist (NHC's X), 33 = expected development motion (NHC's arrow).
+        const [sevenDay, xPts, motion] = await Promise.all([3, 2, 33].map(id =>
+            fetch(cacheBust(`${NHC_BASE}/${id}/query?where=1%3D1&outFields=*&f=geojson`)).then(r => r.json())));
 
         const combined = { type: 'FeatureCollection', features: [] };
-        (sevenDay.features || []).forEach(f => {
+        const norm = f => {
+            f.properties = f.properties || {};
             f.properties.basin = f.properties.basin || f.properties.BASIN || '';
             f.properties.prob2day = f.properties.prob2day || f.properties.PROB2DAY || '0%';
             f.properties.prob7day = f.properties.prob7day || f.properties.PROB7DAY || '0%';
             f.properties.risk2day = f.properties.RISK2DAY || f.properties.risk2day || 0;
             f.properties.risk7day = f.properties.RISK7DAY || f.properties.risk7day || 0;
+            return f;
+        };
+        (sevenDay.features || []).forEach(f => { norm(f).properties.layerType = 'area'; combined.features.push(f); });
+        (xPts.features || []).forEach(f => {
+            if (!f.geometry) return;
+            norm(f).properties.layerType = 'xpoint';
+            f.properties.color = NHC_TWO_RISK_COLOR[f.properties.risk2day] || '#ffff00';
             combined.features.push(f);
+        });
+        (motion.features || []).forEach(f => {
+            if (!f.geometry) return;
+            norm(f);
+            const color = NHC_TWO_RISK_COLOR[f.properties.risk7day] || '#ffcc00';
+            nhcArrowFeatures(f.geometry).forEach(g =>
+                combined.features.push({ type: 'Feature', geometry: g, properties: { ...f.properties, layerType: 'motion', color } }));
         });
 
         Object.values(maps).forEach(m => {
             if (m.getSource('nhc-outlook')) m.getSource('nhc-outlook').setData(combined);
         });
         updateHealth('nhcOutlook');
-        addLiveLog(`NHC: ${combined.features.length} outlook areas loaded`, '#ffcc00');
+        const nAreas = combined.features.filter(f => f.properties.layerType === 'area').length;
+        const nX = combined.features.filter(f => f.properties.layerType === 'xpoint').length;
+        addLiveLog(`NHC: ${nAreas} outlook area${nAreas === 1 ? '' : 's'} loaded${nX ? `, ${nX} existing disturbance${nX === 1 ? '' : 's'} marked X` : ''}`, '#ffcc00');
     } catch (e) {
         addLiveLog(`NHC OUTLOOK ERROR: ${e.message}`, '#ff3333');
     }
@@ -9559,6 +10098,13 @@ function getPaneLegend(paneId) {
     add(isLayerVisible(map, 'nws-watches-only-fill'), 'NWS WATCHES', '#ffaa00', 'watches');
     add(isLayerVisible(map, 'nhc-track-pts'), 'NHC STORMS', '#ff3333', 'nhcStorms');
     add(isLayerVisible(map, 'nhc-outlook-fill'), 'NHC TROPICAL OUTLOOK', '#ffaa00', 'nhcOutlook');
+    add(isLayerVisible(map, 'nhc-wsp-fill'), `NHC ${paneWsp[paneId] || ''}-KT WIND CHANCE`, '#e6e600', 'nhcWindProb');
+    add(isLayerVisible(map, 'nhc-toa-likely-line') || isLayerVisible(map, 'nhc-toa-earliest-line'), 'NHC TS WIND ARRIVAL', '#ffd166', 'nhcArrival');
+    add(isLayerVisible(map, 'nhc-windfield-fill'), 'NHC WIND FIELD', '#ff9a1f', 'nhcWindField');
+    add(isLayerVisible(map, 'nhc-swath-fill'), 'NHC PAST WIND SWATH', '#ff9a1f', 'nhcWindField');
+    add(isLayerVisible(map, 'nhc-surge-inun-layer'), nhcSurgeStamp.inun ? 'NHC SURGE FLOODING' : 'NHC SURGE FLOODING (NOT ISSUED)', '#0070ff', nhcSurgeStamp.inun ? 'nhcSurge' : undefined);
+    add(isLayerVisible(map, 'nhc-peak-surge-layer'), nhcSurgeStamp.peak ? 'NHC PEAK SURGE' : 'NHC PEAK SURGE (NOT ISSUED)', '#0070ff', nhcSurgeStamp.peak ? 'nhcSurge' : undefined);
+    add(isLayerVisible(map, 'surge-risk-layer'), `SURGE RISK CAT ${paneSurgeRisk[paneId] || ''} (REF)`, '#0070ff');
     // Climate / environment
     add(isLayerVisible(map, 'cpc-temp-layer'), 'CPC TEMP OUTLOOK', '#ff8c69', 'cpcTemp');
     add(isLayerVisible(map, 'cpc-precip-layer'), 'CPC PRECIP OUTLOOK', '#69b3ff', 'cpcPrecip');
@@ -10106,7 +10652,7 @@ function initCollapsibleGroups() {
     if (collapseBtn) collapseBtn.addEventListener('click', () => setAll(true));
 }
 
-// Live filter over the product tree. 136 products across 18 mostly-collapsed
+// Live filter over the product tree. ~160 products across 19 mostly-collapsed
 // groups is more than is practical to find by scrolling, and unlike the group
 // headers this needs no prior knowledge of which category a product lives in.
 // Matching is a plain case-insensitive substring test against the product's
@@ -10624,6 +11170,13 @@ function productItemActiveOn(pid, item) {
     else if (layer === 'nhc-fcst-history') isActive = isLayerVisible(map, 'nhc-fcst-lines');
     else if (layer === 'nhc-outlook') isActive = isLayerVisible(map, 'nhc-outlook-fill');
     else if (layer === 'recon-hdob') isActive = isLayerVisible(map, 'recon-hdob-pts');
+    else if (layer === 'nhc-wsp') isActive = isLayerVisible(map, 'nhc-wsp-fill') && paneWsp[pid] === item.getAttribute('data-wsp');
+    else if (layer === 'nhc-toa') isActive = isLayerVisible(map, `nhc-toa-${item.getAttribute('data-toa')}-line`);
+    else if (layer === 'nhc-windfield') isActive = isLayerVisible(map, 'nhc-windfield-fill');
+    else if (layer === 'nhc-swath') isActive = isLayerVisible(map, 'nhc-swath-fill');
+    else if (layer === 'nhc-surge-inun') isActive = isLayerVisible(map, 'nhc-surge-inun-layer');
+    else if (layer === 'nhc-peak-surge') isActive = isLayerVisible(map, 'nhc-peak-surge-layer');
+    else if (layer === 'surge-risk') isActive = isLayerVisible(map, 'surge-risk-layer') && paneSurgeRisk[pid] === item.getAttribute('data-surgecat');
     else if (layer === 'adeck') {
         isActive = isLayerVisible(map, 'adeck-lines') && adeckMode === item.getAttribute('data-adeck');
     }
@@ -11424,10 +11977,72 @@ function initProductSidebar() {
                 return;
             }
 
+            // ─── NHC storm impacts ───
+            const setVis = (ids, on) => ids.forEach(l => { if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none'); });
+            if (layer === 'nhc-wsp') {
+                // Per pane, like QPF: each pane can show its own threshold.
+                const pid = activePaneId, thr = item.getAttribute('data-wsp');
+                if (item.classList.contains('active')) {
+                    setVis(['nhc-wsp-fill', 'nhc-wsp-line'], false);
+                    delete paneWsp[pid];
+                } else {
+                    paneWsp[pid] = thr;
+                    const cached = nhcWspCache[thr];
+                    if (map.getSource('nhc-wsp')) map.getSource('nhc-wsp').setData(cached ? cached.data : { type: 'FeatureCollection', features: [] });
+                    setVis(['nhc-wsp-fill', 'nhc-wsp-line'], true);
+                    await showNhcWsp(pid, thr, true);
+                }
+                updateTropLegend(pid);
+                updateSidebarToActivePane();
+                return;
+            }
+            if (layer === 'nhc-toa') {
+                const kind = item.getAttribute('data-toa');
+                const isActive = !item.classList.contains('active');
+                setVis([`nhc-toa-${kind}-line`, `nhc-toa-${kind}-label`], isActive);
+                if (isActive) await fetchNhcArrival(true);
+                updateTropLegend(activePaneId);
+                updateSidebarToActivePane();
+                return;
+            }
+            if (layer === 'nhc-windfield' || layer === 'nhc-swath') {
+                const isActive = !item.classList.contains('active');
+                setVis(layer === 'nhc-swath' ? ['nhc-swath-fill', 'nhc-swath-line']
+                    : ['nhc-windfield-fill', 'nhc-windfield-line', 'nhc-windfield-fcst'], isActive);
+                if (isActive) await fetchNhcWind(true);
+                updateTropLegend(activePaneId);
+                updateSidebarToActivePane();
+                return;
+            }
+            if (layer === 'nhc-surge-inun' || layer === 'nhc-peak-surge') {
+                const kind = layer === 'nhc-surge-inun' ? 'inun' : 'peak';
+                const isActive = !item.classList.contains('active');
+                setVis(NHC_SURGE[kind].layers, isActive);
+                if (isActive) await refreshNhcSurge(kind, true);
+                updateTropLegend(activePaneId);
+                updateSidebarToActivePane();
+                return;
+            }
+            if (layer === 'surge-risk') {
+                const pid = activePaneId, cat = item.getAttribute('data-surgecat');
+                if (item.classList.contains('active')) {
+                    setVis(['surge-risk-layer'], false);
+                    delete paneSurgeRisk[pid];
+                } else {
+                    paneSurgeRisk[pid] = cat;
+                    if (map.getSource('surge-risk')) map.getSource('surge-risk').setTiles([surgeRiskTiles(cat)]);
+                    setVis(['surge-risk-layer'], true);
+                    addLiveLog(`SURGE: Category ${cat} storm surge risk loaded — the worst case from any Category ${cat} hurricane, for reference (not a forecast for this storm)`, '#00ff88');
+                }
+                updateTropLegend(pid);
+                updateSidebarToActivePane();
+                return;
+            }
+
             // ─── NHC Active Storms ───
             if (layer === 'nhc-storms') {
                 const isActive = !item.classList.contains('active');
-                ['nhc-cone-fill', 'nhc-cone-outline', 'nhc-track-line', 'nhc-track-pts', 'nhc-track-labels', 'nhc-warn-fill', 'nhc-warn-outline'].forEach(l => {
+                ['nhc-cone-fill', 'nhc-cone-outline', 'nhc-past-line', 'nhc-past-line-weak', 'nhc-past-pts', 'nhc-track-line', 'nhc-track-pts', 'nhc-track-labels', 'nhc-warn-fill', 'nhc-warn-outline'].forEach(l => {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
                 if (isActive) await fetchNHCStorms(true);
@@ -11449,7 +12064,7 @@ function initProductSidebar() {
             // ─── NHC Tropical Outlook ───
             if (layer === 'nhc-outlook') {
                 const isActive = !item.classList.contains('active');
-                ['nhc-outlook-fill', 'nhc-outlook-outline'].forEach(l => {
+                ['nhc-outlook-fill', 'nhc-outlook-outline', 'nhc-outlook-motion', 'nhc-outlook-x'].forEach(l => {
                     if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', isActive ? 'visible' : 'none');
                 });
                 if (isActive) await fetchNHCOutlook(true);
@@ -13434,6 +14049,11 @@ function clearPane(map, paneId) {
         'solar-night-fill', 'solar-twilight-fill', 'solar-terminator-line',
         'nhc-cone-fill', 'nhc-cone-outline', 'nhc-track-line', 'nhc-track-pts', 'nhc-track-labels',
         'nhc-warn-fill', 'nhc-warn-outline', 'nhc-outlook-fill', 'nhc-outlook-outline',
+        'nhc-past-line', 'nhc-past-line-weak', 'nhc-past-pts', 'nhc-outlook-motion', 'nhc-outlook-x',
+        'nhc-wsp-fill', 'nhc-wsp-line', 'nhc-windfield-fill', 'nhc-windfield-line', 'nhc-windfield-fcst',
+        'nhc-swath-fill', 'nhc-swath-line', 'nhc-toa-likely-line', 'nhc-toa-likely-label',
+        'nhc-toa-earliest-line', 'nhc-toa-earliest-label', 'nhc-surge-inun-layer',
+        'nhc-peak-surge-layer', 'nhc-peak-surge-labels', 'surge-risk-layer',
         'nhc-fcst-actual-line', 'nhc-fcst-lines', 'nhc-fcst-actual-pts', 'nhc-fcst-labels',
         'cpc-temp-layer', 'cpc-precip-layer',
         'drought-fill', 'drought-outline', 'cpc-drought-layer',
@@ -13462,7 +14082,10 @@ function clearPane(map, paneId) {
     delete paneL3[paneId];
     delete paneGibs[paneId];
     delete paneGibsBird[paneId];
+    delete paneWsp[paneId];
+    delete paneSurgeRisk[paneId];
     updateRadarLegend(paneId);
+    updateTropLegend(paneId);
     updateEroLegend(paneId);
     updateProbLegend(paneId);
     updateFireWxLegend(paneId);
@@ -14231,6 +14854,19 @@ function startAutoRefresh() {
         if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-track-pts'))) fetchNHCStorms(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-outlook-fill'))) fetchNHCOutlook(true);
         if (Object.values(maps).some(m => isLayerVisible(m, 'nhc-fcst-lines'))) fetchFcstHistory(false);
+        // Impact products: each pane's wind-chance threshold, then the shared ones.
+        const wspOn = new Set();
+        Object.entries(maps).forEach(([pid, m]) => {
+            if (paneWsp[pid] && isLayerVisible(m, 'nhc-wsp-fill')) {
+                if (!wspOn.has(paneWsp[pid])) { delete nhcWspCache[paneWsp[pid]]; wspOn.add(paneWsp[pid]); }
+                showNhcWsp(pid, paneWsp[pid], false);
+            }
+        });
+        const anyOn = ids => Object.values(maps).some(m => ids.some(l => isLayerVisible(m, l)));
+        if (anyOn(['nhc-toa-likely-line', 'nhc-toa-earliest-line'])) fetchNhcArrival(false);
+        if (anyOn(['nhc-windfield-fill', 'nhc-swath-fill'])) fetchNhcWind(false);
+        if (anyOn(['nhc-surge-inun-layer'])) refreshNhcSurge('inun', false);
+        if (anyOn(['nhc-peak-surge-layer'])) refreshNhcSurge('peak', false);
     }, 5 * 60 * 1000);
 }
 
@@ -14849,6 +15485,12 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 6, 2026', items: [
+        '<b>Storm surge and wind-threat maps for landfalling storms.</b> The tropical section covered the storm itself well (cone, advisories, recon, models), but not what happens on land and when. Twelve new items under <b>NHC Tropical</b> fill that gap. Each is NHC\'s own product, from the same NOAA service as the cone, and each has a key in the top-right corner of the pane.',
+        '<b>Wind Threat.</b> The 5-day chance of tropical-storm-force (34 kt), 50-kt and hurricane-force (64 kt) winds, as a map. <b>Click anywhere</b> on it for all three chances at that spot; at Gulfport this evening it reads 30–40%, 10–20% and under 5% for Tropical Depression Nine, matching NHC\'s text product. <b>TS Wind Arrival</b> shows when tropical-storm-force winds are most likely to begin, and the earliest reasonable time, which is the deadline for preparations. <b>Wind Field</b> shows how far out each wind speed reaches now and at each forecast time, and <b>Past Wind Swath</b> where it has reached so far.',
+        '<b>Storm Surge.</b> NHC\'s <b>Potential Storm Surge Flooding</b> map (depth above ground) and <b>Peak Storm Surge</b> ranges. NHC issues these only while storm surge watches or warnings are in effect, so today their badges read <b>NOT ISSUED</b>. They are checked every 15 minutes even with the layers off, turn red when NHC issues one, and a layer left on fills in by itself. The <b>Surge Risk: Category 1–5</b> maps are available any time: the worst-case surge from any hurricane of that strength, for reference.',
+        '<b>Two smaller fixes.</b> Active Storms now draws the storm\'s <b>past track</b>, as NHC\'s cone graphic does. The Tropical Outlook now shows NHC\'s <b>X</b> on disturbances that already exist, colored by their 2-day chance, and the arrow toward where one is expected to develop. The app had been downloading the X positions and never drawing them.'
+    ]},
     { date: 'Sep 29, 2026', items: [
         '<b>Fixed: loops going blank after a few rounds.</b> Reported as satellite and radar loops that played fine, then turned blank, on and off over several days. The cause was not in the loop itself but in how the map refreshes tiles. The NOAA servers behind the loops say their images go stale after two to five minutes, and the map dutifully asked for every tile again when that time ran out — for every frame at once, so a single pane of a 3-hour radar loop sent around two hundred requests to NCEP every two minutes, for as long as it played. Whenever NCEP or nowCOAST was slow or overloaded and one of those repeat requests failed, the map gave up on that piece of that frame for good. The gaps only grew, and one bad minute on NOAA\'s side could empty a whole loop. That is why it came and went: it tracked the health of NOAA\'s servers, not anything on your screen.',
         'A loop frame is a fixed moment in time — the 14:05Z scan will never change — so asking for it again gains nothing. Loop frames are now fetched <b>once</b> and kept for as long as the loop plays. If a request fails while the loop is loading, it is <b>retried twice</b> before giving up, so a momentary hiccup no longer leaves a permanent hole. If a server is struggling badly enough that tiles still fail, the log says so, and Stop then Play asks again. Live, non-looping layers are unchanged and keep refreshing on their usual schedule.',
@@ -15394,12 +16036,30 @@ const USER_GUIDE = [
             <li><b>Active Storms</b> — forecast cones, track points with intensities, and coastal watch/warning segments. Click a point for the decoded advisory; the popup shows the issue time and flags <b>intermediate</b> advisories (e.g. #1A), where NHC updates the position/watches but the graphical track and cone only refresh on the next full (6-hourly) advisory.<br>
                 This layer normally comes from NOAA’s tropical GIS service, which sometimes stalls for hours. FX-Net checks it against NHC’s authoritative storm index on every refresh, and if it has fallen behind it <b>automatically switches to NHC’s own advisory graphics</b> — same cone, same track, straight from the source. The badge then reads <b>NHC DIRECT</b> (green, hover it for the advisory numbers in use), <b>Data Health → NHC Storms</b> is stamped with the advisory’s publication time, and the popup adds a green “Source: NHC advisory graphics (direct)” line. Failover also covers a NOAA outage, and it reverses on its own once NOAA catches up.<br>
                 Only if <i>both</i> sources fail does the badge go <b>STALE</b> (orange) with an <b>OUT OF DATE</b> banner in the popup naming the advisory on screen versus NHC’s current one. Even then the <b>Official Advisories</b> text, model guidance, Storm Trends, SHIPS and recon stay current — they come from NHC/ATCF directly.<br>
-                Coastal watch/warning segments are colored to NHC convention when the source identifies them: <span style="color:#ffff00;">yellow</span> TS Watch, <span style="color:#0080ff;">blue</span> TS Warning, <span style="color:#ff69b4;">pink</span> Hurricane Watch, <span style="color:#ff0000;">red</span> Hurricane Warning.</li>
+                Coastal watch/warning segments are colored to NHC convention when the source identifies them: <span style="color:#ffff00;">yellow</span> TS Watch, <span style="color:#0080ff;">blue</span> TS Warning, <span style="color:#ff69b4;">pink</span> Hurricane Watch, <span style="color:#ff0000;">red</span> Hurricane Warning.<br>
+                The storm’s <b>past track</b> is drawn too, as on NHC’s own cone graphic: dotted while it was a disturbance or low, solid once it became a tropical cyclone, with dots colored by intensity. Click a dot for the time, strength and pressure.</li>
             <li><b>Forecast History (run-to-run)</b> — for the active storm, the storm’s actual traveled path (best-track, fix dots colored by intensity) with every past advisory’s official forecast track overlaid, newest bright and older ones faded, each anchored at the position it was issued from. Shows how the forecast has trended cycle to cycle and where the center has actually gone. Forecast tracks accumulate one per full advisory (sparse for a new storm, richer over time); the actual path reaches back to the invest stage.</li>
-            <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details.</li>
+            <li><b>Tropical Weather Outlooks</b> — 7-day formation areas for the Atlantic and East Pacific; click an area for details. A disturbance that already exists is marked with an <b>X</b> colored by its 2-day chance (yellow low, orange medium, red high), and when NHC gives one, an arrow shows where it is expected to develop. An area with no X is where formation is expected later.</li>
             <li><b>Tropical Discussions</b> open the full NHC text products.</li>
         </ul>
         <p><b>One active storm.</b> The two storm dropdowns (here and under Model Guidance) are the same selection — pick a system in either and everything below follows it: advisories, recon, spaghetti tracks, intensity, Storm Trends, and SHIPS. Both lists show every active system, numbered storms and invests, in both oceans.</p>
+        <h3>Wind Threat</h3>
+        <p>NHC’s land-impact wind products, for every active storm at once. Each has its own key in the top-right corner of the pane.</p>
+        <ul>
+            <li><b>Tropical-Storm / 50-kt / Hurricane Wind Chance</b> — the chance of sustained winds of 34 kt (39 mph), 50 kt (58 mph) or 64 kt (74 mph) at any time in the next 5 days. Each pane can show its own threshold. <b>Click anywhere</b> on the shading for all three chances at that spot, read live from NOAA rather than off the drawn shapes. These are the same numbers as the Wind Speed Probabilities text, but for any location, not just the listed cities.</li>
+            <li><b>TS Wind Arrival</b> — when tropical-storm-force winds are expected to begin. <b>Most Likely</b> is the best estimate. <b>Earliest Reasonable</b> is the time there is only about a 1-in-10 chance of them arriving sooner, which is the time to have preparations finished. Times are in the time zone NHC’s advisory uses (CDT for most Gulf storms).</li>
+            <li><b>Wind Field</b> — how far out 34-, 50- and 64-kt winds reach: shaded now, dashed outlines at each forecast time. The cone shows where the center may go; this shows how wide the winds are around it.</li>
+            <li><b>Past Wind Swath</b> — everywhere those winds have reached so far over the storm’s life.</li>
+        </ul>
+        <h3>Storm Surge (U.S. coast)</h3>
+        <ul>
+            <li><b>Potential Storm Surge Flooding</b> — NHC’s map of how deep surge flooding could get <i>above ground</i>, a reasonable worst case (about a 1-in-10 chance of higher). Gray is leveed or intertidal land.</li>
+            <li><b>Peak Storm Surge</b> — NHC’s peak surge ranges along the coast, labeled in feet.</li>
+        </ul>
+        <p>NHC issues both <b>only while storm surge watches or warnings are in effect</b> for the U.S. coast, typically about 48 hours before the surge. Until then their badges read <b>NOT ISSUED</b> (gray). The badges are checked every 15 minutes even with the layers off, so they also tell you the moment NHC puts one out; they turn red and read <b>ISSUED</b>. A layer left on fills in by itself when it is issued and updates with each advisory.</p>
+        <ul>
+            <li><b>Surge Risk: Category 1–5</b> — <i>reference maps, not a forecast</i>. Each shows the worst-case surge flooding from any hurricane of that category, from NHC’s SLOSH maximum-of-maximums. Use them before a surge map is issued to see what is at stake along a stretch of coast.</li>
+        </ul>
         <h3>Official Advisories (per storm)</h3>
         <p>Read NHC’s authoritative text for any active storm. Pick a system from the dropdown — every active Atlantic and Pacific storm is listed with its current advisory number and age — then open a product:</p>
         <ul>
@@ -15832,7 +16492,7 @@ function initAlertViz() {
 // pane's toggles; they still load through the legacy re-click path.)
 
 const PROC_KEY = 'fxnet_procedures';
-const PROC_ATTRS = ['day', 'hazard', 'channel', 'gibs', 'qpf', 'qpe', 'period', 'l3'];
+const PROC_ATTRS = ['day', 'hazard', 'channel', 'gibs', 'qpf', 'qpe', 'period', 'l3', 'wsp', 'toa', 'surgecat'];
 
 function loadProcStore() {
     try { return JSON.parse(localStorage.getItem(PROC_KEY) || '{}'); } catch (_) { return {}; }
@@ -17509,6 +18169,7 @@ function init() {
     initRecon();
     initAdeck();
     initNhcAdv();
+    initNhcImpacts();
     initPanelToggles();
     updateWarnModeLabel();
     initHealthToggle();

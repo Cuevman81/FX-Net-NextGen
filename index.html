@@ -14,7 +14,7 @@
     <script src="vendor/maplibre-gl.js?v=5.24.0"></script>
     <link href="vendor/maplibre-gl.css?v=5.24.0" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=122">
+    <link rel="stylesheet" href="style.css?v=123">
     <!-- Vercel Speed Insights + Web Analytics shim (external so CSP can forbid inline script; the client is vendored so script-src is self alone) -->
     <script type="module" src="boot.js?v=2"></script>
     <script defer src="/_vercel/insights/script.js"></script>
@@ -257,6 +257,22 @@
                     <div class="product-item" role="button" tabindex="0" data-layer="nhc-storms"><span>Active Storms & Cones</span> <span class="badge red" id="nhc-storms-badge">LIVE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="nhc-fcst-history"><span>Forecast History (run-to-run)</span> <span class="badge blue">TREND</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="nhc-outlook"><span>Tropical Outlook Areas</span> <span class="badge orange">NHC</span></div>
+                    <div class="sub-category">Wind Threat (all active storms)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="34" title="Chance of sustained tropical-storm-force winds (39+ mph) at any time in the next 5 days. Click the map for the exact percentage at a spot."><span>Tropical-Storm Wind Chance (34 kt)</span> <span class="badge orange">PROB</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="50" title="Chance of sustained 50-kt (58+ mph) winds at any time in the next 5 days."><span>50-kt Wind Chance</span> <span class="badge orange">PROB</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-wsp" data-wsp="64" title="Chance of sustained hurricane-force winds (74+ mph) at any time in the next 5 days."><span>Hurricane Wind Chance (64 kt)</span> <span class="badge red">PROB</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-toa" data-toa="likely" title="When tropical-storm-force winds are most likely to begin. Times are local to the storm's advisory."><span>TS Wind Arrival: Most Likely</span> <span class="badge blue">TIME</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-toa" data-toa="earliest" title="The earliest time tropical-storm-force winds can reasonably be expected (about a 1-in-10 chance of sooner). The time to have preparations finished."><span>TS Wind Arrival: Earliest Reasonable</span> <span class="badge red">PREP</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-windfield" title="How far out 34-, 50- and 64-kt winds reach: shaded now, outlined at each forecast time."><span>Wind Field (now + forecast)</span> <span class="badge orange">RADII</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-swath" title="Everywhere 34-, 50- and 64-kt winds have reached so far over the storm's life."><span>Past Wind Swath</span></div>
+                    <div class="sub-category">Storm Surge (U.S. coast)</div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-surge-inun" title="NHC's map of how deep surge flooding could get above ground (a reasonable worst case, about 1-in-10 chance of higher). Issued only while storm surge watches or warnings are in effect."><span>Potential Storm Surge Flooding</span> <span class="badge red" id="nhc-surge-inun-badge">SURGE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="nhc-peak-surge" title="NHC's peak storm surge ranges along the coast. Issued only while storm surge watches or warnings are in effect."><span>Peak Storm Surge</span> <span class="badge red" id="nhc-peak-surge-badge">SURGE</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="1" title="Reference, not a forecast: the worst-case surge flooding from any Category 1 hurricane, from NHC's SLOSH maximum-of-maximums."><span>Surge Risk: Category 1</span> <span class="badge blue">REF</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="2" title="Reference, not a forecast: the worst-case surge flooding from any Category 2 hurricane."><span>Surge Risk: Category 2</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="3" title="Reference, not a forecast: the worst-case surge flooding from any Category 3 hurricane."><span>Surge Risk: Category 3</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="4" title="Reference, not a forecast: the worst-case surge flooding from any Category 4 hurricane."><span>Surge Risk: Category 4</span></div>
+                    <div class="product-item" role="button" tabindex="0" data-layer="surge-risk" data-surgecat="5" title="Reference, not a forecast: the worst-case surge flooding from any Category 5 hurricane."><span>Surge Risk: Category 5</span></div>
                     <div class="sub-category">Tropical Discussions</div>
                     <div class="product-item" role="button" tabindex="0" id="nhc-two-atl" data-layer="nhc-two-atl"><span>Atlantic TWO</span></div>
                     <div class="product-item" role="button" tabindex="0" id="nhc-two-epac" data-layer="nhc-two-epac"><span>Eastern Pacific TWO</span></div>
@@ -1273,6 +1289,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=286"></script>
+    <script src="app.js?v=287"></script>
 </body>
 </html>

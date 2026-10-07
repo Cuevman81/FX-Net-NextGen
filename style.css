@@ -483,6 +483,7 @@ body {
 .badge.blue   { background: #3182ce; color: #fff; }
 .badge.green  { background: var(--accent-green); }
 .badge.yellow { background: var(--accent-amber); }
+.badge.gray   { background: #3a414b; color: #c3cad2; }
 
 /* ═══════════════════════════════════════
    WARNING TICKER
