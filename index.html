@@ -14,7 +14,7 @@
     <script src="vendor/maplibre-gl.js?v=5.24.0"></script>
     <link href="vendor/maplibre-gl.css?v=5.24.0" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=124">
+    <link rel="stylesheet" href="style.css?v=125">
     <!-- Vercel Speed Insights + Web Analytics shim (external so CSP can forbid inline script; the client is vendored so script-src is self alone) -->
     <script type="module" src="boot.js?v=2"></script>
     <script defer src="/_vercel/insights/script.js"></script>
@@ -1136,6 +1136,11 @@
                 <option value="NBE">NBM Extended</option>
                 <option value="NAM">NAM MOS (retires Oct 14)</option>
             </select>
+            <div class="mos-fontsize" role="group" aria-label="MOS text size">
+                <button id="mos-font-down" type="button" title="Smaller text" aria-label="Smaller text">A−</button>
+                <span id="mos-font-val" aria-live="polite">12px</span>
+                <button id="mos-font-up" type="button" title="Larger text" aria-label="Larger text" style="font-size:14px;">A+</button>
+            </div>
             <span id="mos-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
         </div>
         <div class="floating-panel-body" id="mos-body" style="padding:10px;">
@@ -1304,6 +1309,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=298"></script>
+    <script src="app.js?v=299"></script>
 </body>
 </html>

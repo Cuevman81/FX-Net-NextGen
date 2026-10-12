@@ -14413,7 +14413,7 @@ function renderMosTable(station, def, rows) {
             + (def.cycleHrs > 1 ? `, issued every ${def.cycleHrs} h, next ~${nextTxt}` : ', issued hourly')
             + `${overdue ? ' — running late' : ''}</span>`;
     }
-    let html = `<div style="font-size:10px;color:#8b97a3;padding:0 2px 8px;line-height:1.5;">
+    let html = `<div class="mos-head" style="color:#8b97a3;padding:0 2px 8px;line-height:1.5;">
             <b style="color:#cdd6df;">${esc(station)}</b> — ${esc(def.label)} <span style="color:#5b6773;">${esc(def.sub)}</span>
             ${def.retiring ? '<span class="badge orange" style="margin-left:6px;">RETIRING</span>' : ''}
             <br>Cycle <b style="color:#cdd6df;">${esc(rows[0].runtime || '—')}Z</b> · ${rows.length} forecast projections${ageNote}
@@ -14434,7 +14434,7 @@ function renderMosTable(station, def, rows) {
             + rows.map(r => `<td>${esc(cell(r[k]))}</td>`).join('') + '</tr>';
     });
     html += `</tbody></table></div>
-        <div style="font-size:9px;color:#5b6773;padding:8px 2px 2px;line-height:1.6;">
+        <div class="mos-foot" style="color:#5b6773;padding:8px 2px 2px;line-height:1.6;">
             MDL bulletins via Iowa Environmental Mesonet. TMP/DPT °F · WSP/GST kt · WDR degrees ·
             P06/P12 PoP % · Q06/Q12 QPF category · T06/T12 thunder (and severe) % ·
             CIG/VIS/CLD categorical · OBV obstruction to vision ·
@@ -14443,6 +14443,25 @@ function renderMosTable(station, def, rows) {
             Convection = at least one lightning flash and/or radar ≥ 40 dBZ in the hour ending at that time.
         </div>`;
     body.innerHTML = html;
+}
+
+// MOS text size. The bulletin is a dense grid of small numbers, so it gets its
+// own size control (remembered per browser) instead of relying on page zoom.
+const MOS_FONT_STEPS = [10, 11, 12, 13, 14, 16, 18, 20, 22, 24];
+const MOS_FONT_DEFAULT = 12;
+function mosFontStep(cur, dir) {
+    const i = MOS_FONT_STEPS.indexOf(cur);
+    if (i < 0) return MOS_FONT_DEFAULT;
+    return MOS_FONT_STEPS[Math.min(MOS_FONT_STEPS.length - 1, Math.max(0, i + dir))];
+}
+function applyMosFont(px) {
+    document.getElementById('mos-body')?.style.setProperty('--mos-fs', `${px}px`);
+    const val = document.getElementById('mos-font-val');
+    if (val) val.textContent = `${px}px`;
+    const down = document.getElementById('mos-font-down');
+    const up = document.getElementById('mos-font-up');
+    if (down) down.disabled = px <= MOS_FONT_STEPS[0];
+    if (up) up.disabled = px >= MOS_FONT_STEPS[MOS_FONT_STEPS.length - 1];
 }
 
 function initMosPanel() {
@@ -14481,6 +14500,16 @@ function initMosPanel() {
         if (stationInput) stationInput.value = near;
         run();
     });
+    let fontPx = (() => { try { return Number(localStorage.getItem('fxnet_mos_font')); } catch (_) { return 0; } })();
+    if (!MOS_FONT_STEPS.includes(fontPx)) fontPx = MOS_FONT_DEFAULT;
+    applyMosFont(fontPx);
+    const bumpFont = dir => {
+        fontPx = mosFontStep(fontPx, dir);
+        applyMosFont(fontPx);
+        try { localStorage.setItem('fxnet_mos_font', String(fontPx)); } catch (_) {}
+    };
+    document.getElementById('mos-font-down')?.addEventListener('click', () => bumpFont(-1));
+    document.getElementById('mos-font-up')?.addEventListener('click', () => bumpFont(1));
     makePanelDraggable(panel, 'mos-drag');
 }
 
@@ -17036,6 +17065,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Oct 12, 2026', items: [
+        '<b>MOS text size.</b> The MOS Guidance panel has <b>A−</b> and <b>A+</b> buttons next to the model menu. They step the bulletin from 10 px to 24 px, and the default is now 12 px instead of 10. The header and the notes under the table grow with it. Your size is remembered in this browser. Maximize (⤢) and A+ work together: a larger panel shows more forecast hours at the bigger size before the table scrolls.'
+    ]},
     { date: 'Oct 7, 2026 (update 11)', items: [
         '<b>IR satellite loops stay in color.</b> Channels 13, 14 and 15 show NOAA\'s color IR enhancement live, but their loops dropped to black and white. They used to animate from nowCOAST, the only per-channel source with past frames, and it is grayscale. These channels now loop on NASA GIBS Clean IR (Band 13) frames, which are colored and real 10-minute scans. Channels 14 and 15 use Band 13 frames in the loop, which are nearly identical in the IR window (the log says so); nowCOAST had only one longwave layer for all of them anyway. GOES-West IR channels can now loop too. Water vapor (8–10) is colored live but still loops in gray: no source publishes colored water-vapor frames.'
     ]},
@@ -17609,6 +17641,7 @@ const USER_GUIDE = [
         <p>Everything downstream is identical to the observed sounding: <b>SBCAPE, CIN, Lifted Index, PWAT, LCL, LFC, EL, 0–1 and 0–6 km shear</b>, the wind barbs and the hodograph are all computed from the profile the same way. That means you can flip between the balloon and HRRR at the same site and read the difference directly — which is the point.</p>
         <h3>MOS Guidance</h3>
         <p>MDL's station bulletins, laid out the way they are issued — parameters down the left, forecast projections across. <b>Nearest</b> picks the closest ASOS to the panel centre (needs METAR obs switched on); otherwise type any ICAO.</p>
+        <p><b>A− / A+</b> change the text size of the bulletin (10–24 px), and the panel remembers your choice. For the largest readable table, maximize the panel (⤢, or double-click its title) and then step up with A+.</p>
         <ul>
             <li><b>GFS MOS (MAV)</b> — short range, 3-hourly to 72 h. The workhorse, and <b>not</b> going away.</li>
             <li><b>GFS Extended (MEX)</b> — 12-hourly to 192 h, with day max/min in the N/X row.</li>

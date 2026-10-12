@@ -345,16 +345,20 @@ body {
 /* ── MOS bulletin table ──
    Laid out like the real MDL bulletin: parameters down the left, forecast
    projections across. Wide by nature, so it scrolls inside its own container
-   rather than stretching the panel. */
+   rather than stretching the panel. Text size comes from --mos-fs, which the
+   A−/A+ control sets; padding is in em so the grid scales with the text. */
+#mos-body { --mos-fs: 12px; }
 .mos-table {
     border-collapse: collapse;
     font-family: 'Roboto Mono', monospace;
-    font-size: 10px;
+    font-size: var(--mos-fs);
     white-space: nowrap;
 }
+.mos-head { font-size: max(10px, calc(var(--mos-fs) - 1px)); }
+.mos-foot { font-size: max(9px, calc(var(--mos-fs) - 2px)); }
 .mos-table th,
 .mos-table td {
-    padding: 2px 5px;
+    padding: 0.2em 0.5em;
     text-align: center;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
@@ -374,7 +378,7 @@ body {
     position: sticky;
     left: 0;
     background: #0b0f13;
-    padding-right: 10px;
+    padding-right: 1em;
 }
 .mos-table thead th:first-child {
     position: sticky;
@@ -384,6 +388,16 @@ body {
 }
 .mos-table tbody td { color: #e6edf3; }
 .mos-table tbody tr:hover td { background: rgba(0, 229, 255, 0.06); }
+.mos-fontsize { display: flex; align-items: center; gap: 2px; }
+.mos-fontsize button {
+    height: 28px; min-width: 30px; padding: 0 6px;
+    background: #1a2733; color: var(--accent-cyan);
+    border: 1px solid var(--border); font-weight: 700; cursor: pointer;
+}
+.mos-fontsize button:hover:not(:disabled) { background: #22374a; }
+.mos-fontsize button:disabled { opacity: 0.35; cursor: default; }
+.mos-fontsize button:focus-visible { outline: 1px solid var(--accent-cyan); }
+.mos-fontsize span { font: 11px 'Roboto Mono', monospace; color: #8b97a3; min-width: 34px; text-align: center; }
 
 /* ── GOES bird + sector selector (inside the Satellite group) ── */
 .sector-row {
