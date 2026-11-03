@@ -176,6 +176,7 @@ let warningsSeen = new Set();
 let warningsFirstLoad = true;
 let warningsLoaded = false;
 let lastIbwCount = 0;
+let lastWarningsSig = '';
 let warningsGeoJSON = { type: 'FeatureCollection', features: [] };
 // Warning display mode: false = filled polygons (default), true = bold colored
 // outlines with minimal fill so numerous overlapping warnings stay legible.
@@ -258,6 +259,7 @@ const WARN_OUTLINE_WIDTH_OUTLINE = ['case',
 // Covers both the Warnings stack and the Advisories/Statements stack.
 function applyWarningDisplayMode(map) {
     if (!map || !map.getLayer || !map.getLayer('nws-warnings-only-fill')) return;
+    syncWarningsData(map);   // every warnings toggle (and restore) passes through here
     const outline = warningOutlineMode;
     const warningsOn = isLayerVisible(map, 'nws-warnings-only-fill');
     const advisOn = isLayerVisible(map, 'nws-advis-fill');
@@ -270,6 +272,18 @@ function applyWarningDisplayMode(map) {
         map.setLayoutProperty('nws-advis-casing', 'visibility', (outline && advisOn) ? 'visible' : 'none');
     } catch (e) { }
 }
+// The layers drawn from the 'nws-warnings' source. While none is shown on a
+// map, that map's copy of the data is left stale: copying 10 MB to a worker
+// nobody is drawing from is pure cost. Showing one brings it up to date.
+const WARN_SOURCE_LAYERS = ['nws-warnings-only-fill', 'nws-advis-fill', 'nws-enhanced-fill',
+    'nws-enhanced-outline', 'nws-enhanced-glow', 'nws-enhanced-label'];
+function syncWarningsData(map) {
+    const src = map?.getSource?.('nws-warnings');
+    if (!src || !warningsLoaded || map._fxWarnSig === lastWarningsSig) return;
+    if (!WARN_SOURCE_LAYERS.some(l => map.getLayer(l) && isLayerVisible(map, l))) return;
+    map._fxWarnSig = lastWarningsSig;
+    src.setData(warningsGeoJSON);
+}
 function applyWarningDisplayModeAll() {
     Object.values(maps).forEach(applyWarningDisplayMode);
 }
@@ -279,7 +293,75 @@ function updateWarnModeLabel() {
     if (el) el.textContent = warningOutlineMode ? 'Warnings: Outline (overlap-safe)' : 'Warnings: Filled';
 }
 
-const zoneGeometryCache = {};  // Global cache for NWS zone polygons (persists across polling cycles)
+// NWS zone outlines for alerts that carry no polygon of their own (advisories,
+// watches, AQ alerts). Keyed by zone URL; each value is a list of polygon
+// coordinate arrays, already simplified. Persists across polling cycles.
+const zoneGeometryCache = {};
+
+// api.weather.gov serves zone outlines at survey detail: on a normal day about
+// 600k vertices for 300 zones, and since zones are shared between alerts the
+// warnings layer reached 1.75M vertices (43 MB). Copying that to MapLibre's
+// worker blocked the page for ~2.4 s on every 15 s cycle (GitHub issue #4).
+// 0.001° (~110 m) keeps 24% of the vertices and is invisible below street zoom.
+const ZONE_SIMPLIFY_DEG = 0.001;
+
+// Douglas–Peucker on one closed ring, iterative so a 50k-point coastline
+// can't overflow the stack. The first and last points (the closure) are kept.
+function simplifyRing(pts, tol) {
+    if (pts.length <= 4) return pts;
+    const keep = new Uint8Array(pts.length);
+    keep[0] = keep[pts.length - 1] = 1;
+    const t2 = tol * tol;
+    const stack = [[0, pts.length - 1]];
+    while (stack.length) {
+        const [a, b] = stack.pop();
+        const ax = pts[a][0], ay = pts[a][1];
+        const dx = pts[b][0] - ax, dy = pts[b][1] - ay;
+        const len2 = dx * dx + dy * dy;
+        let maxD = 0, maxI = -1;
+        for (let i = a + 1; i < b; i++) {
+            let t = len2 ? ((pts[i][0] - ax) * dx + (pts[i][1] - ay) * dy) / len2 : 0;
+            t = Math.max(0, Math.min(1, t));
+            const ex = ax + t * dx - pts[i][0], ey = ay + t * dy - pts[i][1];
+            const d = ex * ex + ey * ey;
+            if (d > maxD) { maxD = d; maxI = i; }
+        }
+        if (maxD > t2) { keep[maxI] = 1; stack.push([a, maxI], [maxI, b]); }
+    }
+    return pts.filter((_, i) => keep[i]);
+}
+
+// A zone geometry (Polygon, MultiPolygon, or the occasional GeometryCollection
+// of them, which the merge used to drop) as simplified polygon coordinate lists.
+// A polygon whose outer ring collapses below a valid ring (an islet smaller
+// than the tolerance) is dropped, and so are collapsed holes. If everything
+// collapses, the zone is kept unsimplified rather than vanishing.
+function zonePolygons(geom, tol) {
+    const raw = !geom ? []
+        : geom.type === 'Polygon' ? [geom.coordinates]
+        : geom.type === 'MultiPolygon' ? geom.coordinates
+        : geom.type === 'GeometryCollection' ? (geom.geometries || []).flatMap(g => zonePolygons(g, 0))
+        : [];
+    if (!tol) return raw;
+    const out = [];
+    raw.forEach(poly => {
+        const rings = poly.map(r => simplifyRing(r, tol));
+        if (rings[0].length < 4) return;
+        out.push([rings[0], ...rings.slice(1).filter(r => r.length >= 4)]);
+    });
+    return out.length ? out : raw;
+}
+
+// What the map would draw: which alerts, which issuance, and how much geometry.
+// Zone-based alerts gain polygons as the zone cache fills, so the polygon count
+// is in it too. Unchanged signature means the 15 s cycle skips setData.
+function warningsSignature(features) {
+    return features.map(f => {
+        const p = f.properties || {};
+        const g = f.geometry;
+        return `${p.id}|${p.sent}|${p.expires}|${g ? g.type + g.coordinates.length : '-'}`;
+    }).join('\n');
+}
 let watchesLoaded = false;
 let watchesGeoJSON = { type: 'FeatureCollection', features: [] };
 let greatLakesLoaded = false;
@@ -1876,9 +1958,10 @@ function setupMapLayers(map, paneId) {
     });
 
     // ─── Layer 6: NWS Alerts (GeoJSON polygons) ───
+    // Starts empty; syncWarningsData fills it once a warnings layer is shown.
     map.addSource('nws-warnings', {
         type: 'geojson',
-        data: warningsLoaded ? warningsGeoJSON : { type: 'FeatureCollection', features: [] }
+        data: { type: 'FeatureCollection', features: [] }
     });
     map.addSource('nws-watches-vector', {
         type: 'geojson',
@@ -3744,9 +3827,7 @@ function initFrontalPipIcons(map) {
     if (metarsLoaded && metarGeoJSON.features.length > 0) {
         map.getSource('metars').setData(metarGeoJSON);
     }
-    if (warningsLoaded && warningsGeoJSON?.features?.length > 0) {
-        map.getSource('nws-warnings').setData(warningsGeoJSON);
-    }
+    syncWarningsData(map);
     if (watchesLoaded && watchesGeoJSON?.features?.length > 0) {
         map.getSource('nws-watches-vector').setData(watchesGeoJSON);
     }
@@ -10255,7 +10336,7 @@ async function checkNewWarnings() {
                             const res = await fetch(url, { headers: { 'Accept': 'application/geo+json' } });
                             if (!res.ok) return;
                             const zoneData = await res.json();
-                            if (zoneData.geometry) zoneGeometryCache[url] = zoneData.geometry;
+                            if (zoneData.geometry) zoneGeometryCache[url] = zonePolygons(zoneData.geometry, ZONE_SIMPLIFY_DEG);
                         } catch (_) {}
                     })
                 );
@@ -10265,10 +10346,7 @@ async function checkNewWarnings() {
             nullGeomFeatures.forEach(f => {
                 const polys = [];
                 (f.properties.affectedZones || []).forEach(z => {
-                    const geom = zoneGeometryCache[z];
-                    if (!geom) return;
-                    if (geom.type === 'Polygon') polys.push(geom.coordinates);
-                    else if (geom.type === 'MultiPolygon') polys.push(...geom.coordinates);
+                    if (zoneGeometryCache[z]) polys.push(...zoneGeometryCache[z]);
                 });
                 if (polys.length > 0) {
                     f.geometry = { type: 'MultiPolygon', coordinates: polys };
@@ -10345,13 +10423,15 @@ async function checkNewWarnings() {
         }
 
         warningsLoaded = true;
-        warningsGeoJSON = sortWarningsByPriority(data);
-
-        // Push to all map warning layers
-        Object.values(maps).forEach(m => {
-            if (m.getSource('nws-warnings')) m.getSource('nws-warnings').setData(warningsGeoJSON);
-        });
-        applyWarningDisplayModeAll();
+        // Most cycles change nothing on the map. Re-sending identical data still
+        // costs a full copy to every map's worker, so only push on a change.
+        const sig = warningsSignature(data.features);
+        if (sig !== lastWarningsSig) {
+            lastWarningsSig = sig;
+            warningsGeoJSON = sortWarningsByPriority(data);
+            Object.values(maps).forEach(syncWarningsData);
+            applyWarningDisplayModeAll();
+        }
         updateHealth('warnings');
 
         const isFirst = warningsFirstLoad;
@@ -17065,6 +17145,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Nov 3, 2026', items: [
+        '<b>No more stutter every 15 seconds.</b> The warning watchdog froze the page for about 2½ seconds on every check (reported on GitHub, issue #4). Most alerts (advisories, watches, statements) come without a polygon, so the watchdog fills in their NWS zone outlines. Those outlines arrive at survey detail, and after a few minutes the warnings layer held 1.75 million points (43 MB). All of it was re-sent to the map every 15 s, even when nothing had changed and even with the warnings layers turned off. Now zone outlines are simplified to about 100 m when first downloaded (24% of the points, no visible change below street-level zoom). The map is only updated when an alert actually changes, and only on maps showing warnings or advisories. Measured on the live feed: quiet cycles went from a 2.4 s freeze to nothing, and a cycle with a new alert now takes about 0.3 s. A few alerts whose zone comes as a GeometryCollection used to be left off the map; they now draw. The watchdog keeps running as before, so the ticker and AlertViz pop-ups are unchanged.'
+    ]},
     { date: 'Oct 12, 2026', items: [
         '<b>MOS text size.</b> The MOS Guidance panel has <b>A−</b> and <b>A+</b> buttons next to the model menu. They step the bulletin from 10 px to 24 px, and the default is now 12 px instead of 10. The header and the notes under the table grow with it. Your size is remembered in this browser. Maximize (⤢) and A+ work together: a larger panel shows more forecast hours at the bigger size before the table scrolls.'
     ]},
