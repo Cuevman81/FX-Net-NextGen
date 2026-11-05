@@ -14356,11 +14356,9 @@ function modelLastPoint() {
 }
 
 // ─── MOS guidance (IEM parses the MDL bulletins into JSON) ───
-// GFS MOS is NOT being retired. NAM MOS (MET) goes away with NAM itself on
-// 2026-10-14 12 UTC (SCN 26-47, updated 2026-09-09; it has slipped twice) alongside
-// SREF/HREF/HiresW, replaced by RRFS/REFS; MDL
-// points NAM MOS users at GFS MOS or NBM, and LAMP temporarily switches to a
-// GFS MOS input. The panel says so rather than silently serving a dying product.
+// NAM MOS (MET) ended with NAM, SREF, HREF and HiresW on 2026-11-03 12 UTC
+// (SCN 26-47), replaced by RRFS, and is gone from this list. GFS MOS was not
+// retired; MDL points NAM MOS users at GFS MOS or NBM.
 // `cycleHrs` is the BULLETIN issuance interval, verified by walking IEM's archive
 // cycle by cycle — not the interval the underlying model runs at. That gap is the
 // usual source of "why is my guidance stale?": the NBM system itself updates
@@ -14385,10 +14383,7 @@ const MOS_MODELS = [
     { id: 'NBS', label: 'NBM Short', sub: 'National Blend · 3-hourly out to ~72 h', cycleHrs: 6, nbm: true,
       rows: ['tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p06', 'q06', 't06_1', 'cig', 'vis', 'pra', 'psn', 'pzr', 'ppl', 's06'] },
     { id: 'NBE', label: 'NBM Ext',  sub: 'National Blend · 12-hourly, extended', cycleHrs: 12, nbm: true,
-      rows: ['n_x', 'tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p12', 'q12', 't12_1', 's12'] },
-    { id: 'NAM', label: 'NAM MOS',  sub: 'MET · retires 2026-10-14 12 UTC with NAM', cycleHrs: 6, retiring: true,
-      retires: Date.UTC(2026, 9, 14, 12),
-      rows: ['tmp', 'dpt', 'cld', 'wdr', 'wsp', 'p06', 'p12', 'q06', 'q12', 't06_1', 't12_1', 'cig', 'vis', 'obv'] }
+      rows: ['n_x', 'tmp', 'dpt', 'wdr', 'wsp', 'gst', 'sky', 'p12', 'q12', 't12_1', 's12'] }
 ];
 
 // Bulletin row labels, in MDL's own shorthand so the table reads like the real thing.
@@ -14495,14 +14490,12 @@ function renderMosTable(station, def, rows) {
     }
     let html = `<div class="mos-head" style="color:#8b97a3;padding:0 2px 8px;line-height:1.5;">
             <b style="color:#cdd6df;">${esc(station)}</b> — ${esc(def.label)} <span style="color:#5b6773;">${esc(def.sub)}</span>
-            ${def.retiring ? '<span class="badge orange" style="margin-left:6px;">RETIRING</span>' : ''}
             <br>Cycle <b style="color:#cdd6df;">${esc(rows[0].runtime || '—')}Z</b> · ${rows.length} forecast projections${ageNote}
             ${def.nbm ? '<br><span style="color:#5b6773;">The NBM system updates hourly, but this station bulletin is only cut every '
                 + def.cycleHrs + ' h. For hourly-updating station guidance use <b style="color:#8b97a3;">LAMP</b>.</span>' : ''}
             ${def.hrrr ? '<br><span style="color:#5b6773;">There is no standalone HRRR MOS. LAMP <b style="color:#8b97a3;">is</b> the HRRR-based '
                 + 'station guidance — MDL statistically melds HRRR into the ceiling, visibility and conditional CIG/VIS elements. '
                 + 'LP1/LC1 and CP1/CC1 run to 25 h; the rest go further.</span>' : ''}
-            ${def.retiring ? '<br><span style="color:#ffb300;">NAM MOS ends 2026-10-14 12 UTC with NAM, SREF, HREF and HiresW, and leaves this menu then. MDL directs users to GFS MOS or NBM.</span>' : ''}
         </div>
         <div style="overflow-x:auto;">
         <table class="mos-table"><thead>
@@ -14549,11 +14542,6 @@ function initMosPanel() {
     if (!panel) return;
     const stationInput = document.getElementById('mos-station');
     const modelSel = document.getElementById('mos-model');
-    // A retired bulletin leaves the menu at its cut-off, so its last, frozen
-    // issuance can never be shown as if it were current guidance.
-    MOS_MODELS.filter(m => m.retires && Date.now() >= m.retires).forEach(m => {
-        modelSel?.querySelector(`option[value="${m.id}"]`)?.remove();
-    });
     const run = () => loadMos(stationInput?.value, modelSel?.value);
     const openBtn = document.getElementById('btn-mos');
     if (openBtn) openBtn.addEventListener('click', () => {
@@ -17145,6 +17133,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Nov 5, 2026', items: [
+        '<b>NAM MOS removed for good.</b> NCEP ended NAM, SREF, HREF, HiresW and NAM MOS on <b>Nov 3 at 12 UTC</b> (Service Change Notice 26-47), replacing them with RRFS. FX-Net does not use NAM, SREF, HREF or HiresW data. NAM MOS was its only link to these systems, and it left the MOS menu on Oct 14, the date NWS had announced before the shutdown slipped to Nov 3. The panel\'s leftover NAM MOS entry, notes and User Guide text are now gone too. For station guidance use GFS MOS, LAMP or NBM, which are all still updating.'
+    ]},
     { date: 'Nov 3, 2026', items: [
         '<b>No more stutter every 15 seconds.</b> The warning watchdog froze the page for about 2½ seconds on every check (reported on GitHub, issue #4). Most alerts (advisories, watches, statements) come without a polygon, so the watchdog fills in their NWS zone outlines. Those outlines arrive at survey detail, and after a few minutes the warnings layer held 1.75 million points (43 MB). All of it was re-sent to the map every 15 s, even when nothing had changed and even with the warnings layers turned off. Now zone outlines are simplified to about 100 m when first downloaded (24% of the points, no visible change below street-level zoom). The map is only updated when an alert actually changes, and only on maps showing warnings or advisories. Measured on the live feed: quiet cycles went from a 2.4 s freeze to nothing, and a cycle with a new alert now takes about 0.3 s. A few alerts whose zone comes as a GeometryCollection used to be left off the map; they now draw. The watchdog keeps running as before, so the ticker and AlertViz pop-ups are unchanged.'
     ]},
@@ -17736,10 +17727,10 @@ const USER_GUIDE = [
         <p>The clearest example is NBM: the <b>NBM system updates hourly</b>, but its station bulletins are cut every <b>6 hours</b> (NBM Short) or <b>12 hours</b> (NBM Extended), so mid-morning you will correctly see a 06Z run. If you want station guidance that actually refreshes hourly, use <b>LAMP</b>. NBM does publish an hourly bulletin of its own (NBH), but no CORS-open source carries it.</p>
         <ul>
             <li>Hourly — LAMP</li>
-            <li>Every 6 h (00/06/12/18Z) — GFS MOS, NBM Short, NAM MOS</li>
+            <li>Every 6 h (00/06/12/18Z) — GFS MOS, NBM Short</li>
             <li>Every 12 h (00/12Z) — GFS Extended, NBM Extended</li>
-            <li><b>NAM MOS (MET)</b> — flagged <b>RETIRING</b>. It ends <b>2026-10-14 12 UTC</b> along with NAM, SREF, HREF and HiresW, replaced by RRFS/REFS, and leaves the menu at that moment. MDL directs users to GFS MOS or NBM.</li>
         </ul>
+        <p><b>NAM MOS</b> is gone. NCEP ended it on <b>Nov 3, 2026 at 12 UTC</b> along with NAM, SREF, HREF and HiresW, all replaced by RRFS. MDL directs users to GFS MOS or NBM.</p>
         <p>On the question of AI MOS: there isn't one. MDL station guidance is still classical regression, and its modern successor is NBM — statistical blending, not machine learning. The AI in this section is the <b>model</b> (AIFS), not the MOS.</p>` },
 
     { id: 'tropical', title: 'Tropical — NHC & Hurricane Hunters', html: `
