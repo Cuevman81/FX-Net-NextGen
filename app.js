@@ -13872,18 +13872,74 @@ function initProductSidebar() {
 // HRRR is short-range by design (3 km CONUS, hourly runs, ~48 h) so its trace
 // simply ends partway across the chart — that truncation is honest, and where it
 // disagrees with the globals inside 48 h is exactly where it earns its keep.
+// RRFS replaced NAM on 2026-11-03 and will also replace HRRR (Open-Meteo marks
+// HRRR "discontinues with RRFSv2"); both run ~2–4 days, so their traces end early.
 // `runDir` is the Open-Meteo data directory whose static/meta.json publishes the
 // cycle this model is currently serving. For the `_seamless` families — which
 // splice a high-res domain onto a global one — it names the GLOBAL member, since
 // that is the run covering the full length of the chart.
+// `ens` models come from Open-Meteo's ensemble API instead: drawn as the member
+// mean with a 10th–90th percentile band. `hybrid` is HGEFS, NOAA's blend of the
+// physics GEFS and the AI GEFS, served as its ensemble mean.
+// NOAA's AI models (AIGFS, AIGEFS, HGEFS) carry no humidity at all, so they have
+// no dewpoint trace; that is the source, not a fetch failure. REFS (the RRFS
+// ensemble) is listed by Open-Meteo but returned only nulls on 2026-11-23, and
+// no other AI model (GraphCast, GenCast, FourCastNet, Pangu, Aurora) has a free
+// point API.
 const MODEL_SOURCES = [
     { id: 'gfs_seamless',         label: 'GFS',        org: 'NOAA NCEP', color: '#00e5ff', runDir: 'ncep_gfs013' },
     { id: 'gfs_hrrr',             label: 'HRRR',       org: 'NOAA 3 km', color: '#ff8a3c', shortRange: true, runDir: 'ncep_hrrr_conus' },
+    { id: 'ncep_rrfs_conus',      label: 'RRFS',       org: 'NOAA 3 km', color: '#ff4f6d', shortRange: true, runDir: 'ncep_rrfs_conus' },
     { id: 'ecmwf_ifs025',         label: 'ECMWF IFS',  org: 'ECMWF',     color: '#ff5ad1', runDir: 'ecmwf_ifs025' },
     { id: 'gem_seamless',         label: 'CMC GEM',    org: 'ECCC',      color: '#ffd166', runDir: 'cmc_gem_gdps' },
     { id: 'icon_seamless',        label: 'ICON',       org: 'DWD',       color: '#7cff6b', runDir: 'dwd_icon' },
-    { id: 'ecmwf_aifs025_single', label: 'ECMWF AIFS', org: 'ECMWF',     color: '#c08bff', ai: true, runDir: 'ecmwf_aifs025_single' }
+    { id: 'ecmwf_aifs025_single', label: 'ECMWF AIFS', org: 'ECMWF',     color: '#c08bff', ai: true, runDir: 'ecmwf_aifs025_single' },
+    { id: 'ncep_aigfs025',        label: 'AIGFS',      org: 'NOAA',      color: '#4d9dff', ai: true, runDir: 'ncep_aigfs025' },
+    { id: 'ncep_hgefs025_ensemble_mean', label: 'HGEFS mean', org: 'NOAA hybrid', color: '#2fd9b5', hybrid: true, runDir: 'ncep_hgefs025_ensemble_mean' },
+    { id: 'ecmwf_aifs025_ensemble', label: 'AIFS-ENS', org: 'ECMWF 51 mem', color: '#e6c3ff', ai: true, ens: true, runDir: 'ecmwf_aifs025_ensemble' },
+    { id: 'ncep_aigefs025',       label: 'AIGEFS',     org: 'NOAA 31 mem', color: '#a8c8ff', ai: true, ens: true, runDir: 'ncep_aigefs025' }
 ];
+
+// Legend clicks hide a model; remembered per browser. Eleven traces is past
+// what one chart reads well, so this is how a forecaster narrows it down.
+const modelHidden = new Set((() => {
+    try { return JSON.parse(localStorage.getItem('fxnet_model_hidden') || '[]'); } catch (_) { return []; }
+})());
+
+// Linear-interpolated quantile of an ascending array.
+function quantileSorted(a, q) {
+    if (!a.length) return null;
+    const pos = (a.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+    return a[lo] + (a[hi] - a[lo]) * (pos - lo);
+}
+
+// Mean and 10th–90th percentile of one ensemble field. Open-Meteo names the
+// control `{var}_{model}` and the rest `{var}_memberNN_{model}`. An hour where
+// fewer than half the members report is left empty rather than averaged over a
+// few survivors, which would fake a confident mean at the tail of the run.
+function ensembleStats(hourly, modelId, varName) {
+    const keys = Object.keys(hourly).filter(k => k === `${varName}_${modelId}`
+        || (k.startsWith(`${varName}_member`) && k.endsWith(`_${modelId}`)));
+    const n = (hourly.time || []).length;
+    const mean = new Array(n).fill(null), lo = new Array(n).fill(null), hi = new Array(n).fill(null);
+    for (let i = 0; i < n; i++) {
+        const v = [];
+        keys.forEach(k => { const x = hourly[k][i]; if (x != null) v.push(x); });
+        if (!v.length || v.length < keys.length / 2) continue;
+        v.sort((a, b) => a - b);
+        mean[i] = v.reduce((s, x) => s + x, 0) / v.length;
+        lo[i] = quantileSorted(v, 0.1);
+        hi[i] = quantileSorted(v, 0.9);
+    }
+    return { mean, lo, hi, members: keys.length };
+}
+
+// Put a series onto the chart's time axis by valid time, not by index: the two
+// Open-Meteo APIs are separate requests and need not start on the same hour.
+function alignToTimes(srcTimes, vals, dstTimes) {
+    const at = new Map(srcTimes.map((t, i) => [t, i]));
+    return dstTimes.map(t => { const i = at.get(t); return i == null ? null : vals[i]; });
+}
 
 // ─── Model cycle (initialisation) times ───
 // The /v1/forecast response carries no init time — only the valid times — so the
@@ -13962,15 +14018,26 @@ async function loadModelCompareAt(latNum, lonNum, presetLabel) {
         const url = 'https://api.open-meteo.com/v1/forecast'
             + `?latitude=${lat}&longitude=${lon}`
             + `&hourly=${Object.keys(MODEL_VARS).join(',')}`
-            + `&models=${MODEL_SOURCES.map(m => m.id).join(',')}`
+            + `&models=${MODEL_SOURCES.filter(m => !m.ens).map(m => m.id).join(',')}`
             + `&forecast_days=${days}`
             + '&temperature_unit=fahrenheit&wind_speed_unit=kn&precipitation_unit=inch';
-        // Cycle times ride alongside the forecast rather than after it — they are
-        // static files on a different path, so a failure there must not cost the
-        // chart. runs resolves to {} at worst.
-        const [res, runs] = await Promise.all([
+        const ensUrl = 'https://ensemble-api.open-meteo.com/v1/ensemble'
+            + `?latitude=${lat}&longitude=${lon}`
+            + `&hourly=${Object.keys(MODEL_VARS).join(',')}`
+            + `&models=${MODEL_SOURCES.filter(m => m.ens).map(m => m.id).join(',')}`
+            + `&forecast_days=${days}`
+            + '&temperature_unit=fahrenheit&wind_speed_unit=kn&precipitation_unit=inch';
+        // Cycle times and the ensembles ride alongside the forecast rather than
+        // after it. Either can fail without costing the chart: runs resolves to
+        // {} at worst, and a failed ensemble request becomes a note.
+        const [res, runs, ens] = await Promise.all([
             fetch(url),
-            fetchModelRuns().catch(() => ({}))
+            fetchModelRuns().catch(() => ({})),
+            fetch(ensUrl).then(async r => {
+                if (r.status === 429) throw new Error('rate limit reached');
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
+            }).catch(e => ({ error: e.message }))
         ]);
         if (res.status === 429) throw new Error('Open-Meteo rate limit reached — wait a minute and try again.');
         if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
@@ -13980,14 +14047,21 @@ async function loadModelCompareAt(latNum, lonNum, presetLabel) {
         if (!times.length) throw new Error('No forecast returned for this point.');
         // Open-Meteo suffixes every series with its model id when several models
         // are requested; a single-model request would come back unsuffixed.
-        const series = {};
+        const series = {}, bands = {};
+        const eh = ens && ens.hourly;
         MODEL_SOURCES.forEach(m => {
             series[m.id] = {};
+            if (m.ens) bands[m.id] = {};
             Object.keys(MODEL_VARS).forEach(v => {
-                series[m.id][v] = h[`${v}_${m.id}`] || h[v] || [];
+                if (!m.ens) { series[m.id][v] = h[`${v}_${m.id}`] || h[v] || []; return; }
+                if (!eh) { series[m.id][v] = []; return; }
+                const st = ensembleStats(eh, m.id, v);
+                series[m.id][v] = alignToTimes(eh.time, st.mean, h.time);
+                bands[m.id][v] = { lo: alignToTimes(eh.time, st.lo, h.time), hi: alignToTimes(eh.time, st.hi, h.time) };
             });
         });
-        modelData = { times, series, label, runs: runs || {}, fetched: Date.now() };
+        const ensNote = ens && ens.error ? `Ensembles (AIFS-ENS, AIGEFS) unavailable: ${ens.error}.` : '';
+        modelData = { times, series, bands, ensNote, label, runs: runs || {}, fetched: Date.now() };
         if (panel) panel.dataset.loaded = '1';
         if (locEl) locEl.textContent = `${label} · ${days}-day · fetched ${new Date().toISOString().substring(11, 16)}Z`;
         renderModelCompare();
@@ -14011,7 +14085,8 @@ function renderModelCompare() {
     if (!body || !modelData) return;
     const varKey = document.getElementById('model-var')?.value || 'temperature_2m';
     const meta = MODEL_VARS[varKey];
-    const active = MODEL_SOURCES.filter(m => modelData.series[m.id]?.[varKey]?.some(v => v != null));
+    const withData = MODEL_SOURCES.filter(m => modelData.series[m.id]?.[varKey]?.some(v => v != null));
+    const active = withData.filter(m => !modelHidden.has(m.id));
     // The plot lives in its own positioned box so the cursor canvas and the
     // readout can sit on top of it without disturbing the flex column below.
     body.innerHTML = `<div id="model-plot" style="position:relative;">
@@ -14024,13 +14099,17 @@ function renderModelCompare() {
         </div>
         <div id="model-legend" style="display:flex;flex-wrap:wrap;gap:10px;padding:8px 2px 2px;font-size:10px;"></div>
         <div id="model-spread" style="font-size:10px;color:#8b97a3;padding:2px;line-height:1.5;"></div>
-        <div style="font-size:9px;color:#5b6773;padding:6px 2px 2px;">
-            Model data by <b style="color:#8b97a3;">Open-Meteo.com</b> (CC BY 4.0) — GFS/NCEP, IFS &amp; AIFS/ECMWF, GEM/ECCC, ICON/DWD.
+        <div style="font-size:9px;color:#5b6773;padding:6px 2px 2px;line-height:1.5;">
+            Click a model to hide or show it. Dashed = AI, dotted = hybrid AI/physics. AIFS-ENS and AIGEFS are drawn as the member mean with a shaded 10th–90th percentile band.
+            ${withData.length < MODEL_SOURCES.length ? `Not shown for this field: ${esc(MODEL_SOURCES.filter(m => !withData.includes(m)).map(m => m.label).join(', '))}${varKey === 'dewpoint_2m' ? ' (NOAA\'s AI models publish no humidity)' : ''}.` : ''}
+            ${modelData.ensNote ? `<span style="color:#ffb300;">${esc(modelData.ensNote)}</span>` : ''}
+            <br>Model data by <b style="color:#8b97a3;">Open-Meteo.com</b> (CC BY 4.0) — GFS, HRRR, RRFS, AIGFS, AIGEFS &amp; HGEFS/NOAA NCEP, IFS, AIFS &amp; AIFS-ENS/ECMWF, GEM/ECCC, ICON/DWD.
         </div>`;
     const legend = document.getElementById('model-legend');
     const runs = modelData.runs || {};
-    active.forEach(m => {
+    withData.forEach(m => {
         const r = runs[m.id];
+        const off = modelHidden.has(m.id);
         // The cycle sits with the model that produced it — a trace is only worth
         // reading once you know which run it came from, and the runs genuinely
         // differ (HRRR is hourly while IFS is six-hourly and lands ~7 h late).
@@ -14044,13 +14123,23 @@ function renderModelCompare() {
             runHTML = `<span style="color:#8a6d3b;font-family:'Roboto Mono',monospace;" `
                 + `title="Cycle time unavailable — ${esc((r && r.why) || 'no metadata')}. The forecast itself is current.">run ?</span>`;
         }
-        const sw = document.createElement('span');
-        sw.style.cssText = 'display:inline-flex;align-items:center;gap:5px;';
+        const sw = document.createElement('button');
+        sw.type = 'button';
+        sw.className = 'model-legend-item';
+        sw.setAttribute('aria-pressed', String(!off));
+        sw.title = off ? `Show ${m.label}` : `Hide ${m.label}`;
+        sw.style.opacity = off ? '0.35' : '1';
         sw.innerHTML = `<span style="width:16px;height:3px;background:${m.color};display:inline-block;"></span>`
-            + `<span style="color:#cdd6df;">${esc(m.label)}</span>`
+            + `<span style="color:#cdd6df;${off ? 'text-decoration:line-through;' : ''}">${esc(m.label)}</span>`
             + (m.ai ? `<span class="badge" style="background:#5b3d8f;color:#fff;font-size:8px;">AI</span>` : '')
+            + (m.hybrid ? `<span class="badge" style="background:#1f6b5c;color:#fff;font-size:8px;">HYBRID</span>` : '')
             + `<span style="color:#5b6773;">${esc(m.org)}</span>`
             + runHTML;
+        sw.addEventListener('click', () => {
+            modelHidden.has(m.id) ? modelHidden.delete(m.id) : modelHidden.add(m.id);
+            try { localStorage.setItem('fxnet_model_hidden', JSON.stringify([...modelHidden])); } catch (_) {}
+            renderModelCompare();
+        });
         legend.appendChild(sw);
     });
     renderModelSpread(varKey, active, meta);
@@ -14116,7 +14205,11 @@ function drawModelChart(canvas, varKey, active) {
     const t0 = times[0], t1 = times[times.length - 1];
     const X = ms => mL + ((ms - t0) / (t1 - t0)) * pw;
     const all = [];
-    active.forEach(m => modelData.series[m.id][varKey].forEach(v => { if (v != null) all.push(v); }));
+    active.forEach(m => {
+        modelData.series[m.id][varKey].forEach(v => { if (v != null) all.push(v); });
+        const b = modelData.bands?.[m.id]?.[varKey];
+        if (b) [b.lo, b.hi].forEach(a => a.forEach(v => { if (v != null) all.push(v); }));
+    });
     let vMin = Math.min(...all), vMax = Math.max(...all);
     if (vMax - vMin < 1e-6) { vMax += 1; vMin -= 1; }
     const pad = (vMax - vMin) * 0.12;
@@ -14159,12 +14252,28 @@ function drawModelChart(canvas, varKey, active) {
             ctx.closePath(); ctx.fill();
         }
     }
+    // each ensemble's own 10th–90th percentile band, in its color
+    active.filter(m => m.ens).forEach(m => {
+        const b = modelData.bands?.[m.id]?.[varKey];
+        if (!b) return;
+        const pts = [];
+        times.forEach((ms, i) => { if (b.lo[i] != null && b.hi[i] != null) pts.push(i); });
+        if (pts.length < 2) return;
+        ctx.globalAlpha = 0.16;
+        ctx.fillStyle = m.color;
+        ctx.beginPath();
+        pts.forEach((i, k) => k ? ctx.lineTo(X(times[i]), Y(b.hi[i])) : ctx.moveTo(X(times[i]), Y(b.hi[i])));
+        for (let k = pts.length - 1; k >= 0; k--) ctx.lineTo(X(times[pts[k]]), Y(b.lo[pts[k]]));
+        ctx.closePath(); ctx.fill();
+        ctx.globalAlpha = 1;
+    });
     // one line per model
     active.forEach(m => {
         const vals = modelData.series[m.id][varKey];
         ctx.strokeStyle = m.color;
-        ctx.lineWidth = m.ai ? 2.2 : 1.8;
+        ctx.lineWidth = m.ens ? 2.6 : m.ai ? 2.2 : 1.8;
         if (m.ai) ctx.setLineDash([6, 3]);   // AI model reads distinctly from the physics runs
+        else if (m.hybrid) ctx.setLineDash([2, 3]);
         ctx.beginPath();
         let started = false;
         times.forEach((ms, i) => {
@@ -14241,7 +14350,9 @@ function _modelHoverMove(e) {
         c.fillStyle = m.color;
         c.beginPath(); c.arc(cx, Y(v), 3.2, 0, Math.PI * 2); c.fill();
         c.strokeStyle = '#0d1117'; c.lineWidth = 1.2; c.stroke();
-        rows.push({ m, txt: `${v.toFixed(P.meta.dec)}${P.meta.unit}` });
+        const b = m.ens && modelData.bands?.[m.id]?.[P.varKey];
+        const band = b && b.lo[i] != null ? ` (${b.lo[i].toFixed(P.meta.dec)}–${b.hi[i].toFixed(P.meta.dec)})` : '';
+        rows.push({ m, txt: `${v.toFixed(P.meta.dec)}${P.meta.unit}${band}` });
     });
 
     const d = new Date(times[i]);
@@ -17133,6 +17244,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Nov 23, 2026', items: [
+        '<b>Five more models in Model Comparison.</b> NOAA\'s new AI models: <b>AIGFS</b>, the <b>AIGEFS</b> ensemble (31 members) and the hybrid AI/physics <b>HGEFS</b> ensemble mean. ECMWF\'s <b>AIFS-ENS</b> ensemble (51 members). And <b>RRFS</b>, the 3 km model that replaced NAM on Nov 3 and will replace HRRR. The two ensembles are drawn as their member mean with a shaded band covering the middle 80% of members, so you can see how sure each ensemble is, not just where it centers. <b>Click any model in the legend</b> to hide or show it, and the range now goes to 10 and 15 days. NOAA\'s AI models publish no humidity, so they have no dewpoint trace. REFS, the RRFS ensemble, is not in yet: the data source lists it but returns no values.'
+    ]},
     { date: 'Nov 5, 2026', items: [
         '<b>NAM MOS removed for good.</b> NCEP ended NAM, SREF, HREF, HiresW and NAM MOS on <b>Nov 3 at 12 UTC</b> (Service Change Notice 26-47), replacing them with RRFS. FX-Net does not use NAM, SREF, HREF or HiresW data. NAM MOS was its only link to these systems, and it left the MOS menu on Oct 14, the date NWS had announced before the shutdown slipped to Nov 3. The panel\'s leftover NAM MOS entry, notes and User Guide text are now gone too. For station guidance use GFS MOS, LAMP or NBM, which are all still updating.'
     ]},
@@ -17704,11 +17818,14 @@ const USER_GUIDE = [
         <p>AWIPS ingests full model grids into EDEX and contours them locally — that is a data pipeline, not a web page. FX-Net deliberately does <b>not</b> do that. There is no free, CORS-open gridded source for GFS/ECMWF/CMC, and the one workable route (building a coarse grid and contouring it in the browser) was measured at roughly <b>30 map draws per day</b> before rate limits bite. Point guidance costs about a thousandth of that and answers the question that actually decides a forecast: <b>do the models agree?</b></p>
         <p>Both panels fetch <b>only when you open them</b>. Nothing here polls in the background or touches the map.</p>
         <h3>Model Comparison</h3>
-        <p>Plots <b>GFS</b> (NCEP), <b>HRRR</b> (NCEP 3 km), <b>ECMWF IFS</b>, <b>CMC GEM</b> (Environment Canada), <b>ICON</b> (DWD) and <b>ECMWF AIFS</b> at a single point — the panel centre, or any ZIP / city you type. Switch between temperature, dewpoint, wind, precip and MSLP; every field arrives in the same request, so changing it redraws instantly with no refetch.</p>
+        <p>Plots <b>GFS</b>, <b>HRRR</b> and <b>RRFS</b> (NCEP; RRFS replaced NAM and will replace HRRR), <b>ECMWF IFS</b>, <b>CMC GEM</b> (Environment Canada), <b>ICON</b> (DWD), and the AI models: <b>ECMWF AIFS</b>, NOAA's <b>AIGFS</b>, the <b>AIFS-ENS</b> and <b>AIGEFS</b> ensembles, and NOAA's hybrid <b>HGEFS</b> ensemble mean, all at a single point — the panel centre, or any ZIP / city you type. Switch between temperature, dewpoint, wind, precip and MSLP; every field arrives in the same request, so changing it redraws instantly with no refetch.</p>
         <ul>
             <li><b>HRRR stops around 48 hours</b> — that is the model, not a gap. Inside that window it is the 3 km convection-allowing solution, and where it parts company with the globals is the interesting part.</li>
-            <li><b>AIFS is ECMWF's operational AI model</b> and is drawn dashed so it reads apart from the physics runs. Where it diverges from IFS is worth a look.</li>
-            <li>The shaded band is the <b>spread envelope</b> — the min-to-max across all models at each hour. The readout underneath gives mean and worst-case spread with the time it peaks. <b>Wide spread means low confidence</b>, and it usually blows up somewhere past day 4.</li>
+            <li><b>AI models are drawn dashed</b> so they read apart from the physics runs; the hybrid HGEFS is dotted. Where AIFS parts from IFS, or AIGFS from GFS, is worth a look.</li>
+            <li><b>AIFS-ENS</b> (51 members) and <b>AIGEFS</b> (31 members) are ensembles. Each is drawn as its member mean, a thick dashed line, with a shaded band in the same color covering the middle 80% of members (10th to 90th percentile). Hover shows the mean with that range in brackets.</li>
+            <li><b>Click a model in the legend</b> to hide or show it; the choice is remembered. Eleven lines is a lot, so narrow it to the ones you are comparing.</li>
+            <li>NOAA's AI models (AIGFS, AIGEFS, HGEFS) publish no humidity, so they have <b>no dewpoint trace</b>. RRFS, like HRRR, runs only a few days. The range goes to <b>15 days</b>, where only the global and AI models still have data.</li>
+            <li>The faint cyan band is the <b>spread envelope</b>: the min-to-max across all shown models (ensemble means, not members) at each hour. The readout underneath gives mean and worst-case spread with the time it peaks. <b>Wide spread means low confidence</b>, and it usually blows up somewhere past day 4.</li>
         </ul>
         <h3>Forecast soundings (Skew-T)</h3>
         <p>The Skew-T panel takes a <b>source</b> as well as a site: <b>RAOB — observed</b> (the 00Z/12Z balloon) or a <b>model forecast sounding</b> from <b>HRRR</b> or <b>GFS</b> at that site's location. Forecast soundings step by hour — HRRR out to 48 h, GFS to 5 days — and the whole run is cached, so scrubbing through hours costs nothing after the first load.</p>

@@ -43,7 +43,9 @@ test('a plane is on station after a recent fix, or with nearby obs in the last 3
 });
 
 test('header line compares the newest fix with the last best track', () => {
-    const best = [{ dtg: '2026100712', ms: M.adeckDtgMs('2026100712'), mslp: 1002, vmax: 35 }];
+    // parseVdm takes the month from today's date (a VDM carries only the day), so
+    // the best-track times are set relative to the fix, not to October.
+    const best = [{ dtg: '2026100712', ms: v.ms - (4 * 60 + 47) * 60000, mslp: 1002, vmax: 35 }];
     const html = M.latestReconHtml([v], best, v.ms + 25 * 60000);
     assert.match(html, /LATEST RECON/);
     assert.match(html, /16:47Z/);
@@ -51,7 +53,7 @@ test('header line compares the newest fix with the last best track', () => {
     assert.match(html, /<b>997 mb<\/b>.*5 mb below the 12Z best track/);
     assert.match(html, /flight-level wind 46 kt/);
     // A fix older than the latest analysis is already folded into it.
-    const later = [{ dtg: '2026100718', ms: M.adeckDtgMs('2026100718'), mslp: 997 }];
+    const later = [{ dtg: '2026100718', ms: v.ms + 73 * 60000, mslp: 997 }];
     assert.equal(M.latestReconHtml([v], later, v.ms + 3 * H), '');
     assert.equal(M.latestReconHtml([], best, v.ms), '');
 });

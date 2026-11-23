@@ -1930,3 +1930,12 @@ kbd.key { font-family: 'Roboto Mono', monospace; font-size: 10px; color: #fff; b
     color: var(--accent-cyan);
 }
 #storm-scope-row button:focus-visible { outline: 1px solid var(--accent-cyan); outline-offset: 1px; }
+
+/* Model Comparison legend entries are toggle buttons (click to hide/show). */
+.model-legend-item {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: none; border: 0; padding: 2px 3px; margin: 0;
+    font: inherit; color: inherit; cursor: pointer; border-radius: 3px;
+}
+.model-legend-item:hover { background: rgba(255, 255, 255, 0.06); }
+.model-legend-item:focus-visible { outline: 1px solid var(--accent-cyan); }
