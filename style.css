@@ -1939,3 +1939,25 @@ kbd.key { font-family: 'Roboto Mono', monospace; font-size: 10px; color: #fff; b
 }
 .model-legend-item:hover { background: rgba(255, 255, 255, 0.06); }
 .model-legend-item:focus-visible { outline: 1px solid var(--accent-cyan); }
+
+/* Winter precip meteogram */
+.wx-headline { color: #e6edf3; font-size: 13px; line-height: 1.45; padding: 2px 2px 8px; }
+.wx-h { color: #cdd6df; font-size: 11px; font-weight: 700; padding: 10px 2px 3px; }
+.wx-table { border-collapse: collapse; font: 11px 'Roboto Mono', monospace; width: 100%; }
+.wx-table th, .wx-table td { padding: 3px 7px; text-align: center; border-bottom: 1px solid rgba(255, 255, 255, 0.06); color: #e6edf3; white-space: nowrap; }
+.wx-table thead th { color: var(--accent-cyan); border-bottom-color: rgba(0, 229, 255, 0.25); }
+.wx-table th:first-child { text-align: left; font-weight: 400; }
+.wx-table .wx-prev { padding-left: 28px; color: #8b97a3; }
+.wx-table .wx-short { color: #ffb300; }
+.wx-dim { color: #7d8790; }
+.wx-row { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.wx-row:hover { color: var(--accent-cyan); }
+.wx-row:focus-visible { outline: 1px solid var(--accent-cyan); }
+.wx-readout { position: sticky; top: -10px; z-index: 2; background: #0b0f13; font: 11px 'Roboto Mono', monospace; color: #8b97a3; padding: 8px 2px; margin-top: 8px; min-height: 34px; line-height: 1.6; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.wx-cell { display: inline-block; margin-right: 14px; color: #cdd6df; white-space: nowrap; }
+.wx-foot { font-size: 10px; color: #7d8790; line-height: 1.55; padding: 8px 2px 2px; }
+#winter-body { overflow-x: auto; }
+#winter-svg .wx-t { fill: #cdd6df; font-size: 11px; font-weight: 700; }
+#winter-svg .wx-a { fill: #8b97a3; font-size: 10.5px; }
+#winter-svg .wx-g { stroke: rgba(255, 255, 255, 0.07); }
+#winter-svg .wx-d { stroke: rgba(255, 255, 255, 0.2); }

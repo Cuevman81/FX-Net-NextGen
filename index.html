@@ -14,7 +14,7 @@
     <script src="vendor/maplibre-gl.js?v=5.24.0"></script>
     <link href="vendor/maplibre-gl.css?v=5.24.0" rel="stylesheet" />
     <script src="vendor/lucide.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=126">
+    <link rel="stylesheet" href="style.css?v=127">
     <!-- Vercel Speed Insights + Web Analytics shim (external so CSP can forbid inline script; the client is vendored so script-src is self alone) -->
     <script type="module" src="boot.js?v=2"></script>
     <script defer src="/_vercel/insights/script.js"></script>
@@ -381,6 +381,7 @@
                 <div class="category-group">
                     <h2 class="category-label" tabindex="0"><i data-lucide="trending-up"></i> FORECASTS &amp; TEXT</h2>
                     <div class="product-item" role="button" tabindex="0" id="btn-meteogram"><span>Forecast Meteogram</span></div>
+                    <div class="product-item" role="button" tabindex="0" id="btn-winter"><span>Winter Precip Meteogram</span> <span class="badge blue">SNOW/ICE</span></div>
                     <div class="product-item" role="button" tabindex="0" data-layer="ndfd-temp"><span>Surface Temperature (°F)</span> <span class="badge blue">NDFD</span></div>
                     <div class="product-item" role="button" tabindex="0" id="btn-model-compare"><span>Model Comparison</span> <span class="badge green">GFS/EC/CMC</span></div>
                     <div class="product-item" role="button" tabindex="0" id="btn-mos"><span>MOS Guidance</span> <span class="badge blue">MDL</span></div>
@@ -1174,6 +1175,38 @@
         </div>
     </div>
 
+    <!-- WINTER PRECIP METEOGRAM (BUFKIT via IEM, ECMWF, NWS grid, ensembles) -->
+    <div id="winter-panel" class="floating-panel" style="display:none; width:980px; height:720px;">
+        <div class="floating-panel-header" id="winter-drag">
+            <span><i data-lucide="snowflake"></i> WINTER PRECIP METEOGRAM</span>
+            <button id="close-winter-panel" class="btn-icon" title="Close"><i data-lucide="x"></i></button>
+        </div>
+        <div class="modal-toolbar" style="gap:8px; padding:10px; background:#111; border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap;">
+            <input id="winter-place" aria-label="Place for winter meteogram" type="text" placeholder="ZIP or city, ST" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px 8px; width:150px;" />
+            <button id="winter-go" class="btn-primary" style="height:28px; padding:0 14px; font-weight:700;">Go</button>
+            <button id="winter-center" class="btn-primary" style="height:28px; padding:0 12px; font-weight:700; background:#1a2733;">Map Center</button>
+            <select id="winter-hours" aria-label="Winter meteogram range" title="Forecast range" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+                <option value="36">36 h</option>
+                <option value="48">48 h</option>
+                <option value="84" selected>84 h (3.5 d)</option>
+                <option value="120">120 h (5 d)</option>
+                <option value="168">168 h (7 d)</option>
+            </select>
+            <select id="winter-ratio" aria-label="Snow ratio for the chart" title="Snow ratio for the snow chart" style="background:#000; color:var(--accent-cyan); border:1px solid var(--border); font-size:11px; padding:5px;">
+                <option value="kuchera" selected>Kuchera ratio</option>
+                <option value="5">5:1 (wet)</option>
+                <option value="8">8:1</option>
+                <option value="10">10:1</option>
+                <option value="12">12:1</option>
+                <option value="15">15:1</option>
+                <option value="20">20:1 (dry)</option>
+            </select>
+            <label style="display:flex; gap:5px; align-items:center; font-size:11px; color:#cdd6df;"><input type="checkbox" id="winter-prev"> Previous runs</label>
+            <span id="winter-loc" style="font-size:11px; color:var(--accent-cyan); flex-basis:100%;">—</span>
+        </div>
+        <div class="floating-panel-body" id="winter-body" style="padding:10px;"></div>
+    </div>
+
     <!-- VAD WIND PROFILE (NEXRAD Level III NVW) -->
     <div id="vad-panel" class="floating-panel" style="display:none; width:520px; height:560px;">
         <div class="floating-panel-header" id="vad-drag">
@@ -1310,6 +1343,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=302"></script>
+    <script src="app.js?v=303"></script>
 </body>
 </html>
