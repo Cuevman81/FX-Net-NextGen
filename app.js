@@ -14519,6 +14519,8 @@ function initProductSidebar() {
 // cycle this model is currently serving. For the `_seamless` families — which
 // splice a high-res domain onto a global one — it names the GLOBAL member, since
 // that is the run covering the full length of the chart.
+// GFS is `gfs_global`, never `gfs_seamless`: over the lower 48 the seamless id IS
+// HRRR, value for value, for the first ~58 h, so the chart drew HRRR twice.
 // `ens` models come from Open-Meteo's ensemble API instead: drawn as the member
 // mean with a 10th–90th percentile band. `hybrid` is HGEFS, NOAA's blend of the
 // physics GEFS and the AI GEFS, served as its ensemble mean.
@@ -14528,7 +14530,7 @@ function initProductSidebar() {
 // no other AI model (GraphCast, GenCast, FourCastNet, Pangu, Aurora) has a free
 // point API.
 const MODEL_SOURCES = [
-    { id: 'gfs_seamless',         label: 'GFS',        org: 'NOAA NCEP', color: '#00e5ff', runDir: 'ncep_gfs013' },
+    { id: 'gfs_global',           label: 'GFS',        org: 'NOAA NCEP', color: '#00e5ff', runDir: 'ncep_gfs013' },
     { id: 'gfs_hrrr',             label: 'HRRR',       org: 'NOAA 3 km', color: '#ff8a3c', shortRange: true, runDir: 'ncep_hrrr_conus' },
     { id: 'ncep_rrfs_conus',      label: 'RRFS',       org: 'NOAA 3 km', color: '#ff4f6d', shortRange: true, runDir: 'ncep_rrfs_conus' },
     { id: 'ecmwf_ifs025',         label: 'ECMWF IFS',  org: 'ECMWF',     color: '#ff5ad1', runDir: 'ecmwf_ifs025' },
@@ -14544,7 +14546,8 @@ const MODEL_SOURCES = [
 // Legend clicks hide a model; remembered per browser. Eleven traces is past
 // what one chart reads well, so this is how a forecaster narrows it down.
 const modelHidden = new Set((() => {
-    try { return JSON.parse(localStorage.getItem('fxnet_model_hidden') || '[]'); } catch (_) { return []; }
+    // A GFS line hidden under its old id stays hidden.
+    try { return JSON.parse(localStorage.getItem('fxnet_model_hidden') || '[]').map(id => id === 'gfs_seamless' ? 'gfs_global' : id); } catch (_) { return []; }
 })());
 
 // Linear-interpolated quantile of an ascending array.
@@ -17885,6 +17888,9 @@ function initSyncButton() {
 // date when you ship something users would notice — a "NEW" dot shows until the
 // user opens the panel (tracked in localStorage by the newest release date).
 const CHANGELOG = [
+    { date: 'Nov 25, 2026 (update 2)', items: [
+        '<b>GFS is now really GFS.</b> In Model Comparison and the forecast Skew-T, the GFS data came from a blended source that is HRRR, value for value, for about the first 58 hours over the lower 48. So HRRR and GFS were the same there, and the model spread looked smaller than it was. Both now use the global GFS throughout.'
+    ]},
     { date: 'Nov 25, 2026', items: [
         '<b>Winter Precip Meteogram.</b> New under FORECASTS &amp; TEXT, modelled on Iowa State\'s BUFKIT Meteogram Generator and built on the same data. For any ZIP, city or map point it compares <b>RRFS, HRRR, RAP, GFS, ECMWF</b> and the <b>official NWS forecast</b> for snow, sleet and ice. A one-line summary says how many models agree and when it starts. A <b>precip-type timeline</b> has one row per model, colored snow, sleet, freezing rain or rain, so changeovers line up at a glance. Below it are accumulated snow, sleet, ice and total liquid, and 2 m temperature with the 32° line. Snow uses the Kuchera ratio or a fixed ratio you pick, sleet 2:1, and ice the FRAM method (Sanders and Barjenbruch 2016), on flat surfaces and on branches. <b>Ensemble odds</b> give the chance of 0.1, 1, 3, 6 and 12 inches from ECMWF ENS, AIFS-ENS and GEFS. <b>Previous runs</b> shows each model\'s last run for trend. Click a model in the table to hide it.'
     ]},
@@ -19987,7 +19993,7 @@ const SOUNDING_LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400,
 const SOUNDING_MODELS = {
     raob:         { label: 'RAOB — observed' },
     gfs_hrrr:     { label: 'HRRR — 3 km forecast', hours: 48 },
-    gfs_seamless: { label: 'GFS — global forecast', hours: 120 }
+    gfs_global:   { label: 'GFS — global forecast', hours: 120 }
 };
 
 // Open-Meteo publishes RH per level, not dewpoint. Alduchov-Eskridge Magnus.
